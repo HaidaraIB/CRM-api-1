@@ -18,15 +18,17 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
+from .views import home
 
 
 # Import viewsets
-from accounts.views import UserViewSet
+from accounts.views import UserViewSet, CustomTokenObtainPairView
 from companies.views import CompanyViewSet
 from crm.views import ClientViewSet, DealViewSet, TaskViewSet
 from subscriptions.views import PlanViewSet, SubscriptionViewSet, PaymentViewSet
@@ -43,8 +45,16 @@ router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
 router.register(r"payments", PaymentViewSet, basename="payment")
 
 urlpatterns = [
+    path("", home, name="home"),
     path("admin/", admin.site.urls),
     path("api/", include(router.urls)),
+    # JWT Authentication endpoints
+    path(
+        "api/auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"
+    ),
+    path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
+    # API Documentation
     path(
         "api/docs/",
         SpectacularSwaggerView.as_view(url_name="schema"),

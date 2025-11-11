@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_serializer
 from .models import Client, Deal, Task
 
 
@@ -48,6 +49,7 @@ class ClientListSerializer(serializers.ModelSerializer):
         ]
 
 
+@extend_schema_serializer(component_name="Deal")
 class DealSerializer(serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
@@ -89,6 +91,7 @@ class DealListSerializer(serializers.ModelSerializer):
         ]
 
 
+@extend_schema_serializer(component_name="Task")
 class TaskSerializer(serializers.ModelSerializer):
     deal_client_name = serializers.CharField(source="deal.client.name", read_only=True)
     deal_stage = serializers.CharField(source="deal.stage", read_only=True)

@@ -9,6 +9,7 @@ from .serializers import (
     PaymentSerializer,
     PaymentListSerializer,
 )
+from accounts.permissions import IsSuperAdmin
 
 
 class PlanViewSet(viewsets.ModelViewSet):
@@ -16,8 +17,9 @@ class PlanViewSet(viewsets.ModelViewSet):
     ViewSet for managing Plan instances.
     Provides CRUD operations: Create, Read, Update, Delete
     """
+
     queryset = Plan.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["created_at", "price_monthly", "price_yearly"]
@@ -34,6 +36,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     ViewSet for managing Subscription instances.
     Provides CRUD operations: Create, Read, Update, Delete
     """
+
     queryset = Subscription.objects.all()
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -52,6 +55,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
     ViewSet for managing Payment instances.
     Provides CRUD operations: Create, Read, Update, Delete
     """
+
     queryset = Payment.objects.all()
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]

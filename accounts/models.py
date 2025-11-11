@@ -22,5 +22,36 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
+    def is_super_admin(self):
+        return self.role == Role.SUPER_ADMIN.value
+
+    def is_admin(self):
+        return self.role == Role.ADMIN.value
+
+    def is_employee(self):
+        return self.role == Role.EMPLOYEE.value
+
+    def has_role(self, role):
+        return self.role == role
+
+    def can_access_user(self, user):
+        if self == user:
+            return True
+        if self.is_admin() and self.company == user.company:
+            return True
+        return False
+
+    def can_access_company_data(self, company):
+        if self.is_super_admin():
+            return True
+        return self.company == company
+
     class Meta:
         db_table = "users"
+        permissions = [
+            ("view_all_users", "Can view all users"),
+            ("manage_all_users", "Can manage all users"),
+            ("manage_company_users", "Can manage company users"),
+            ("view_company_data", "Can view company data"),
+            ("manage_company_data", "Can manage company data"),
+        ]
