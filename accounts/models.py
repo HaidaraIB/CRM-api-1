@@ -17,7 +17,7 @@ class User(AbstractUser):
     company = models.ForeignKey(
         "companies.Company", on_delete=models.CASCADE, null=True, blank=True
     )
-    role = models.CharField(max_length=64, choices=Role.choices)
+    role = models.CharField(max_length=64, choices=Role.choices())
     phone = models.CharField(max_length=20, blank=True, null=True)
 
     def __str__(self):

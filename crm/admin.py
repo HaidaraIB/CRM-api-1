@@ -79,7 +79,7 @@ class DealAdmin(admin.ModelAdmin):
         "client",
         "company",
         "employee",
-        "employee__username",
+        "get_employee_username",
         "stage",
         "created_at",
         "updated_at",
@@ -88,16 +88,20 @@ class DealAdmin(admin.ModelAdmin):
         "stage",
         "company",
         "employee",
-        "employee__username",
         "created_at",
     ]
     search_fields = [
         "client__name",
         "company__name",
-        "employee",
         "employee__username",
         "stage",
     ]
+
+    def get_employee_username(self, obj):
+        """Return the username of the employee"""
+        return obj.employee.username if obj.employee else "-"
+
+    get_employee_username.short_description = "Employee Username"
     ordering = ["-created_at"]
     readonly_fields = ["created_at", "updated_at"]
     inlines = [TaskInline]
