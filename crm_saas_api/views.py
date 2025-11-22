@@ -32,8 +32,8 @@ def home(request):
     base_url = request.build_absolute_uri("/")
     
     data = {
-        "message": "Welcome to Deal CRM API",
-        "welcome": "Welcome to Deal CRM API",
+        "message": "Welcome to LOOP CRM API",
+        "welcome": "Welcome to LOOP CRM API",
         "version": "1.0.0",
         "description": "Multi-company CRM system for managing customer relationships",
         "endpoints": {

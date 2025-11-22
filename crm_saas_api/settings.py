@@ -209,7 +209,7 @@ SIMPLE_JWT = {
 
 # drf-spectacular Settings
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Deal CRM API",
+    "TITLE": "LOOP CRM API",
     "DESCRIPTION": "Multi-company CRM system for managing customer relationships",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
