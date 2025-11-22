@@ -4,3 +4,4 @@ djangorestframework
 drf-spectacular
 drf-spectacular-sidecar
 djangorestframework-simplejwt
+django-cors-headers

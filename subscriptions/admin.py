@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Plan, Subscription, Payment
+from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
 
 
 @admin.register(Plan)
@@ -10,10 +10,13 @@ class PlanAdmin(admin.ModelAdmin):
         "name",
         "price_monthly",
         "price_yearly",
+        "trial_days",
+        "visible",
         "created_at",
         "updated_at",
     ]
     list_filter = [
+        "visible",
         "created_at",
         "updated_at",
     ]
@@ -33,6 +36,11 @@ class PlanAdmin(admin.ModelAdmin):
                     "description",
                     "price_monthly",
                     "price_yearly",
+                    "trial_days",
+                    "users",
+                    "clients",
+                    "storage",
+                    "visible",
                 )
             },
         ),
@@ -137,3 +145,76 @@ class PaymentAdmin(admin.ModelAdmin):
         ),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(admin.ModelAdmin):
+    """Admin configuration for Invoice model"""
+
+    list_display = [
+        "invoice_number",
+        "subscription",
+        "amount",
+        "due_date",
+        "status",
+        "created_at",
+    ]
+    list_filter = [
+        "status",
+        "due_date",
+        "created_at",
+    ]
+    search_fields = [
+        "invoice_number",
+        "subscription__company__name",
+    ]
+    ordering = ["-created_at"]
+    readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(Broadcast)
+class BroadcastAdmin(admin.ModelAdmin):
+    """Admin configuration for Broadcast model"""
+
+    list_display = [
+        "subject",
+        "target",
+        "status",
+        "scheduled_at",
+        "sent_at",
+        "created_at",
+    ]
+    list_filter = [
+        "status",
+        "target",
+        "created_at",
+    ]
+    search_fields = [
+        "subject",
+        "content",
+    ]
+    ordering = ["-created_at"]
+    readonly_fields = ["sent_at", "created_at", "updated_at"]
+
+
+@admin.register(PaymentGateway)
+class PaymentGatewayAdmin(admin.ModelAdmin):
+    """Admin configuration for PaymentGateway model"""
+
+    list_display = [
+        "name",
+        "status",
+        "enabled",
+        "created_at",
+    ]
+    list_filter = [
+        "status",
+        "enabled",
+        "created_at",
+    ]
+    search_fields = [
+        "name",
+        "description",
+    ]
+    ordering = ["name"]
+    readonly_fields = ["created_at", "updated_at"]

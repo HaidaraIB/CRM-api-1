@@ -28,10 +28,17 @@ from .views import home
 
 
 # Import viewsets
-from accounts.views import UserViewSet, CustomTokenObtainPairView
+from accounts.views import UserViewSet, CustomTokenObtainPairView, register_company
 from companies.views import CompanyViewSet
-from crm.views import ClientViewSet, DealViewSet, TaskViewSet
-from subscriptions.views import PlanViewSet, SubscriptionViewSet, PaymentViewSet
+from crm.views import ClientViewSet, DealViewSet, TaskViewSet, CampaignViewSet, ClientTaskViewSet
+from settings.views import ChannelViewSet, LeadStageViewSet, LeadStatusViewSet
+from real_estate.views import DeveloperViewSet, ProjectViewSet, UnitViewSet, OwnerViewSet
+from services.views import ServiceViewSet, ServicePackageViewSet, ServiceProviderViewSet
+from products.views import ProductViewSet, ProductCategoryViewSet, SupplierViewSet
+from subscriptions.views import (
+    PlanViewSet, SubscriptionViewSet, PaymentViewSet, 
+    InvoiceViewSet, BroadcastViewSet, PaymentGatewayViewSet
+)
 
 # Create a router and register viewsets
 router = DefaultRouter()
@@ -40,9 +47,27 @@ router.register(r"companies", CompanyViewSet, basename="company")
 router.register(r"clients", ClientViewSet, basename="client")
 router.register(r"deals", DealViewSet, basename="deal")
 router.register(r"tasks", TaskViewSet, basename="task")
+router.register(r"client-tasks", ClientTaskViewSet, basename="clienttask")
+router.register(r"campaigns", CampaignViewSet, basename="campaign")
+router.register(r"settings/channels", ChannelViewSet, basename="channel")
+router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
+router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
+router.register(r"developers", DeveloperViewSet, basename="developer")
+router.register(r"projects", ProjectViewSet, basename="project")
+router.register(r"units", UnitViewSet, basename="unit")
+router.register(r"owners", OwnerViewSet, basename="owner")
+router.register(r"services", ServiceViewSet, basename="service")
+router.register(r"service-packages", ServicePackageViewSet, basename="servicepackage")
+router.register(r"service-providers", ServiceProviderViewSet, basename="serviceprovider")
+router.register(r"products", ProductViewSet, basename="product")
+router.register(r"product-categories", ProductCategoryViewSet, basename="productcategory")
+router.register(r"suppliers", SupplierViewSet, basename="supplier")
 router.register(r"plans", PlanViewSet, basename="plan")
 router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
 router.register(r"payments", PaymentViewSet, basename="payment")
+router.register(r"invoices", InvoiceViewSet, basename="invoice")
+router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
+router.register(r"payment-gateways", PaymentGatewayViewSet, basename="paymentgateway")
 
 urlpatterns = [
     path("", home, name="home"),
@@ -52,6 +77,7 @@ urlpatterns = [
     path(
         "api/auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"
     ),
+    path("api/auth/register/", register_company, name="register_company"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     # API Documentation

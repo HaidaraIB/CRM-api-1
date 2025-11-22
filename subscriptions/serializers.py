@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Plan, Subscription, Payment
+from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
 
 
 class PlanSerializer(serializers.ModelSerializer):
@@ -11,6 +11,11 @@ class PlanSerializer(serializers.ModelSerializer):
             "description",
             "price_monthly",
             "price_yearly",
+            "trial_days",
+            "users",
+            "clients",
+            "storage",
+            "visible",
             "created_at",
             "updated_at",
         ]
@@ -27,6 +32,11 @@ class PlanListSerializer(serializers.ModelSerializer):
             "description",
             "price_monthly",
             "price_yearly",
+            "trial_days",
+            "users",
+            "clients",
+            "storage",
+            "visible",
         ]
 
 
@@ -106,5 +116,102 @@ class PaymentListSerializer(serializers.ModelSerializer):
             "payment_method",
             "payment_status",
             "created_at",
+        ]
+
+
+class InvoiceSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="subscription.company.name", read_only=True)
+    plan_name = serializers.CharField(source="subscription.plan.name", read_only=True)
+
+    class Meta:
+        model = Invoice
+        fields = [
+            "id",
+            "subscription",
+            "company_name",
+            "plan_name",
+            "invoice_number",
+            "amount",
+            "due_date",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class InvoiceListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for list views"""
+    company_name = serializers.CharField(source="subscription.company.name", read_only=True)
+
+    class Meta:
+        model = Invoice
+        fields = [
+            "id",
+            "invoice_number",
+            "company_name",
+            "amount",
+            "due_date",
+            "status",
+            "created_at",
+        ]
+
+
+class BroadcastSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Broadcast
+        fields = [
+            "id",
+            "subject",
+            "content",
+            "target",
+            "status",
+            "scheduled_at",
+            "sent_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "sent_at", "created_at", "updated_at"]
+
+
+class BroadcastListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for list views"""
+    class Meta:
+        model = Broadcast
+        fields = [
+            "id",
+            "subject",
+            "target",
+            "status",
+            "created_at",
+        ]
+
+
+class PaymentGatewaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentGateway
+        fields = [
+            "id",
+            "name",
+            "description",
+            "status",
+            "enabled",
+            "config",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class PaymentGatewayListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for list views"""
+    class Meta:
+        model = PaymentGateway
+        fields = [
+            "id",
+            "name",
+            "description",
+            "status",
+            "enabled",
         ]
 

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Client, Deal, Task
+from .models import Client, Deal, Task, Campaign, ClientTask
 
 
 @admin.register(Client)
@@ -152,6 +152,51 @@ class TaskAdmin(admin.ModelAdmin):
                     "stage",
                     "notes",
                     "reminder_date",
+                )
+            },
+        ),
+        ("Timestamps", {"fields": ("created_at", "updated_at")}),
+    )
+
+
+@admin.register(ClientTask)
+class ClientTaskAdmin(admin.ModelAdmin):
+    """Admin configuration for ClientTask model"""
+
+    list_display = [
+        "id",
+        "client",
+        "stage",
+        "reminder_date",
+        "created_by",
+        "created_at",
+        "updated_at",
+    ]
+    list_filter = [
+        "stage",
+        "reminder_date",
+        "created_at",
+        "created_by",
+    ]
+    search_fields = [
+        "client__name",
+        "stage",
+        "notes",
+        "created_by__username",
+    ]
+    ordering = ["-created_at"]
+    readonly_fields = ["created_at", "updated_at"]
+
+    fieldsets = (
+        (
+            "Client Task Information",
+            {
+                "fields": (
+                    "client",
+                    "stage",
+                    "notes",
+                    "reminder_date",
+                    "created_by",
                 )
             },
         ),

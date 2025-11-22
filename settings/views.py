@@ -1,0 +1,132 @@
+from rest_framework import viewsets, filters
+from rest_framework.permissions import IsAuthenticated
+from django.db import models
+from .models import Channel, LeadStage, LeadStatus
+from .serializers import (
+    ChannelSerializer,
+    ChannelListSerializer,
+    LeadStageSerializer,
+    LeadStageListSerializer,
+    LeadStatusSerializer,
+    LeadStatusListSerializer,
+)
+
+
+class ChannelViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing Channel instances.
+    Provides CRUD operations: Create, Read, Update, Delete
+    """
+
+    queryset = Channel.objects.all()
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "type", "priority"]
+    ordering_fields = ["created_at", "name", "priority"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        if user.is_admin():
+            return queryset.filter(company=user.company, is_active=True)
+
+        if user.is_employee():
+            return queryset.filter(company=user.company, is_active=True)
+
+        return queryset.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(company=user.company)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ChannelListSerializer
+        return ChannelSerializer
+
+
+class LeadStageViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing LeadStage instances.
+    Provides CRUD operations: Create, Read, Update, Delete
+    """
+
+    queryset = LeadStage.objects.all()
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "description"]
+    ordering_fields = ["order", "name", "created_at"]
+    ordering = ["order", "name"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        if user.is_admin():
+            return queryset.filter(company=user.company, is_active=True)
+
+        if user.is_employee():
+            return queryset.filter(company=user.company, is_active=True)
+
+        return queryset.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        # Set order to be the last one
+        max_order = LeadStage.objects.filter(company=user.company).aggregate(
+            max_order=models.Max('order')
+        )['max_order'] or 0
+        serializer.save(company=user.company, order=max_order + 1)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return LeadStageListSerializer
+        return LeadStageSerializer
+
+
+class LeadStatusViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing LeadStatus instances.
+    Provides CRUD operations: Create, Read, Update, Delete
+    """
+
+    queryset = LeadStatus.objects.all()
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "description", "category"]
+    ordering_fields = ["is_default", "name", "created_at"]
+    ordering = ["-is_default", "name"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        if user.is_admin():
+            return queryset.filter(company=user.company, is_active=True)
+
+        if user.is_employee():
+            return queryset.filter(company=user.company, is_active=True)
+
+        return queryset.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(company=user.company)
+
+    def perform_update(self, serializer):
+        # If setting a status as default, unset other defaults
+        if serializer.validated_data.get('is_default', False):
+            LeadStatus.objects.filter(
+                company=self.request.user.company,
+                is_default=True
+            ).exclude(id=serializer.instance.id).update(is_default=False)
+        serializer.save()
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return LeadStatusListSerializer
+        return LeadStatusSerializer
+
+

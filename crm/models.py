@@ -32,6 +32,19 @@ class CommunicationWay(Enum):
         return [(choice.value, choice.name) for choice in cls]
 
 
+class ClientStatus(Enum):
+    UNTOUCHED = "untouched"
+    TOUCHED = "touched"
+    FOLLOWING = "following"
+    MEETING = "meeting"
+    NO_ANSWER = "no_answer"
+    OUT_OF_SERVICE = "out_of_service"
+
+    @classmethod
+    def choices(cls):
+        return [(choice.value, choice.name) for choice in cls]
+
+
 class Client(models.Model):
     name = models.CharField(max_length=255)
     priority = models.CharField(max_length=10, choices=Priority.choices())
@@ -39,9 +52,13 @@ class Client(models.Model):
     communication_way = models.CharField(
         max_length=20, choices=CommunicationWay.choices()
     )
+    status = models.CharField(
+        max_length=20,
+        choices=ClientStatus.choices(),
+        default=ClientStatus.UNTOUCHED.value,
+    )
 
     budget = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
-
     phone_number = models.CharField(max_length=20, blank=True, null=True)
 
     company = models.ForeignKey(
@@ -139,3 +156,45 @@ class Task(models.Model):
 
     def __str__(self):
         return f"{self.deal.client.name} - {self.stage}"
+
+
+class ClientTask(models.Model):
+    client = models.ForeignKey(
+        Client, on_delete=models.CASCADE, related_name="client_tasks"
+    )
+    stage = models.CharField(max_length=50, choices=ClientStatus.choices())
+    notes = models.TextField(blank=True, null=True)
+    reminder_date = models.DateTimeField(blank=True, null=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="created_client_tasks",
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "crm_client_task"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.client.name} - {self.stage}"
+
+
+class Campaign(models.Model):
+    name = models.CharField(max_length=255)
+    code = models.CharField(max_length=50, unique=True)
+    budget = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="campaigns"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
