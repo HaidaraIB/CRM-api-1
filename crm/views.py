@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask
+from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin
 from .models import Client, Deal, Task, Campaign, ClientTask
 from .serializers import (
     ClientSerializer,
@@ -116,7 +116,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Campaign.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name", "budget"]
@@ -197,7 +197,7 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ClientTask.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanAccessClient]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "stage", "client__name"]
     ordering_fields = ["created_at", "reminder_date", "stage"]

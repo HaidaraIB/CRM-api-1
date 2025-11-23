@@ -1,5 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
+from accounts.permissions import IsAdmin
 from django.db import models
 from .models import Channel, LeadStage, LeadStatus
 from .serializers import (
@@ -16,10 +17,11 @@ class ChannelViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Channel instances.
     Provides CRUD operations: Create, Read, Update, Delete
+    Only Admin can manage channels
     """
 
     queryset = Channel.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "type", "priority"]
     ordering_fields = ["created_at", "name", "priority"]
@@ -51,10 +53,11 @@ class LeadStageViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing LeadStage instances.
     Provides CRUD operations: Create, Read, Update, Delete
+    Only Admin can manage lead stages
     """
 
     queryset = LeadStage.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["order", "name", "created_at"]
@@ -90,10 +93,11 @@ class LeadStatusViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing LeadStatus instances.
     Provides CRUD operations: Create, Read, Update, Delete
+    Only Admin can manage lead statuses
     """
 
     queryset = LeadStatus.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "category"]
     ordering_fields = ["is_default", "name", "created_at"]

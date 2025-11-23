@@ -45,6 +45,15 @@ class CanAccessClient(permissions.BasePermission):
         return request.user and request.user.is_authenticated
 
     def has_object_permission(self, request, view, obj):
+        # Handle ClientTask which has client instead of company
+        if hasattr(obj, "client") and not hasattr(obj, "company"):
+            obj = obj.client
+        
+        # Super Admin can access all
+        if request.user.is_super_admin():
+            return True
+        
+        # Check company access
         if hasattr(obj, "company"):
             if not request.user.can_access_company_data(obj.company):
                 return False

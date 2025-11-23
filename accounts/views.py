@@ -44,8 +44,15 @@ class UserViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
+        # Super Admin can access all users
+        if user.is_super_admin():
+            return queryset
+        
+        # Admin can access users in their company
         if user.is_admin() and user.company:
             return queryset.filter(company=user.company)
+        
+        # Employee can only access their own profile
         return queryset.filter(id=user.id)
 
     def perform_create(self, serializer):

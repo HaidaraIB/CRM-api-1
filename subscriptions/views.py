@@ -44,10 +44,11 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Subscription instances.
     Provides CRUD operations: Create, Read, Update, Delete
+    Only Super Admin can manage subscriptions
     """
 
     queryset = Subscription.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["company__name", "plan__name"]
     ordering_fields = ["created_at", "start_date", "end_date"]
@@ -63,10 +64,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Payment instances.
     Provides CRUD operations: Create, Read, Update, Delete
+    Only Super Admin can manage payments
     """
 
     queryset = Payment.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["payment_status", "payment_method", "subscription__company__name"]
     ordering_fields = ["created_at", "amount"]
@@ -82,10 +84,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Invoice instances.
     Provides CRUD operations: Create, Read, Update, Delete
+    Only Super Admin can manage invoices
     """
 
     queryset = Invoice.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["invoice_number", "subscription__company__name", "status"]
     ordering_fields = ["created_at", "due_date", "amount"]
