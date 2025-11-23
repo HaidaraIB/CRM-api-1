@@ -13,6 +13,7 @@ class UserSerializer(serializers.ModelSerializer):
     is_me = serializers.SerializerMethodField()
     company_name = serializers.CharField(source="company.name", read_only=True)
     company_specialization = serializers.CharField(source="company.specialization", read_only=True)
+    password = serializers.CharField(write_only=True, required=False)
 
     class Meta:
         model = User
@@ -20,6 +21,7 @@ class UserSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "email",
+            "password",
             "first_name",
             "last_name",
             "phone",
@@ -38,6 +40,27 @@ class UserSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "email": {"required": True},
         }
+
+    def create(self, validated_data):
+        """Create user with password"""
+        password = validated_data.pop('password', None)
+        if not password:
+            raise serializers.ValidationError({'password': 'Password is required when creating a user.'})
+        user = User.objects.create_user(
+            password=password,
+            **validated_data
+        )
+        return user
+
+    def update(self, instance, validated_data):
+        """Update user and handle password change"""
+        password = validated_data.pop('password', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if password:
+            instance.set_password(password)
+        instance.save()
+        return instance
 
     @extend_schema_field(serializers.BooleanField())
     def get_is_me(self, obj):
