@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import IsAdmin
+from accounts.permissions import IsAdmin, CanAccessServiceProvider, CanAccessService, CanAccessServicePackage
 from .models import Service, ServicePackage, ServiceProvider
 from .serializers import (
     ServiceSerializer,
@@ -19,7 +19,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Service.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessService]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "category"]
     ordering_fields = ["created_at", "name"]
@@ -29,10 +29,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
@@ -60,7 +57,7 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ServicePackage.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessServicePackage]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name"]
@@ -70,10 +67,7 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
@@ -101,7 +95,7 @@ class ServiceProviderViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ServiceProvider.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessServiceProvider]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "phone"]
     ordering_fields = ["created_at", "name"]
@@ -111,10 +105,7 @@ class ServiceProviderViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً

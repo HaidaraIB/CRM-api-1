@@ -49,10 +49,6 @@ class CanAccessClient(permissions.BasePermission):
         if hasattr(obj, "client") and not hasattr(obj, "company"):
             obj = obj.client
         
-        # Super Admin can access all
-        if request.user.is_super_admin():
-            return True
-        
         # Check company access
         if hasattr(obj, "company"):
             if not request.user.can_access_company_data(obj.company):
@@ -107,3 +103,65 @@ class CanAccessUser(permissions.BasePermission):
 
     def has_object_permission(self, request, view, obj):
         return request.user and request.user.can_access_user(obj)
+
+
+class CanAccessCompanyData(permissions.BasePermission):
+    """
+    Generic permission class for objects that have a company field.
+    Super Admin can access all, Admin can access their company's data.
+    """
+    def has_permission(self, request, view):
+        return request.user and request.user.is_authenticated
+
+    def has_object_permission(self, request, view, obj):
+        return request.user and request.user.can_access_company_data(obj.company)
+
+
+class CanAccessDeveloper(CanAccessCompanyData):
+    """Permission for Developer objects"""
+    pass
+
+
+class CanAccessProject(CanAccessCompanyData):
+    """Permission for Project objects"""
+    pass
+
+
+class CanAccessUnit(CanAccessCompanyData):
+    """Permission for Unit objects"""
+    pass
+
+
+class CanAccessOwner(CanAccessCompanyData):
+    """Permission for Owner objects"""
+    pass
+
+
+class CanAccessProductCategory(CanAccessCompanyData):
+    """Permission for ProductCategory objects"""
+    pass
+
+
+class CanAccessProduct(CanAccessCompanyData):
+    """Permission for Product objects"""
+    pass
+
+
+class CanAccessSupplier(CanAccessCompanyData):
+    """Permission for Supplier objects"""
+    pass
+
+
+class CanAccessServiceProvider(CanAccessCompanyData):
+    """Permission for ServiceProvider objects"""
+    pass
+
+
+class CanAccessService(CanAccessCompanyData):
+    """Permission for Service objects"""
+    pass
+
+
+class CanAccessServicePackage(CanAccessCompanyData):
+    """Permission for ServicePackage objects"""
+    pass

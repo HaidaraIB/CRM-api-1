@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import IsAdmin
+from accounts.permissions import IsAdmin, CanAccessProductCategory, CanAccessProduct, CanAccessSupplier
 from .models import Product, ProductCategory, Supplier
 from .serializers import (
     ProductSerializer,
@@ -19,7 +19,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ProductCategory.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessProductCategory]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name"]
@@ -29,10 +29,8 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
+        return queryset.filter(company=user.company)
 
-        return queryset.none()
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
@@ -60,7 +58,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Product.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessProduct]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "category__name"]
     ordering_fields = ["created_at", "name"]
@@ -70,10 +68,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
@@ -101,7 +96,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Supplier.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessSupplier]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "phone"]
     ordering_fields = ["created_at", "name"]
@@ -111,10 +106,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً

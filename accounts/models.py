@@ -43,8 +43,6 @@ class User(AbstractUser):
         return False
 
     def can_access_company_data(self, company):
-        if self.is_super_admin():
-            return True
         return self.company == company
 
     class Meta:

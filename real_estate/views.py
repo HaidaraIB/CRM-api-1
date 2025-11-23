@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import IsAdmin
+from accounts.permissions import IsAdmin, CanAccessDeveloper, CanAccessProject, CanAccessUnit, CanAccessOwner
 from .models import Developer, Project, Unit, Owner
 from .serializers import (
     DeveloperSerializer,
@@ -21,7 +21,7 @@ class DeveloperViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Developer.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessDeveloper]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name"]
@@ -31,10 +31,7 @@ class DeveloperViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
@@ -67,7 +64,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Project.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessProject]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "developer__name"]
     ordering_fields = ["created_at", "name"]
@@ -77,10 +74,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
@@ -108,7 +102,7 @@ class UnitViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Unit.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessUnit]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "project__name"]
     ordering_fields = ["created_at", "name"]
@@ -118,10 +112,7 @@ class UnitViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
@@ -149,7 +140,7 @@ class OwnerViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Owner.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, CanAccessOwner]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "phone"]
     ordering_fields = ["created_at", "name"]
@@ -159,10 +150,7 @@ class OwnerViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         # توليد code تلقائياً

@@ -31,13 +31,7 @@ class ChannelViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company, is_active=True)
-
-        if user.is_employee():
-            return queryset.filter(company=user.company, is_active=True)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -67,13 +61,7 @@ class LeadStageViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company, is_active=True)
-
-        if user.is_employee():
-            return queryset.filter(company=user.company, is_active=True)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -107,13 +95,7 @@ class LeadStatusViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        if user.is_admin():
-            return queryset.filter(company=user.company, is_active=True)
-
-        if user.is_employee():
-            return queryset.filter(company=user.company, is_active=True)
-
-        return queryset.none()
+        return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
         user = self.request.user
