@@ -89,3 +89,43 @@ class LeadStatus(models.Model):
         return self.name
 
 
+class SMTPSettings(models.Model):
+    """
+    SMTP configuration for sending emails.
+    Only one instance should exist (singleton pattern).
+    """
+    host = models.CharField(max_length=255, help_text="SMTP server host (e.g., smtp.gmail.com)")
+    port = models.IntegerField(default=587, help_text="SMTP server port (587 for TLS, 465 for SSL, 25 for plain)")
+    use_tls = models.BooleanField(default=True, help_text="Use TLS encryption")
+    use_ssl = models.BooleanField(default=False, help_text="Use SSL encryption")
+    username = models.CharField(max_length=255, help_text="SMTP username (usually email address)")
+    password = models.CharField(max_length=255, help_text="SMTP password (leave empty to keep current)")
+    from_email = models.EmailField(help_text="Default 'from' email address")
+    from_name = models.CharField(max_length=255, blank=True, help_text="Default 'from' name")
+    is_active = models.BooleanField(default=False, help_text="Enable/disable SMTP")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "SMTP Settings"
+        verbose_name_plural = "SMTP Settings"
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"SMTP: {self.host}:{self.port}"
+
+    def save(self, *args, **kwargs):
+        # If password is empty, keep the existing password
+        if not self.password and self.pk:
+            existing = SMTPSettings.objects.get(pk=self.pk)
+            self.password = existing.password
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_settings(cls):
+        """Get the SMTP settings instance (singleton)"""
+        settings, created = cls.objects.get_or_create(pk=1)
+        return settings
+
+

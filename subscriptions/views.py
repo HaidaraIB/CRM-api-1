@@ -19,6 +19,7 @@ from .serializers import (
     PaymentGatewayListSerializer,
 )
 from accounts.permissions import IsSuperAdmin
+from .utils import send_broadcast_email
 
 
 class PlanViewSet(viewsets.ModelViewSet):
@@ -133,11 +134,24 @@ class BroadcastViewSet(viewsets.ModelViewSet):
         if broadcast.status == 'sent':
             return Response({'error': 'Broadcast already sent'}, status=status.HTTP_400_BAD_REQUEST)
         
+        # Send email via SMTP
+        result = send_broadcast_email(broadcast)
+        
+        if not result['success']:
+            return Response(
+                {'error': result.get('error', 'Failed to send broadcast')},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update broadcast status
         broadcast.status = 'sent'
         broadcast.sent_at = timezone.now()
         broadcast.save()
-        # TODO: Implement actual sending logic (email, notifications, etc.)
-        return Response({'status': 'Broadcast sent successfully'})
+        
+        return Response({
+            'status': 'Broadcast sent successfully',
+            'recipients_count': result.get('recipients_count', 0)
+        })
 
     @action(detail=True, methods=['post'])
     def schedule(self, request, pk=None):

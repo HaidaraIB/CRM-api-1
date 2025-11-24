@@ -33,7 +33,7 @@ from .views import home
 from accounts.views import UserViewSet, CustomTokenObtainPairView, register_company
 from companies.views import CompanyViewSet
 from crm.views import ClientViewSet, DealViewSet, TaskViewSet, CampaignViewSet, ClientTaskViewSet
-from settings.views import ChannelViewSet, LeadStageViewSet, LeadStatusViewSet
+from settings.views import ChannelViewSet, LeadStageViewSet, LeadStatusViewSet, SMTPSettingsViewSet
 from real_estate.views import DeveloperViewSet, ProjectViewSet, UnitViewSet, OwnerViewSet
 from services.views import ServiceViewSet, ServicePackageViewSet, ServiceProviderViewSet
 from products.views import ProductViewSet, ProductCategoryViewSet, SupplierViewSet
@@ -54,6 +54,7 @@ router.register(r"campaigns", CampaignViewSet, basename="campaign")
 router.register(r"settings/channels", ChannelViewSet, basename="channel")
 router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
+router.register(r"settings/smtp", SMTPSettingsViewSet, basename="smtpsettings")
 router.register(r"developers", DeveloperViewSet, basename="developer")
 router.register(r"projects", ProjectViewSet, basename="project")
 router.register(r"units", UnitViewSet, basename="unit")
