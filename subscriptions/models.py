@@ -6,6 +6,7 @@ from django.db.models import JSONField
 
 class Plan(models.Model):
     name = models.CharField(max_length=255)
+    name_ar = models.CharField(max_length=255, blank=True, default="")
     description = models.TextField()
     description_ar = models.TextField(blank=True, default="")
     price_monthly = models.DecimalField(max_digits=10, decimal_places=2)

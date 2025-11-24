@@ -8,6 +8,7 @@ class PlanAdmin(admin.ModelAdmin):
 
     list_display = [
         "name",
+        "name_ar",
         "price_monthly",
         "price_yearly",
         "trial_days",
@@ -22,6 +23,7 @@ class PlanAdmin(admin.ModelAdmin):
     ]
     search_fields = [
         "name",
+        "name_ar",
         "description",
         "description_ar",
     ]
@@ -34,6 +36,7 @@ class PlanAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "name",
+                    "name_ar",
                     "description",
                     "description_ar",
                     "price_monthly",

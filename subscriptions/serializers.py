@@ -8,6 +8,7 @@ class PlanSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "name_ar",
             "description",
             "description_ar",
             "price_monthly",
@@ -30,6 +31,7 @@ class PlanListSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
+            "name_ar",
             "description",
             "description_ar",
             "price_monthly",
