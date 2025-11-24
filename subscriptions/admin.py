@@ -23,6 +23,7 @@ class PlanAdmin(admin.ModelAdmin):
     search_fields = [
         "name",
         "description",
+        "description_ar",
     ]
     ordering = ["-created_at"]
     readonly_fields = ["created_at", "updated_at"]
@@ -34,6 +35,7 @@ class PlanAdmin(admin.ModelAdmin):
                 "fields": (
                     "name",
                     "description",
+                    "description_ar",
                     "price_monthly",
                     "price_yearly",
                     "trial_days",

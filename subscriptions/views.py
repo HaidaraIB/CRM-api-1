@@ -30,7 +30,7 @@ class PlanViewSet(viewsets.ModelViewSet):
     queryset = Plan.objects.all()
     permission_classes = [IsAuthenticated, IsSuperAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["name", "description"]
+    search_fields = ["name", "description", "description_ar"]
     ordering_fields = ["created_at", "price_monthly", "price_yearly"]
     ordering = ["-created_at"]
 
