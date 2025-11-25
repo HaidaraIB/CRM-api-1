@@ -1,7 +1,49 @@
 from django.db import models
-from django.db.models import JSONField
 
 # Create your models here.
+from enum import Enum
+
+
+class BroadcastStatus(Enum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+    @classmethod
+    def choices(cls):
+        return [(i.value, i.name) for i in cls]
+
+
+class InvoiceStatus(Enum):
+    DRAFT = "draft"
+    ISSUED = "issued"
+    PAID = "paid"
+    CANCELED = "canceled"
+
+    @classmethod
+    def choices(cls):
+        return [(i.value, i.name) for i in cls]
+
+
+class PaymentStatus(Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+    @classmethod
+    def choices(cls):
+        return [(i.value, i.name) for i in cls]
+
+
+class PaymentGatewayStatus(Enum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    SETUP_REQUIRED = "setup_required"
+
+    @classmethod
+    def choices(cls):
+        return [(i.value, i.name) for i in cls]
 
 
 class Plan(models.Model):
@@ -12,8 +54,8 @@ class Plan(models.Model):
     price_monthly = models.DecimalField(max_digits=10, decimal_places=2)
     price_yearly = models.DecimalField(max_digits=10, decimal_places=2)
     trial_days = models.IntegerField(default=0)
-    users = models.CharField(max_length=50, default='unlimited')
-    clients = models.CharField(max_length=50, default='unlimited')
+    users = models.CharField(max_length=50, default="unlimited")
+    clients = models.CharField(max_length=50, default="unlimited")
     storage = models.IntegerField(default=10)  # In GB
     visible = models.BooleanField(default=True)
 
@@ -22,6 +64,9 @@ class Plan(models.Model):
 
     class Meta:
         db_table = "plans"
+
+    def __str__(self):
+        return self.name
 
 
 class Subscription(models.Model):
@@ -42,6 +87,9 @@ class Subscription(models.Model):
     class Meta:
         db_table = "subscriptions"
 
+    def __str__(self):
+        return f"{self.company.name} - {self.plan.name}"
+
 
 class Payment(models.Model):
     subscription = models.ForeignKey(
@@ -57,75 +105,72 @@ class Payment(models.Model):
     class Meta:
         db_table = "payments"
 
+    def __str__(self):
+        return f"Payment #{self.id} - {self.subscription.company.name} - {self.amount}"
+
 
 class Invoice(models.Model):
-    STATUS_CHOICES = [
-        ('paid', 'Paid'),
-        ('due', 'Due'),
-        ('overdue', 'Overdue'),
-    ]
-    
     subscription = models.ForeignKey(
         Subscription, on_delete=models.CASCADE, related_name="invoices"
     )
     invoice_number = models.CharField(max_length=255, unique=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     due_date = models.DateField()
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='due')
-    
+    status = models.CharField(
+        max_length=20,
+        choices=InvoiceStatus.choices(),
+        default=InvoiceStatus.DRAFT.value,
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "invoices"
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Invoice {self.invoice_number} - {self.subscription.company.name} ({self.status})"
 
 
 class Broadcast(models.Model):
-    STATUS_CHOICES = [
-        ('sent', 'Sent'),
-        ('scheduled', 'Scheduled'),
-        ('draft', 'Draft'),
-    ]
-    
-    TARGET_CHOICES = [
-        ('all', 'All Companies'),
-        ('gold', 'Gold Plan Subscribers'),
-        ('trial', 'Trial Accounts'),
-        ('expired', 'Expired Subscriptions'),
-    ]
-    
     subject = models.CharField(max_length=255)
     content = models.TextField()
-    target = models.CharField(max_length=50, choices=TARGET_CHOICES, default='all')
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    target = models.CharField(max_length=50, default="all")
+    status = models.CharField(
+        max_length=20, choices=BroadcastStatus.choices(), null=True
+    )
     scheduled_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "broadcasts"
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        status_display = self.status or "draft"
+        return f"{self.subject} ({status_display})"
 
 
 class PaymentGateway(models.Model):
-    STATUS_CHOICES = [
-        ('active', 'Active'),
-        ('disabled', 'Disabled'),
-        ('setup_required', 'Setup Required'),
-    ]
-    
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='setup_required')
+    status = models.CharField(
+        max_length=20,
+        choices=PaymentGatewayStatus.choices(),
+        default=PaymentGatewayStatus.SETUP_REQUIRED.value,
+    )
     enabled = models.BooleanField(default=False)
-    config = JSONField(default=dict, blank=True)  # Store gateway-specific config (keys, etc.)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "payment_gateways"
-        ordering = ['name']
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.status})"

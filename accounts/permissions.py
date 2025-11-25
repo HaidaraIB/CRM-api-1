@@ -48,7 +48,7 @@ class CanAccessClient(permissions.BasePermission):
         # Handle ClientTask which has client instead of company
         if hasattr(obj, "client") and not hasattr(obj, "company"):
             obj = obj.client
-        
+
         # Check company access
         if hasattr(obj, "company"):
             if not request.user.can_access_company_data(obj.company):
@@ -110,6 +110,7 @@ class CanAccessCompanyData(permissions.BasePermission):
     Generic permission class for objects that have a company field.
     Super Admin can access all, Admin can access their company's data.
     """
+
     def has_permission(self, request, view):
         return request.user and request.user.is_authenticated
 
@@ -119,49 +120,59 @@ class CanAccessCompanyData(permissions.BasePermission):
 
 class CanAccessDeveloper(CanAccessCompanyData):
     """Permission for Developer objects"""
+
     pass
 
 
 class CanAccessProject(CanAccessCompanyData):
     """Permission for Project objects"""
+
     pass
 
 
 class CanAccessUnit(CanAccessCompanyData):
     """Permission for Unit objects"""
+
     pass
 
 
 class CanAccessOwner(CanAccessCompanyData):
     """Permission for Owner objects"""
+
     pass
 
 
 class CanAccessProductCategory(CanAccessCompanyData):
     """Permission for ProductCategory objects"""
+
     pass
 
 
 class CanAccessProduct(CanAccessCompanyData):
     """Permission for Product objects"""
+
     pass
 
 
 class CanAccessSupplier(CanAccessCompanyData):
     """Permission for Supplier objects"""
+
     pass
 
 
 class CanAccessServiceProvider(CanAccessCompanyData):
     """Permission for ServiceProvider objects"""
+
     pass
 
 
 class CanAccessService(CanAccessCompanyData):
     """Permission for Service objects"""
+
     pass
 
 
 class CanAccessServicePackage(CanAccessCompanyData):
     """Permission for ServicePackage objects"""
+
     pass

@@ -4,7 +4,6 @@ from enum import Enum
 
 
 class Role(Enum):
-    SUPER_ADMIN = "super_admin"
     ADMIN = "admin"
     EMPLOYEE = "employee"
 
@@ -24,7 +23,7 @@ class User(AbstractUser):
         return self.username
 
     def is_super_admin(self):
-        return self.role == Role.SUPER_ADMIN.value
+        return self.is_superuser
 
     def is_admin(self):
         return self.role == Role.ADMIN.value

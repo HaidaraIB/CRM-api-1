@@ -3,7 +3,17 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
-from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
+from .models import (
+    Plan,
+    Subscription,
+    Payment,
+    Invoice,
+    Broadcast,
+    PaymentGateway,
+    BroadcastStatus,
+    InvoiceStatus,
+    PaymentGatewayStatus,
+)
 from .serializers import (
     PlanSerializer,
     PlanListSerializer,
@@ -100,13 +110,13 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return InvoiceListSerializer
         return InvoiceSerializer
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=["post"])
     def mark_paid(self, request, pk=None):
         """Mark an invoice as paid"""
         invoice = self.get_object()
-        invoice.status = 'paid'
+        invoice.status = InvoiceStatus.PAID.value
         invoice.save()
-        return Response({'status': 'Invoice marked as paid'})
+        return Response({"status": "Invoice marked as paid"})
 
 
 class BroadcastViewSet(viewsets.ModelViewSet):
@@ -127,44 +137,51 @@ class BroadcastViewSet(viewsets.ModelViewSet):
             return BroadcastListSerializer
         return BroadcastSerializer
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=["post"])
     def send(self, request, pk=None):
         """Send a broadcast immediately"""
         broadcast = self.get_object()
-        if broadcast.status == 'sent':
-            return Response({'error': 'Broadcast already sent'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if broadcast.status == "sent":
+            return Response(
+                {"error": "Broadcast already sent"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Send email via SMTP
         result = send_broadcast_email(broadcast)
-        
-        if not result['success']:
+
+        if not result["success"]:
             return Response(
-                {'error': result.get('error', 'Failed to send broadcast')},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": result.get("error", "Failed to send broadcast")},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         # Update broadcast status
-        broadcast.status = 'sent'
+        broadcast.status = BroadcastStatus.SENT.value
         broadcast.sent_at = timezone.now()
         broadcast.save()
-        
-        return Response({
-            'status': 'Broadcast sent successfully',
-            'recipients_count': result.get('recipients_count', 0)
-        })
 
-    @action(detail=True, methods=['post'])
+        return Response(
+            {
+                "status": "Broadcast sent successfully",
+                "recipients_count": result.get("recipients_count", 0),
+            }
+        )
+
+    @action(detail=True, methods=["post"])
     def schedule(self, request, pk=None):
         """Schedule a broadcast for later"""
         broadcast = self.get_object()
-        scheduled_at = request.data.get('scheduled_at')
+        scheduled_at = request.data.get("scheduled_at")
         if not scheduled_at:
-            return Response({'error': 'scheduled_at is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        broadcast.status = 'scheduled'
+            return Response(
+                {"error": "scheduled_at is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        broadcast.status = BroadcastStatus.PENDING.value
         broadcast.scheduled_at = scheduled_at
         broadcast.save()
-        return Response({'status': 'Broadcast scheduled successfully'})
+        return Response({"status": "Broadcast scheduled successfully"})
 
 
 class PaymentGatewayViewSet(viewsets.ModelViewSet):
@@ -185,14 +202,26 @@ class PaymentGatewayViewSet(viewsets.ModelViewSet):
             return PaymentGatewayListSerializer
         return PaymentGatewaySerializer
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=["post"])
     def toggle_enabled(self, request, pk=None):
         """Toggle gateway enabled status"""
         gateway = self.get_object()
-        if gateway.status == 'setup_required':
-            return Response({'error': 'Gateway setup required before enabling'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if gateway.status == PaymentGatewayStatus.SETUP_REQUIRED.value:
+            return Response(
+                {"error": "Gateway setup required before enabling"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         gateway.enabled = not gateway.enabled
-        gateway.status = 'active' if gateway.enabled else 'disabled'
+        gateway.status = (
+            PaymentGatewayStatus.ACTIVE.value
+            if gateway.enabled
+            else PaymentGatewayStatus.DISABLED.value
+        )
         gateway.save()
-        return Response({'status': f'Gateway {"enabled" if gateway.enabled else "disabled"}', 'enabled': gateway.enabled})
+        return Response(
+            {
+                "status": f'Gateway {"enabled" if gateway.enabled else "disabled"}',
+                "enabled": gateway.enabled,
+            }
+        )

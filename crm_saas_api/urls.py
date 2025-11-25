@@ -32,14 +32,29 @@ from .views import home
 # Import viewsets
 from accounts.views import UserViewSet, CustomTokenObtainPairView, register_company
 from companies.views import CompanyViewSet
-from crm.views import ClientViewSet, DealViewSet, TaskViewSet, CampaignViewSet, ClientTaskViewSet
-from settings.views import ChannelViewSet, LeadStageViewSet, LeadStatusViewSet, SMTPSettingsViewSet
-from real_estate.views import DeveloperViewSet, ProjectViewSet, UnitViewSet, OwnerViewSet
+from crm.views import (
+    ClientViewSet,
+    DealViewSet,
+    TaskViewSet,
+    CampaignViewSet,
+    ClientTaskViewSet,
+)
+from settings.views import ChannelViewSet, LeadStageViewSet, LeadStatusViewSet
+from real_estate.views import (
+    DeveloperViewSet,
+    ProjectViewSet,
+    UnitViewSet,
+    OwnerViewSet,
+)
 from services.views import ServiceViewSet, ServicePackageViewSet, ServiceProviderViewSet
 from products.views import ProductViewSet, ProductCategoryViewSet, SupplierViewSet
 from subscriptions.views import (
-    PlanViewSet, SubscriptionViewSet, PaymentViewSet, 
-    InvoiceViewSet, BroadcastViewSet, PaymentGatewayViewSet
+    PlanViewSet,
+    SubscriptionViewSet,
+    PaymentViewSet,
+    InvoiceViewSet,
+    BroadcastViewSet,
+    PaymentGatewayViewSet,
 )
 
 # Create a router and register viewsets
@@ -54,16 +69,19 @@ router.register(r"campaigns", CampaignViewSet, basename="campaign")
 router.register(r"settings/channels", ChannelViewSet, basename="channel")
 router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
-router.register(r"settings/smtp", SMTPSettingsViewSet, basename="smtpsettings")
 router.register(r"developers", DeveloperViewSet, basename="developer")
 router.register(r"projects", ProjectViewSet, basename="project")
 router.register(r"units", UnitViewSet, basename="unit")
 router.register(r"owners", OwnerViewSet, basename="owner")
 router.register(r"services", ServiceViewSet, basename="service")
 router.register(r"service-packages", ServicePackageViewSet, basename="servicepackage")
-router.register(r"service-providers", ServiceProviderViewSet, basename="serviceprovider")
+router.register(
+    r"service-providers", ServiceProviderViewSet, basename="serviceprovider"
+)
 router.register(r"products", ProductViewSet, basename="product")
-router.register(r"product-categories", ProductCategoryViewSet, basename="productcategory")
+router.register(
+    r"product-categories", ProductCategoryViewSet, basename="productcategory"
+)
 router.register(r"suppliers", SupplierViewSet, basename="supplier")
 router.register(r"plans", PlanViewSet, basename="plan")
 router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
@@ -97,3 +115,4 @@ urlpatterns = [
 # Serve static files during development
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
