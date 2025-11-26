@@ -14,7 +14,7 @@ class Specialization(Enum):
 
 class Company(models.Model):
     name = models.CharField(max_length=64)
-    domain = models.CharField(max_length=256)
+    domain = models.CharField(max_length=256, unique=True)
     specialization = models.CharField(
         max_length=20, choices=Specialization.choices(), default=Specialization.REAL_ESTATE.value
     )

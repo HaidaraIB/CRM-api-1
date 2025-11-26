@@ -1,6 +1,11 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
+from django.db.models import Q
 from enum import Enum
+from datetime import timedelta
+import uuid
+import secrets
 
 
 class Role(Enum):
@@ -13,11 +18,13 @@ class Role(Enum):
 
 
 class User(AbstractUser):
+    email = models.EmailField(unique=True)
     company = models.ForeignKey(
         "companies.Company", on_delete=models.CASCADE, null=True, blank=True
     )
     role = models.CharField(max_length=64, choices=Role.choices())
     phone = models.CharField(max_length=20, blank=True, null=True)
+    email_verified = models.BooleanField(default=False)
 
     def __str__(self):
         return self.username
@@ -53,3 +60,60 @@ class User(AbstractUser):
             ("view_company_data", "Can view company data"),
             ("manage_company_data", "Can manage company data"),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["phone"],
+                condition=Q(phone__isnull=False) & ~Q(phone=""),
+                name="unique_user_phone_not_null",
+            ),
+        ]
+
+
+class EmailVerification(models.Model):
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="email_verifications",
+    )
+    code = models.CharField(max_length=6)
+    token = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField()
+    verified_at = models.DateTimeField(null=True, blank=True)
+    is_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "email_verifications"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=Q(is_verified=False),
+                name="unique_pending_verification_per_user",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} verification"
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    @classmethod
+    def create_for_user(cls, user, expiry_hours: int = 48):
+        cls.objects.filter(user=user, is_verified=False).delete()
+        code = f"{secrets.randbelow(900000) + 100000}"
+        token = uuid.uuid4().hex
+        expires_at = timezone.now() + timedelta(hours=expiry_hours)
+        return cls.objects.create(
+            user=user,
+            code=code,
+            token=token,
+            expires_at=expires_at,
+        )
+
+    def mark_verified(self):
+        self.is_verified = True
+        self.verified_at = timezone.now()
+        self.save(update_fields=["is_verified", "verified_at"])

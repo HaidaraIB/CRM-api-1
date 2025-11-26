@@ -6,7 +6,8 @@ from drf_spectacular.utils import extend_schema_field
 from .models import User, Role
 from companies.models import Company
 from subscriptions.models import Plan, Subscription
-from datetime import datetime, timedelta
+from datetime import timedelta
+from django.utils import timezone
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -32,11 +33,12 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
             "is_staff",
             "is_superuser",
+            "email_verified",
             "date_joined",
             "last_login",
             "is_me",
         ]
-        read_only_fields = ["id", "date_joined", "last_login"]
+        read_only_fields = ["id", "date_joined", "last_login", "email_verified"]
         extra_kwargs = {
             "email": {"required": True},
         }
@@ -92,6 +94,7 @@ class UserListSerializer(serializers.ModelSerializer):
             "company_name",
             "company_specialization",
             "is_active",
+            "email_verified",
             "date_joined",
             "is_me",
         ]
@@ -124,6 +127,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             "company_name": self.user.company.name if self.user.company else None,
             "company_specialization": self.user.company.specialization if self.user.company else None,
             "is_active": self.user.is_active,
+            "email_verified": self.user.email_verified,
         }
 
         return data
@@ -188,7 +192,7 @@ class RegisterCompanySerializer(serializers.Serializer):
 
     def validate_owner(self, value):
         """Validate owner data"""
-        required_fields = ['first_name', 'last_name', 'email', 'username', 'password']
+        required_fields = ['first_name', 'last_name', 'email', 'username', 'password', 'phone']
         for field in required_fields:
             if field not in value:
                 raise serializers.ValidationError(f"Owner {field} is required")
@@ -200,6 +204,13 @@ class RegisterCompanySerializer(serializers.Serializer):
         # Check if email already exists
         if User.objects.filter(email=value['email']).exists():
             raise serializers.ValidationError("Email already exists")
+
+        phone = value.get('phone', '').strip()
+        if not phone:
+            raise serializers.ValidationError("Phone number is required")
+        if User.objects.filter(phone=phone).exists():
+            raise serializers.ValidationError("Phone number already exists")
+        value['phone'] = phone
         
         # Validate password
         try:
@@ -223,6 +234,7 @@ class RegisterCompanySerializer(serializers.Serializer):
             password=owner_data['password'],
             first_name=owner_data['first_name'],
             last_name=owner_data['last_name'],
+            phone=owner_data['phone'],
             role=Role.ADMIN.value,
         )
 
@@ -245,9 +257,9 @@ class RegisterCompanySerializer(serializers.Serializer):
                 plan = Plan.objects.get(id=plan_id)
                 # Calculate end date based on billing cycle
                 if billing_cycle == 'yearly':
-                    end_date = datetime.now() + timedelta(days=365)
+                    end_date = timezone.now() + timedelta(days=365)
                 else:
-                    end_date = datetime.now() + timedelta(days=30)
+                    end_date = timezone.now() + timedelta(days=30)
                 
                 subscription = Subscription.objects.create(
                     company=company,
@@ -264,3 +276,82 @@ class RegisterCompanySerializer(serializers.Serializer):
             'owner': owner,
             'subscription': subscription,
         }
+
+
+class EmailVerificationSerializer(serializers.Serializer):
+    """Serializer to verify email via code or token"""
+    email = serializers.EmailField()
+    code = serializers.CharField(required=False, allow_blank=True, max_length=6)
+    token = serializers.CharField(required=False, allow_blank=True, max_length=64)
+
+    def validate_email(self, value):
+        """Normalize email"""
+        return value.strip().lower() if value else value
+
+    def validate_code(self, value):
+        """Normalize code - strip whitespace and return None if empty"""
+        if value:
+            value = value.strip()
+            return value if value else None
+        return None
+
+    def validate_token(self, value):
+        """Normalize token - strip whitespace and return None if empty"""
+        if value:
+            value = value.strip()
+            return value if value else None
+        return None
+
+    def validate(self, attrs):
+        email = attrs.get("email")
+        code = attrs.get("code")
+        token = attrs.get("token")
+
+        if not code and not token:
+            raise serializers.ValidationError({"code": "Either code or token must be provided."})
+
+        try:
+            attrs["user"] = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"email": "User with this email does not exist."})
+
+        return attrs
+
+
+class RegistrationAvailabilitySerializer(serializers.Serializer):
+    """Serializer to check availability of registration fields"""
+    company_domain = serializers.CharField(required=False, allow_blank=False)
+    email = serializers.EmailField(required=False)
+    username = serializers.CharField(required=False, allow_blank=False)
+    phone = serializers.CharField(required=False, allow_blank=False)
+
+    def validate(self, attrs):
+        if not any(attrs.get(field) for field in ['company_domain', 'email', 'username', 'phone']):
+            raise serializers.ValidationError("Provide at least one field to check.")
+
+        errors = {}
+
+        domain = attrs.get('company_domain')
+        if domain:
+            if Company.objects.filter(domain__iexact=domain.strip()).exists():
+                errors['company_domain'] = "Company domain already exists"
+
+        email = attrs.get('email')
+        if email:
+            if User.objects.filter(email__iexact=email.strip()).exists():
+                errors['email'] = "Email already exists"
+
+        username = attrs.get('username')
+        if username:
+            if User.objects.filter(username__iexact=username.strip()).exists():
+                errors['username'] = "Username already exists"
+
+        phone = attrs.get('phone')
+        if phone:
+            if User.objects.filter(phone=phone.strip()).exists():
+                errors['phone'] = "Phone number already exists"
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs

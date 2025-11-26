@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Role
+from .models import User, Role, EmailVerification
 from companies.models import Company
 
 
@@ -16,6 +16,7 @@ class UserAdmin(BaseUserAdmin):
         "phone",
         "role",
         "company",
+        "email_verified",
         "is_active",
         "is_staff",
         "date_joined",
@@ -38,7 +39,7 @@ class UserAdmin(BaseUserAdmin):
     ordering = ["-date_joined"]
 
     fieldsets = BaseUserAdmin.fieldsets + (
-        ("Additional Information", {"fields": ("role", "company", "phone")}),
+        ("Additional Information", {"fields": ("role", "company", "phone", "email_verified")}),
     )
 
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
@@ -88,3 +89,10 @@ class UserAdmin(BaseUserAdmin):
             if (new_role != Role.ADMIN.value or not new_company) and old_company.owner == user_obj:
                 old_company.owner = None
                 old_company.save(update_fields=['owner'])
+
+
+@admin.register(EmailVerification)
+class EmailVerificationAdmin(admin.ModelAdmin):
+    list_display = ["user", "code", "token", "is_verified", "expires_at", "created_at"]
+    search_fields = ["user__email", "user__username", "code", "token"]
+    list_filter = ["is_verified", "expires_at", "created_at"]

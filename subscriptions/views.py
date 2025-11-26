@@ -1,7 +1,8 @@
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import generics
 from django.utils import timezone
 from .models import (
     Plan,
@@ -49,6 +50,19 @@ class PlanViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return PlanListSerializer
         return PlanSerializer
+
+
+class PublicPlanListView(generics.ListAPIView):
+    """
+    Public endpoint to list visible plans for onboarding/registration.
+    """
+
+    permission_classes = [AllowAny]
+    serializer_class = PlanListSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return Plan.objects.filter(visible=True).order_by("price_monthly")
 
 
 class SubscriptionViewSet(viewsets.ModelViewSet):

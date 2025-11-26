@@ -6,16 +6,23 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from .models import User, Role
+from .models import User, Role, EmailVerification
 from .serializers import (
     UserSerializer,
     UserListSerializer,
     CustomTokenObtainPairSerializer,
     ChangePasswordSerializer,
     RegisterCompanySerializer,
+    EmailVerificationSerializer,
+    RegistrationAvailabilitySerializer,
 )
 from .permissions import CanAccessUser
 from companies.models import Company
+from django.conf import settings
+from .utils import send_email_verification
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -193,6 +200,7 @@ def register_company(request):
                 'last_name': owner.last_name,
                 'phone': owner.phone or "",
                 'role': owner.role,
+                'email_verified': owner.email_verified,
                 'company': company.id,
                 'company_name': company.name,
                 'company_specialization': company.specialization,
@@ -213,7 +221,145 @@ def register_company(request):
                 'is_active': subscription.is_active,
                 'end_date': subscription.end_date.isoformat(),
             }
+
+        verification_info = {}
+        try:
+            expiry_hours = getattr(settings, "EMAIL_VERIFICATION_EXPIRY_HOURS", 48)
+            verification = EmailVerification.create_for_user(owner, expiry_hours=expiry_hours)
+            sent = send_email_verification(owner, verification)
+            verification_info = {
+                "sent": sent,
+                "expires_at": verification.expires_at.isoformat(),
+            }
+        except Exception as exc:
+            logger.warning("Unable to send verification email: %s", exc)
+            verification_info = {
+                "sent": False,
+                "error": str(exc),
+            }
+
+        response_data["email_verification"] = verification_info
         
         return Response(response_data, status=status.HTTP_201_CREATED)
     
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_email(request):
+    """
+    Verify a user's email using a code or token.
+    """
+    import urllib.parse
+    
+    serializer = EmailVerificationSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    user = serializer.validated_data["user"]
+    code = serializer.validated_data.get("code")
+    token = serializer.validated_data.get("token")
+
+    # Check if email is already verified
+    if user.email_verified:
+        return Response(
+            {"message": "Email is already verified."},
+            status=status.HTTP_200_OK,
+        )
+
+    # Build filters - try to find unverified verification records
+    filters = {"user": user, "is_verified": False}
+    
+    if code:
+        code_value = code.strip() if isinstance(code, str) else code
+        if code_value:
+            filters["code"] = code_value
+    
+    if token:
+        # Handle URL decoding in case token was URL-encoded
+        token_value = token.strip() if isinstance(token, str) else token
+        if token_value:
+            # Try URL decoding in case it was encoded
+            try:
+                token_value = urllib.parse.unquote(token_value)
+            except Exception:
+                pass
+            filters["token"] = token_value
+
+    # If neither code nor token provided, return error
+    if not code and not token:
+        return Response(
+            {"error": "Either code or token must be provided."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Try to find the verification record
+    verification = (
+        EmailVerification.objects.filter(**filters)
+        .order_by("-created_at")
+        .first()
+    )
+
+    # If not found, check if there's a verification with this token/code that's already verified
+    if not verification:
+        # Try without is_verified filter to see if it exists but is already verified
+        alt_filters = {"user": user}
+        if code:
+            alt_filters["code"] = code.strip() if isinstance(code, str) else code
+        if token:
+            token_value = token.strip() if isinstance(token, str) else token
+            try:
+                token_value = urllib.parse.unquote(token_value)
+            except Exception:
+                pass
+            alt_filters["token"] = token_value
+        
+        existing = EmailVerification.objects.filter(**alt_filters).first()
+        if existing and existing.is_verified:
+            # Email is already verified via this token
+            if not user.email_verified:
+                user.email_verified = True
+                user.save(update_fields=["email_verified"])
+            return Response(
+                {"message": "Email is already verified."},
+                status=status.HTTP_200_OK,
+            )
+        
+        return Response(
+            {"error": "Invalid or expired verification code."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if verification.is_expired:
+        verification.delete()
+        return Response(
+            {"error": "Verification code has expired. Please request a new one."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Mark as verified
+    verification.mark_verified()
+    user.email_verified = True
+    user.save(update_fields=["email_verified"])
+
+    return Response(
+        {"message": "Email verified successfully."},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def check_registration_availability(request):
+    """
+    Check if company domain, email, username, or phone are available prior to registration.
+    """
+    serializer = RegistrationAvailabilitySerializer(data=request.data)
+    if serializer.is_valid():
+        return Response({"available": True}, status=status.HTTP_200_OK)
+
+    return Response(
+        {"available": False, "errors": serializer.errors},
+        status=status.HTTP_400_BAD_REQUEST,
+    )

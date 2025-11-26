@@ -27,10 +27,15 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 from .views import home
-
+from accounts.views import check_registration_availability
 
 # Import viewsets
-from accounts.views import UserViewSet, CustomTokenObtainPairView, register_company
+from accounts.views import (
+    UserViewSet,
+    CustomTokenObtainPairView,
+    register_company,
+    verify_email,
+)
 from companies.views import CompanyViewSet
 from crm.views import (
     ClientViewSet,
@@ -55,6 +60,7 @@ from subscriptions.views import (
     InvoiceViewSet,
     BroadcastViewSet,
     PaymentGatewayViewSet,
+    PublicPlanListView,
 )
 
 # Create a router and register viewsets
@@ -99,6 +105,13 @@ urlpatterns = [
         "api/auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"
     ),
     path("api/auth/register/", register_company, name="register_company"),
+    path(
+        "api/auth/check-availability/",
+        check_registration_availability,
+        name="check_registration_availability",
+    ),
+    path("api/auth/verify-email/", verify_email, name="verify_email"),
+    path("api/public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     # API Documentation
