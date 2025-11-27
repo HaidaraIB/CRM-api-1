@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Channel, LeadStage, LeadStatus, SMTPSettings
+from .models import Channel, LeadStage, LeadStatus, SMTPSettings, SystemBackup, SystemAuditLog
 
 
 @admin.register(Channel)
@@ -48,5 +48,21 @@ class SMTPSettingsAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(SystemBackup)
+class SystemBackupAdmin(admin.ModelAdmin):
+    list_display = ['id', 'status', 'initiator', 'created_by', 'file_size', 'created_at']
+    list_filter = ['status', 'initiator', 'created_at']
+    search_fields = ['id', 'notes', 'created_by__email']
+    readonly_fields = ['created_at', 'completed_at', 'file', 'file_size', 'metadata']
+
+
+@admin.register(SystemAuditLog)
+class SystemAuditLogAdmin(admin.ModelAdmin):
+    list_display = ['action', 'actor', 'created_at']
+    list_filter = ['action', 'created_at']
+    search_fields = ['action', 'message', 'metadata']
+    readonly_fields = ['action', 'message', 'metadata', 'actor', 'ip_address', 'created_at']
 
 

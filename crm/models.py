@@ -124,6 +124,7 @@ class ClientPhoneNumber(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "client_phone_numbers"
         ordering = ["-is_primary", "phone_type", "created_at"]
         unique_together = [["client", "phone_number"]]
 

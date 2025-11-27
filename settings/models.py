@@ -1,5 +1,8 @@
 from django.db import models
+from django.conf import settings as django_settings
+from django.utils import timezone
 from enum import Enum
+import uuid
 
 
 class ChannelPriority(Enum):
@@ -52,6 +55,7 @@ class LeadStage(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "settings_lead_stage"
         ordering = ["order", "name"]
         unique_together = ["name", "company"]
 
@@ -90,6 +94,7 @@ class LeadStatus(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "settings_lead_status"
         ordering = ["-is_default", "name"]
         unique_together = ["name", "company"]
 
@@ -128,6 +133,7 @@ class SMTPSettings(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "settings_smtp_settings"
         verbose_name = "SMTP Settings"
         verbose_name_plural = "SMTP Settings"
         ordering = ["-updated_at"]
@@ -140,3 +146,88 @@ class SMTPSettings(models.Model):
         """Get the SMTP settings instance (singleton)"""
         settings, created = cls.objects.get_or_create(pk=1)
         return settings
+
+
+class SystemBackup(models.Model):
+    class Status(models.TextChoices):
+        IN_PROGRESS = "in_progress", "In Progress"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    class Initiator(models.TextChoices):
+        MANUAL = "manual", "Manual"
+        SCHEDULED = "scheduled", "Scheduled"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    file = models.FileField(upload_to="backups/", blank=True, null=True)
+    file_size = models.BigIntegerField(default=0)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.IN_PROGRESS
+    )
+    initiator = models.CharField(
+        max_length=20, choices=Initiator.choices, default=Initiator.MANUAL
+    )
+    created_by = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_backups",
+    )
+    notes = models.TextField(blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(blank=True, default=dict)
+
+    class Meta:
+        db_table = "settings_system_backup"
+        ordering = ["-created_at"]
+        verbose_name = "System Backup"
+        verbose_name_plural = "System Backups"
+
+    def mark_completed(self, file_size: int = 0, metadata=None):
+        self.status = self.Status.COMPLETED
+        self.completed_at = timezone.now()
+        if file_size:
+            self.file_size = file_size
+        if metadata:
+            current = self.metadata or {}
+            current.update(metadata)
+            self.metadata = current
+        self.save(
+            update_fields=["status", "completed_at", "file_size", "metadata"]
+        )
+
+    def mark_failed(self, error_message: str):
+        self.status = self.Status.FAILED
+        self.error_message = error_message
+        self.completed_at = timezone.now()
+        self.save(update_fields=["status", "error_message", "completed_at"])
+
+
+class SystemAuditLog(models.Model):
+    """Persistent audit log for sensitive system actions."""
+
+    id = models.BigAutoField(primary_key=True)
+    action = models.CharField(max_length=128)
+    message = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(blank=True, default=dict)
+    actor = models.ForeignKey(
+        django_settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="system_audit_events",
+    )
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "settings_system_audit_log"
+        ordering = ["-created_at"]
+        verbose_name = "System Audit Log"
+        verbose_name_plural = "System Audit Logs"
+
+    def __str__(self):
+        return f"{self.action} @ {self.created_at:%Y-%m-%d %H:%M:%S}"

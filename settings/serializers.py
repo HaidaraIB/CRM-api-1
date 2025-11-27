@@ -1,6 +1,14 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_serializer
-from .models import Channel, LeadStage, LeadStatus, SMTPSettings
+from django.urls import reverse
+from .models import (
+    Channel,
+    LeadStage,
+    LeadStatus,
+    SMTPSettings,
+    SystemBackup,
+    SystemAuditLog,
+)
 
 
 @extend_schema_serializer(component_name="Channel")
@@ -157,5 +165,67 @@ class SMTPSettingsSerializer(serializers.ModelSerializer):
         if data.get('use_tls') and data.get('use_ssl'):
             raise serializers.ValidationError("Cannot use both TLS and SSL. Choose one.")
         return data
+
+
+class SystemBackupSerializer(serializers.ModelSerializer):
+    download_url = serializers.SerializerMethodField()
+    created_by_email = serializers.CharField(source="created_by.email", read_only=True)
+
+    class Meta:
+        model = SystemBackup
+        fields = [
+            "id",
+            "status",
+            "initiator",
+            "file",
+            "file_size",
+            "created_by",
+            "created_by_email",
+            "notes",
+            "error_message",
+            "metadata",
+            "created_at",
+            "completed_at",
+            "download_url",
+        ]
+        read_only_fields = [
+            "id",
+            "file",
+            "file_size",
+            "status",
+            "created_by",
+            "created_by_email",
+            "error_message",
+            "metadata",
+            "created_at",
+            "completed_at",
+            "download_url",
+        ]
+
+    def get_download_url(self, obj):
+        request = self.context.get("request")
+        if not request or not obj.file:
+            return None
+        return request.build_absolute_uri(
+            reverse("systembackup-download", args=[obj.pk])
+        )
+
+
+class SystemAuditLogSerializer(serializers.ModelSerializer):
+    actor_email = serializers.CharField(source="actor.email", read_only=True)
+
+    class Meta:
+        model = SystemAuditLog
+        fields = [
+            "id",
+            "action",
+            "message",
+            "metadata",
+            "actor",
+            "actor_email",
+            "ip_address",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 

@@ -46,7 +46,13 @@ from crm.views import (
     CampaignViewSet,
     ClientTaskViewSet,
 )
-from settings.views import ChannelViewSet, LeadStageViewSet, LeadStatusViewSet
+from settings.views import (
+    ChannelViewSet,
+    LeadStageViewSet,
+    LeadStatusViewSet,
+    SystemBackupViewSet,
+    SystemAuditLogViewSet,
+)
 from real_estate.views import (
     DeveloperViewSet,
     ProjectViewSet,
@@ -77,6 +83,8 @@ router.register(r"campaigns", CampaignViewSet, basename="campaign")
 router.register(r"settings/channels", ChannelViewSet, basename="channel")
 router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
+router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup")
+router.register(r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog")
 router.register(r"developers", DeveloperViewSet, basename="developer")
 router.register(r"projects", ProjectViewSet, basename="project")
 router.register(r"units", UnitViewSet, basename="unit")

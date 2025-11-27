@@ -190,6 +190,10 @@ STATICFILES_DIRS = [
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Backups directory (defaults to <MEDIA_ROOT>/backups)
+BACKUP_ROOT = Path(os.getenv("BACKUP_ROOT", MEDIA_ROOT / "backups"))
+BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
