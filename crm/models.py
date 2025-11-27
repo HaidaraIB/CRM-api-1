@@ -23,22 +23,23 @@ class Type(Enum):
         return [(choice.value, choice.name) for choice in cls]
 
 
-class CommunicationWay(Enum):
-    CALL = "call"
-    WHATSAPP = "whatsapp"
+class PhoneNumberType(Enum):
+    MOBILE = "mobile"
+    HOME = "home"
+    WORK = "work"
+    OTHER = "other"
 
     @classmethod
     def choices(cls):
         return [(choice.value, choice.name) for choice in cls]
 
 
-class ClientStatus(Enum):
-    UNTOUCHED = "untouched"
-    TOUCHED = "touched"
-    FOLLOWING = "following"
-    MEETING = "meeting"
-    NO_ANSWER = "no_answer"
-    OUT_OF_SERVICE = "out_of_service"
+class DealStage(Enum):
+    WON = "won"
+    LOST = "lost"
+    ON_HOLD = "on_hold"
+    IN_PROGRESS = "in_progress"
+    CANCELLED = "cancelled"
 
     @classmethod
     def choices(cls):
@@ -49,17 +50,27 @@ class Client(models.Model):
     name = models.CharField(max_length=255)
     priority = models.CharField(max_length=10, choices=Priority.choices())
     type = models.CharField(max_length=20, choices=Type.choices())
-    communication_way = models.CharField(
-        max_length=20, choices=CommunicationWay.choices()
+    # Link to Channel from settings instead of enum
+    communication_way = models.ForeignKey(
+        "settings.Channel",
+        on_delete=models.SET_NULL,
+        related_name="clients",
+        blank=True,
+        null=True,
+        help_text="Communication channel for this client",
     )
-    status = models.CharField(
-        max_length=20,
-        choices=ClientStatus.choices(),
-        default=ClientStatus.UNTOUCHED.value,
+    # Link to LeadStatus from settings instead of enum
+    status = models.ForeignKey(
+        "settings.LeadStatus",
+        on_delete=models.SET_NULL,
+        related_name="clients",
+        blank=True,
+        null=True,
+        help_text="Current status of this client",
     )
 
     budget = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
-    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)  # Keep for backward compatibility
 
     company = models.ForeignKey(
         "companies.Company",
@@ -81,48 +92,43 @@ class Client(models.Model):
         return self.name
 
 
-class TaskStage(Enum):
-    FOLLOWING = "following"
-    MEETING = "meeting"
-    DONE_MEETING = "done_meeting"
-    FOLLOW_AFTER_MEETING = "follow_after_meeting"
-    RESCHEDULE_MEETING = "reschedule_meeting"
-    CANCELLATION = "cancellation"
-    NO_ANSWER = "no_answer"
-    OUT_OF_SERVICE = "out_of_service"
-    NOT_INTERESTED = "not_interested"
-    WHATSAPP_PENDING = "whatsapp_pending"
-    HOLD = "hold"
-    BROKER = "broker"
-    RESALE = "resale"
+class ClientPhoneNumber(models.Model):
+    """Model to store multiple phone numbers for a client"""
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="phone_numbers",
+        help_text="The client this phone number belongs to",
+    )
+    phone_number = models.CharField(
+        max_length=20,
+        help_text="The phone number",
+    )
+    phone_type = models.CharField(
+        max_length=10,
+        choices=PhoneNumberType.choices(),
+        default=PhoneNumberType.MOBILE.value,
+        help_text="Type of phone number (mobile, home, work, other)",
+    )
+    is_primary = models.BooleanField(
+        default=False,
+        help_text="Whether this is the primary phone number",
+    )
+    notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Additional notes about this phone number",
+    )
 
-    @classmethod
-    def choices(cls):
-        return [(choice.value, choice.name) for choice in cls]
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        ordering = ["-is_primary", "phone_type", "created_at"]
+        unique_together = [["client", "phone_number"]]
 
-class CancelReason(Enum):
-    LOW_BUDGET = "low_budget"
-    NOT_INTERESTED = "not_interested"
-    CHANGE_OPINION = "change_opinion"
-    ALREADY_BOUGHT = "already_bought"
-    OTHER = "other"
-
-    @classmethod
-    def choices(cls):
-        return [(choice.value, choice.name) for choice in cls]
-
-
-class DealStage(Enum):
-    WON = "won"
-    LOST = "lost"
-    ON_HOLD = "on_hold"
-    IN_PROGRESS = "in_progress"
-    CANCELLED = "cancelled"
-
-    @classmethod
-    def choices(cls):
-        return [(choice.value, choice.name) for choice in cls]
+    def __str__(self):
+        return f"{self.client.name} - {self.phone_number} ({self.phone_type})"
 
 
 class Deal(models.Model):
@@ -147,7 +153,15 @@ class Deal(models.Model):
 
 class Task(models.Model):
     deal = models.ForeignKey(Deal, on_delete=models.CASCADE, related_name="tasks")
-    stage = models.CharField(max_length=50, choices=TaskStage.choices())
+    # Link to LeadStage from settings instead of enum
+    stage = models.ForeignKey(
+        "settings.LeadStage",
+        on_delete=models.SET_NULL,
+        related_name="tasks",
+        blank=True,
+        null=True,
+        help_text="Current stage of this task",
+    )
     notes = models.TextField(blank=True, null=True)
     reminder_date = models.DateTimeField(blank=True, null=True)
 
@@ -155,14 +169,23 @@ class Task(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.deal.client.name} - {self.stage}"
+        stage_name = self.stage.name if self.stage else "No Stage"
+        return f"{self.deal.client.name} - {stage_name}"
 
 
 class ClientTask(models.Model):
     client = models.ForeignKey(
         Client, on_delete=models.CASCADE, related_name="client_tasks"
     )
-    stage = models.CharField(max_length=50, choices=ClientStatus.choices())
+    # Link to LeadStage from settings instead of enum
+    stage = models.ForeignKey(
+        "settings.LeadStage",
+        on_delete=models.SET_NULL,
+        related_name="client_tasks",
+        blank=True,
+        null=True,
+        help_text="Current stage of this client task",
+    )
     notes = models.TextField(blank=True, null=True)
     reminder_date = models.DateTimeField(blank=True, null=True)
     created_by = models.ForeignKey(
@@ -181,7 +204,8 @@ class ClientTask(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.client.name} - {self.stage}"
+        stage_name = self.stage.name if self.stage else "No Stage"
+        return f"{self.client.name} - {stage_name}"
 
 
 class Campaign(models.Model):

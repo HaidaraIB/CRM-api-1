@@ -35,6 +35,8 @@ from accounts.views import (
     CustomTokenObtainPairView,
     register_company,
     verify_email,
+    forgot_password,
+    reset_password,
 )
 from companies.views import CompanyViewSet
 from crm.views import (
@@ -111,6 +113,8 @@ urlpatterns = [
         name="check_registration_availability",
     ),
     path("api/auth/verify-email/", verify_email, name="verify_email"),
+    path("api/auth/forgot-password/", forgot_password, name="forgot_password"),
+    path("api/auth/reset-password/", reset_password, name="reset_password"),
     path("api/public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),

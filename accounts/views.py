@@ -6,7 +6,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from .models import User, Role, EmailVerification
+from .models import User, Role, EmailVerification, PasswordReset
 from .serializers import (
     UserSerializer,
     UserListSerializer,
@@ -15,11 +15,13 @@ from .serializers import (
     RegisterCompanySerializer,
     EmailVerificationSerializer,
     RegistrationAvailabilitySerializer,
+    ForgotPasswordSerializer,
+    ResetPasswordSerializer,
 )
 from .permissions import CanAccessUser
 from companies.models import Company
 from django.conf import settings
-from .utils import send_email_verification
+from .utils import send_email_verification, send_password_reset_email
 import logging
 
 logger = logging.getLogger(__name__)
@@ -362,4 +364,137 @@ def check_registration_availability(request):
     return Response(
         {"available": False, "errors": serializer.errors},
         status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def forgot_password(request):
+    """
+    Request password reset - sends email with reset code and link
+    POST /api/auth/forgot-password/
+    Body: { email: string }
+    Response: { message: string, sent: bool }
+    """
+    serializer = ForgotPasswordSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        # Don't reveal if email exists or not
+        return Response(
+            {"message": "If the email exists, a password reset link has been sent."},
+            status=status.HTTP_200_OK
+        )
+    
+    user = serializer.validated_data.get("user")
+    if not user:
+        # Don't reveal if email exists or not
+        return Response(
+            {"message": "If the email exists, a password reset link has been sent."},
+            status=status.HTTP_200_OK
+        )
+    
+    # Create password reset token
+    try:
+        expiry_hours = getattr(settings, "PASSWORD_RESET_EXPIRY_HOURS", 1)
+        reset = PasswordReset.create_for_user(user, expiry_hours=expiry_hours)
+        sent = send_password_reset_email(user, reset)
+        
+        return Response(
+            {
+                "message": "If the email exists, a password reset link has been sent.",
+                "sent": sent,
+            },
+            status=status.HTTP_200_OK
+        )
+    except Exception as exc:
+        logger.warning("Unable to send password reset email: %s", exc)
+        # Don't reveal error to user
+        return Response(
+            {
+                "message": "If the email exists, a password reset link has been sent.",
+                "sent": False,
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_password(request):
+    """
+    Reset password using code or token
+    POST /api/auth/reset-password/
+    Body: { email: string, code?: string, token?: string, new_password: string, confirm_password: string }
+    Response: { message: string }
+    """
+    import urllib.parse
+    
+    serializer = ResetPasswordSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    user = serializer.validated_data["user"]
+    code = serializer.validated_data.get("code")
+    token = serializer.validated_data.get("token")
+    new_password = serializer.validated_data["new_password"]
+    
+    # Build filters
+    filters = {"user": user, "is_used": False}
+    
+    if code:
+        code_value = code.strip() if isinstance(code, str) else code
+        if code_value:
+            filters["code"] = code_value
+    
+    if token:
+        token_value = token.strip() if isinstance(token, str) else token
+        if token_value:
+            try:
+                token_value = urllib.parse.unquote(token_value)
+            except Exception:
+                pass
+            filters["token"] = token_value
+    
+    if not code and not token:
+        return Response(
+            {"error": "Either code or token must be provided."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    # Find the reset record
+    reset = (
+        PasswordReset.objects.filter(**filters)
+        .order_by("-created_at")
+        .first()
+    )
+    
+    if not reset:
+        return Response(
+            {"error": "Invalid or expired reset code."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    if reset.is_expired:
+        reset.delete()
+        return Response(
+            {"error": "Reset code has expired. Please request a new one."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    if reset.is_used:
+        return Response(
+            {"error": "This reset code has already been used."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    # Reset password
+    user.set_password(new_password)
+    user.save()
+    
+    # Mark reset as used
+    reset.mark_used()
+    
+    return Response(
+        {"message": "Password has been reset successfully."},
+        status=status.HTTP_200_OK,
     )

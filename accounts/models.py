@@ -117,3 +117,47 @@ class EmailVerification(models.Model):
         self.is_verified = True
         self.verified_at = timezone.now()
         self.save(update_fields=["is_verified", "verified_at"])
+
+
+class PasswordReset(models.Model):
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="password_resets",
+    )
+    code = models.CharField(max_length=6)
+    token = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    is_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "password_resets"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.email} password reset"
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at
+
+    @classmethod
+    def create_for_user(cls, user, expiry_hours: int = 1):
+        """Create a new password reset token for user, delete old unused ones"""
+        cls.objects.filter(user=user, is_used=False).delete()
+        code = f"{secrets.randbelow(900000) + 100000}"
+        token = uuid.uuid4().hex
+        expires_at = timezone.now() + timedelta(hours=expiry_hours)
+        return cls.objects.create(
+            user=user,
+            code=code,
+            token=token,
+            expires_at=expires_at,
+        )
+
+    def mark_used(self):
+        self.is_used = True
+        self.used_at = timezone.now()
+        self.save(update_fields=["is_used", "used_at"])

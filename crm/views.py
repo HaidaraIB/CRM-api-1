@@ -25,7 +25,7 @@ class ClientViewSet(viewsets.ModelViewSet):
     queryset = Client.objects.all()
     permission_classes = [IsAuthenticated, CanAccessClient]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["name", "phone_number", "priority", "type", "communication_way"]
+    search_fields = ["name", "phone_number", "priority", "type", "communication_way__name", "status__name"]
     ordering_fields = ["created_at", "name", "priority"]
     ordering = ["-created_at"]
 
@@ -87,8 +87,8 @@ class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all()
     permission_classes = [IsAuthenticated, CanAccessTask]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["notes", "stage", "deal__client__name"]
-    ordering_fields = ["created_at", "reminder_date", "stage"]
+    search_fields = ["notes", "stage__name", "deal__client__name"]
+    ordering_fields = ["created_at", "reminder_date", "stage__name"]
     ordering = ["-created_at"]
 
     def get_queryset(self):
@@ -199,8 +199,8 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
     queryset = ClientTask.objects.all()
     permission_classes = [IsAuthenticated, CanAccessClient]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["notes", "stage", "client__name"]
-    ordering_fields = ["created_at", "reminder_date", "stage"]
+    search_fields = ["notes", "stage__name", "client__name"]
+    ordering_fields = ["created_at", "reminder_date", "stage__name"]
     ordering = ["-created_at"]
 
     def get_queryset(self):

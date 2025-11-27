@@ -110,8 +110,41 @@ class UserListSerializer(serializers.ModelSerializer):
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Custom serializer to return user information with token"""
+    
+    username_field = 'username'  # Default field name
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Allow username field to accept both username and email
+        self.fields['username'] = serializers.CharField(required=True)
 
     def validate(self, attrs):
+        username_or_email = attrs.get('username', '').strip()
+        password = attrs.get('password', '')
+        
+        # Try to find user by email or username
+        user = None
+        if '@' in username_or_email:
+            # Looks like an email
+            try:
+                user = User.objects.get(email__iexact=username_or_email)
+                # Replace username with actual username for authentication
+                attrs['username'] = user.username
+            except User.DoesNotExist:
+                pass
+        else:
+            # Try username
+            try:
+                user = User.objects.get(username__iexact=username_or_email)
+            except User.DoesNotExist:
+                pass
+        
+        # If user not found, let parent class handle the error
+        if not user:
+            # Use original username for parent validation (will raise error if invalid)
+            attrs['username'] = username_or_email
+        
+        # Validate using parent class
         data = super().validate(attrs)
 
         # Add user information to the response
@@ -353,5 +386,76 @@ class RegistrationAvailabilitySerializer(serializers.Serializer):
 
         if errors:
             raise serializers.ValidationError(errors)
+
+        return attrs
+
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    """Serializer for requesting password reset"""
+    email = serializers.EmailField(required=True)
+
+    def validate_email(self, value):
+        """Normalize email"""
+        return value.strip().lower() if value else value
+
+    def validate(self, attrs):
+        email = attrs.get("email")
+        try:
+            attrs["user"] = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            # Don't reveal if email exists or not for security
+            pass
+        return attrs
+
+
+class ResetPasswordSerializer(serializers.Serializer):
+    """Serializer for resetting password using code or token"""
+    email = serializers.EmailField(required=True)
+    code = serializers.CharField(required=False, allow_blank=True, max_length=6)
+    token = serializers.CharField(required=False, allow_blank=True, max_length=64)
+    new_password = serializers.CharField(required=True, write_only=True)
+    confirm_password = serializers.CharField(required=True, write_only=True)
+
+    def validate_email(self, value):
+        """Normalize email"""
+        return value.strip().lower() if value else value
+
+    def validate_code(self, value):
+        """Normalize code"""
+        if value:
+            value = value.strip()
+            return value if value else None
+        return None
+
+    def validate_token(self, value):
+        """Normalize token"""
+        if value:
+            value = value.strip()
+            return value if value else None
+        return None
+
+    def validate(self, attrs):
+        email = attrs.get("email")
+        code = attrs.get("code")
+        token = attrs.get("token")
+        new_password = attrs.get("new_password")
+        confirm_password = attrs.get("confirm_password")
+
+        if not code and not token:
+            raise serializers.ValidationError({"code": "Either code or token must be provided."})
+
+        if new_password != confirm_password:
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
+
+        try:
+            attrs["user"] = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"email": "User with this email does not exist."})
+
+        # Validate new password
+        try:
+            validate_password(new_password, attrs["user"])
+        except ValidationError as e:
+            raise serializers.ValidationError({"new_password": list(e.messages)})
 
         return attrs

@@ -102,3 +102,72 @@ def send_email_verification(user, verification, language="en"):
         logger.error("Failed to send verification email: %s", exc)
         return False
 
+
+def send_password_reset_email(user, reset, language="en"):
+    """
+    Send password reset email that includes both OTP code and direct link.
+    """
+    try:
+        smtp_settings = SMTPSettings.get_settings()
+        if not smtp_settings.is_active:
+            logger.warning("SMTP is disabled; skipping password reset email.")
+            return False
+
+        connection = _get_smtp_connection()
+        from_email = (
+            f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
+            if smtp_settings.from_name
+            else smtp_settings.from_email
+        )
+
+        subject = _("Reset your LOOP CRM password")
+        frontend_base = _get_frontend_base_url()
+        reset_link = (
+            f"{frontend_base}/reset-password?token={reset.token}&email={user.email}"
+        )
+
+        greeting_name = user.first_name or user.username or _("there")
+        text_body = _(
+            "Hi {name},\n\n"
+            "You requested to reset your password for LOOP CRM. Use the reset code below or "
+            "click the link to reset your password.\n\n"
+            "Reset code: {code}\n"
+            "Reset link: {link}\n\n"
+            "This code expires on {expiry}.\n\n"
+            "If you did not request a password reset, you can safely ignore this email.\n\n"
+            "For security reasons, this link will expire after use."
+        ).format(
+            name=greeting_name,
+            code=reset.code,
+            link=reset_link,
+            expiry=reset.expires_at.strftime("%Y-%m-%d %H:%M %Z"),
+        )
+
+        html_content = render_to_string(
+            "accounts/password_reset.html",
+            {
+                "subject": subject,
+                "greeting_name": greeting_name,
+                "code": reset.code,
+                "reset_link": reset_link,
+                "expires_at": reset.expires_at,
+                "support_email": smtp_settings.from_email,
+                "brand_color": "#6f3ef0",
+            },
+        )
+        plain_body = strip_tags(html_content) or text_body
+
+        email = EmailMultiAlternatives(
+            subject=str(subject),
+            body=plain_body,
+            from_email=from_email,
+            to=[user.email],
+            connection=connection,
+        )
+        email.attach_alternative(html_content, "text/html")
+        email.send()
+        logger.info("Password reset email sent to %s", user.email)
+        return True
+    except Exception as exc:
+        logger.error("Failed to send password reset email: %s", exc)
+        return False

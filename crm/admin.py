@@ -1,5 +1,14 @@
 from django.contrib import admin
-from .models import Client, Deal, Task, Campaign, ClientTask
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber
+
+
+class ClientPhoneNumberInline(admin.TabularInline):
+    """Inline admin for ClientPhoneNumber model"""
+
+    model = ClientPhoneNumber
+    extra = 1
+    fields = ["phone_number", "phone_type", "is_primary", "notes"]
+    ordering = ["-is_primary", "phone_type"]
 
 
 @admin.register(Client)
@@ -28,11 +37,13 @@ class ClientAdmin(admin.ModelAdmin):
     search_fields = [
         "name",
         "phone_number",
+        "phone_numbers__phone_number",
         "company__name",
         "assigned_to__username",
     ]
     ordering = ["-created_at"]
     readonly_fields = ["created_at", "updated_at"]
+    inlines = [ClientPhoneNumberInline]
 
     fieldsets = (
         (
@@ -54,6 +65,46 @@ class ClientAdmin(admin.ModelAdmin):
                 "fields": (
                     "company",
                     "assigned_to",
+                )
+            },
+        ),
+        ("Timestamps", {"fields": ("created_at", "updated_at")}),
+    )
+
+
+@admin.register(ClientPhoneNumber)
+class ClientPhoneNumberAdmin(admin.ModelAdmin):
+    """Admin configuration for ClientPhoneNumber model"""
+
+    list_display = [
+        "client",
+        "phone_number",
+        "phone_type",
+        "is_primary",
+        "created_at",
+    ]
+    list_filter = [
+        "phone_type",
+        "is_primary",
+        "created_at",
+    ]
+    search_fields = [
+        "client__name",
+        "phone_number",
+    ]
+    ordering = ["-is_primary", "phone_type", "-created_at"]
+    readonly_fields = ["created_at", "updated_at"]
+
+    fieldsets = (
+        (
+            "Phone Number Information",
+            {
+                "fields": (
+                    "client",
+                    "phone_number",
+                    "phone_type",
+                    "is_primary",
+                    "notes",
                 )
             },
         ),
