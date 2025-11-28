@@ -6,7 +6,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from .models import User, Role, EmailVerification, PasswordReset
+from .models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth
 from .serializers import (
     UserSerializer,
     UserListSerializer,
@@ -17,11 +17,13 @@ from .serializers import (
     RegistrationAvailabilitySerializer,
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
+    RequestTwoFactorAuthSerializer,
+    VerifyTwoFactorAuthSerializer,
 )
 from .permissions import CanAccessUser
 from companies.models import Company
 from django.conf import settings
-from .utils import send_email_verification, send_password_reset_email
+from .utils import send_email_verification, send_password_reset_email, send_two_factor_auth_email
 import logging
 
 logger = logging.getLogger(__name__)
@@ -228,7 +230,13 @@ def register_company(request):
         try:
             expiry_hours = getattr(settings, "EMAIL_VERIFICATION_EXPIRY_HOURS", 48)
             verification = EmailVerification.create_for_user(owner, expiry_hours=expiry_hours)
-            sent = send_email_verification(owner, verification)
+            # Get language from request header or default to 'en'
+            language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')
+            if 'ar' in language.lower():
+                language = 'ar'
+            else:
+                language = 'en'
+            sent = send_email_verification(owner, verification, language=language)
             verification_info = {
                 "sent": sent,
                 "expires_at": verification.expires_at.isoformat(),
@@ -397,7 +405,13 @@ def forgot_password(request):
     try:
         expiry_hours = getattr(settings, "PASSWORD_RESET_EXPIRY_HOURS", 1)
         reset = PasswordReset.create_for_user(user, expiry_hours=expiry_hours)
-        sent = send_password_reset_email(user, reset)
+        # Get language from request header or default to 'en'
+        language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')
+        if 'ar' in language.lower():
+            language = 'ar'
+        else:
+            language = 'en'
+        sent = send_password_reset_email(user, reset, language=language)
         
         return Response(
             {
@@ -498,3 +512,187 @@ def reset_password(request):
         {"message": "Password has been reset successfully."},
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_two_factor_auth(request):
+    """
+    Request 2FA code - sends email with 2FA code
+    POST /api/auth/request-2fa/
+    Body: { username: string }
+    Response: { message: string, sent: bool, token: string }
+    """
+    serializer = RequestTwoFactorAuthSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    user = serializer.validated_data.get("user")
+    if not user:
+        return Response(
+            {"error": "User not found."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Create 2FA code
+    try:
+        expiry_minutes = 10  # 2FA codes expire in 10 minutes
+        two_fa = TwoFactorAuth.create_for_user(user, expiry_minutes=expiry_minutes)
+        # Get language from request header or default to 'ar'
+        language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'ar')
+        if 'en' in language.lower():
+            language = 'en'
+        else:
+            language = 'ar'
+        sent = send_two_factor_auth_email(user, two_fa, language=language)
+        
+        return Response(
+            {
+                "message": "2FA code has been sent to your email.",
+                "sent": sent,
+                "token": two_fa.token,  # Return token for verification
+            },
+            status=status.HTTP_200_OK
+        )
+    except Exception as exc:
+        logger.warning("Unable to send 2FA email: %s", exc)
+        return Response(
+            {
+                "error": "Failed to send 2FA code. Please try again.",
+                "sent": False,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_two_factor_auth(request):
+    """
+    Verify 2FA code and return JWT tokens
+    POST /api/auth/verify-2fa/
+    Body: { username: string, code?: string, token?: string, password: string }
+    Response: { access: string, refresh: string, user: {...} }
+    """
+    import urllib.parse
+    
+    # First verify password
+    username_or_email = request.data.get('username', '').strip()
+    password = request.data.get('password', '')
+    
+    if not username_or_email or not password:
+        return Response(
+            {"error": "Username and password are required."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Find user
+    user = None
+    if '@' in username_or_email:
+        try:
+            user = User.objects.get(email__iexact=username_or_email)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Invalid credentials."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+    else:
+        try:
+            user = User.objects.get(username__iexact=username_or_email)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Invalid credentials."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+    
+    # Verify password
+    if not user.check_password(password):
+        return Response(
+            {"error": "Invalid credentials."},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+    
+    # Now verify 2FA code
+    serializer = VerifyTwoFactorAuthSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    code = serializer.validated_data.get("code")
+    token = serializer.validated_data.get("token")
+    
+    # Build filters
+    filters = {"user": user, "is_verified": False}
+    
+    if code:
+        code_value = code.strip() if isinstance(code, str) else code
+        if code_value:
+            filters["code"] = code_value
+    
+    if token:
+        token_value = token.strip() if isinstance(token, str) else token
+        if token_value:
+            try:
+                token_value = urllib.parse.unquote(token_value)
+            except Exception:
+                pass
+            filters["token"] = token_value
+    
+    if not code and not token:
+        return Response(
+            {"error": "Either code or token must be provided."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    # Find the 2FA record
+    two_fa = (
+        TwoFactorAuth.objects.filter(**filters)
+        .order_by("-created_at")
+        .first()
+    )
+    
+    if not two_fa:
+        return Response(
+            {"error": "Invalid or expired 2FA code."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    if two_fa.is_expired:
+        two_fa.delete()
+        return Response(
+            {"error": "2FA code has expired. Please request a new one."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    if two_fa.is_verified:
+        return Response(
+            {"error": "This 2FA code has already been used."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    # Mark as verified
+    two_fa.mark_verified()
+    
+    # Generate JWT tokens
+    refresh = RefreshToken.for_user(user)
+    
+    # Prepare response data
+    response_data = {
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+        'user': {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'phone': user.phone or "",
+            'role': user.role,
+            'email_verified': user.email_verified,
+            'company': user.company.id if user.company else None,
+            'company_name': user.company.name if user.company else None,
+            'company_specialization': user.company.specialization if user.company else None,
+        },
+    }
+    
+    return Response(response_data, status=status.HTTP_200_OK)

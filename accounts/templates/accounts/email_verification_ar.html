@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <title>{{ subject }}</title>
+    <style>
+        body {
+            background-color: #f5f3ff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 32px 16px;
+            color: #1f1f2e;
+            direction: rtl;
+        }
+        .wrapper {
+            max-width: 520px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 24px;
+            box-shadow: 0 20px 50px rgba(111, 62, 240, 0.15);
+            overflow: hidden;
+            border: 1px solid rgba(111, 62, 240, 0.08);
+        }
+        .header {
+            background: linear-gradient(135deg, #7c3aed, #6f3ef0);
+            padding: 32px;
+            color: #fff;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+        }
+        .content {
+            padding: 32px;
+            line-height: 1.65;
+        }
+        .code {
+            display: block;
+            padding: 16px 24px;
+            font-size: 24px;
+            letter-spacing: 6px;
+            font-weight: 700;
+            color: #6f3ef0;
+            background: rgba(111, 62, 240, 0.08);
+            border-radius: 16px;
+            margin: 16px 0;
+            text-align: center;
+        }
+        .button {
+            display: block;
+            margin-top: 24px;
+            padding: 14px 32px;
+            background: #6f3ef0;
+            color: #fff !important;
+            text-decoration: none;
+            border-radius: 999px;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(111, 62, 240, 0.3);
+            text-align: center;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .note {
+            margin-top: 24px;
+            font-size: 13px;
+            color: #5c5878;
+        }
+        .footer {
+            padding: 24px 32px 32px;
+            font-size: 12px;
+            color: #78738c;
+            background: #fafafc;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="header">
+            <h1>{{ subject }}</h1>
+        </div>
+        <div class="content">
+            <p>مرحباً {{ greeting_name }}،</p>
+            <p>
+                شكراً لك على التسجيل في LOOP CRM. استخدم رمز التحقق أدناه أو اضغط على الزر للتحقق من عنوان بريدك الإلكتروني.
+            </p>
+            <div class="code">{{ code }}</div>
+            <a class="button" href="{{ verification_link }}">التحقق من بريدي الإلكتروني</a>
+            <p class="note">
+                إذا ضغطت على <em>"التحقق لاحقاً"</em> داخل التطبيق، يمكنك دائماً العودة إلى هذا البريد واستخدام الرمز أو الزر أعلاه. ينتهي هذا الرمز في {{ expires_at|date:"F j, Y, g:i a T" }}.
+            </p>
+            <p class="note">
+                إذا لم تطلب هذا، يمكنك تجاهل هذا البريد الإلكتروني بأمان.
+            </p>
+        </div>
+        <div class="footer">
+            تم الإرسال بواسطة LOOP CRM · تحتاج مساعدة؟ رد على هذا البريد: {{ support_email }}
+        </div>
+    </div>
+</body>
+</html>
+

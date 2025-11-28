@@ -3,7 +3,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from drf_spectacular.utils import extend_schema_field
-from .models import User, Role
+from .models import User, Role, TwoFactorAuth
 from companies.models import Company
 from subscriptions.models import Plan, Subscription
 from datetime import timedelta
@@ -458,4 +458,84 @@ class ResetPasswordSerializer(serializers.Serializer):
         except ValidationError as e:
             raise serializers.ValidationError({"new_password": list(e.messages)})
 
+        return attrs
+
+
+class RequestTwoFactorAuthSerializer(serializers.Serializer):
+    """Serializer for requesting 2FA code"""
+    username = serializers.CharField(required=True)
+
+    def validate_username(self, value):
+        """Normalize username - can be username or email"""
+        return value.strip() if value else value
+
+    def validate(self, attrs):
+        username_or_email = attrs.get("username", "").strip()
+        user = None
+
+        # Try to find user by email or username
+        if '@' in username_or_email:
+            try:
+                user = User.objects.get(email__iexact=username_or_email)
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"username": "User not found."})
+        else:
+            try:
+                user = User.objects.get(username__iexact=username_or_email)
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"username": "User not found."})
+
+        if not user.is_active:
+            raise serializers.ValidationError({"username": "User account is inactive."})
+
+        attrs["user"] = user
+        return attrs
+
+
+class VerifyTwoFactorAuthSerializer(serializers.Serializer):
+    """Serializer for verifying 2FA code"""
+    username = serializers.CharField(required=True)
+    code = serializers.CharField(required=False, allow_blank=True, max_length=6)
+    token = serializers.CharField(required=False, allow_blank=True, max_length=64)
+
+    def validate_username(self, value):
+        """Normalize username - can be username or email"""
+        return value.strip() if value else value
+
+    def validate_code(self, value):
+        """Normalize code"""
+        if value:
+            value = value.strip()
+            return value if value else None
+        return None
+
+    def validate_token(self, value):
+        """Normalize token"""
+        if value:
+            value = value.strip()
+            return value if value else None
+        return None
+
+    def validate(self, attrs):
+        username_or_email = attrs.get("username", "").strip()
+        code = attrs.get("code")
+        token = attrs.get("token")
+
+        if not code and not token:
+            raise serializers.ValidationError({"code": "Either code or token must be provided."})
+
+        # Find user
+        user = None
+        if '@' in username_or_email:
+            try:
+                user = User.objects.get(email__iexact=username_or_email)
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"username": "User not found."})
+        else:
+            try:
+                user = User.objects.get(username__iexact=username_or_email)
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"username": "User not found."})
+
+        attrs["user"] = user
         return attrs
