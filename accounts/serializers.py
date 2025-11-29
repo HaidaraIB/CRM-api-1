@@ -14,6 +14,7 @@ class UserSerializer(serializers.ModelSerializer):
     is_me = serializers.SerializerMethodField()
     company_name = serializers.CharField(source="company.name", read_only=True)
     company_specialization = serializers.CharField(source="company.specialization", read_only=True)
+    company = serializers.SerializerMethodField()  # Override to return full company object
     password = serializers.CharField(write_only=True, required=False)
 
     class Meta:
@@ -71,6 +72,50 @@ class UserSerializer(serializers.ModelSerializer):
         if request and request.user:
             return obj.id == request.user.id
         return False
+    
+    def get_company(self, obj):
+        """Return full company object with subscription information"""
+        if not obj.company:
+            return None
+        
+        company = obj.company
+        # Get the active subscription first, if not found get the latest subscription (active or inactive)
+        subscription = Subscription.objects.filter(
+            company=company,
+            is_active=True
+        ).order_by('-created_at').first()
+        
+        # If no active subscription, get the latest subscription (even if inactive) for payment link
+        if not subscription:
+            subscription = Subscription.objects.filter(
+                company=company
+            ).order_by('-created_at').first()
+        
+        company_data = {
+            "id": company.id,
+            "name": company.name,
+            "domain": company.domain,
+            "specialization": company.specialization,
+            "registration_completed": company.registration_completed,
+            "registration_completed_at": company.registration_completed_at.isoformat() if company.registration_completed_at else None,
+        }
+        
+        if subscription:
+            company_data["subscription"] = {
+                "id": subscription.id,
+                "plan": {
+                    "id": subscription.plan.id,
+                    "name": subscription.plan.name,
+                },
+                "is_active": subscription.is_active,
+                "start_date": subscription.start_date.isoformat() if subscription.start_date else None,
+                "end_date": subscription.end_date.isoformat() if subscription.end_date else None,
+                "auto_renew": subscription.auto_renew,
+            }
+        else:
+            company_data["subscription"] = None
+        
+        return company_data
 
 
 class UserListSerializer(serializers.ModelSerializer):
@@ -285,20 +330,27 @@ class RegisterCompanySerializer(serializers.Serializer):
 
         # Create subscription if plan is provided
         subscription = None
+        requires_payment = False
         if plan_id:
             try:
                 plan = Plan.objects.get(id=plan_id)
+                # Check if plan requires payment
+                price = plan.price_yearly if billing_cycle == 'yearly' else plan.price_monthly
+                requires_payment = price > 0
+                
                 # Calculate end date based on billing cycle
                 if billing_cycle == 'yearly':
                     end_date = timezone.now() + timedelta(days=365)
                 else:
                     end_date = timezone.now() + timedelta(days=30)
                 
+                # If payment required, create inactive subscription (will be activated after payment)
+                # Otherwise, create active subscription
                 subscription = Subscription.objects.create(
                     company=company,
                     plan=plan,
                     end_date=end_date,
-                    is_active=True,
+                    is_active=not requires_payment,  # Inactive if payment required
                     auto_renew=True,
                 )
             except Plan.DoesNotExist:
@@ -308,6 +360,7 @@ class RegisterCompanySerializer(serializers.Serializer):
             'company': company,
             'owner': owner,
             'subscription': subscription,
+            'requires_payment': requires_payment,
         }
 
 

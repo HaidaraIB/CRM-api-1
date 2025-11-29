@@ -175,11 +175,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = "/static/"
-
-# Directory where collectstatic will gather all static files
-STATIC_ROOT = BASE_DIR / "staticfiles"
-
-# Additional directories for static files (if any)
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 STATICFILES_DIRS = [
     BASE_DIR / "static",
 ] if (BASE_DIR / "static").exists() else []
@@ -191,7 +187,7 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 # Backups directory (defaults to <MEDIA_ROOT>/backups)
-BACKUP_ROOT = Path(os.getenv("BACKUP_ROOT", MEDIA_ROOT / "backups"))
+BACKUP_ROOT = Path(MEDIA_ROOT / "backups")
 BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Default primary key field type
@@ -200,8 +196,8 @@ BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Frontend + onboarding settings
-FRONTEND_APP_URL = os.getenv("FRONTEND_APP_URL", "http://localhost:3000")
-EMAIL_VERIFICATION_EXPIRY_HOURS = int(os.getenv("EMAIL_VERIFICATION_EXPIRY_HOURS", "48"))
+FRONTEND_APP_URL = os.getenv("FRONTEND_APP_URL")
+EMAIL_VERIFICATION_EXPIRY_HOURS = 48
 
 # Django REST Framework settings
 REST_FRAMEWORK = {
@@ -251,3 +247,12 @@ SPECTACULAR_SETTINGS = {
         "Role": "accounts.models.Role",
     },
 }
+
+
+PAYTABS_DOMAIN = os.getenv("PAYTABS_DOMAIN")
+# PayTabs callback and return URLs point to backend (Django handles them fully)
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+PAYTABS_CALLBACK_URL = f"{API_BASE_URL}/api/payments/paytabs-callback/"
+PAYTABS_RETURN_URL = f"{API_BASE_URL}/api/payments/paytabs-return/"
+# Frontend URL for redirects after payment
+FRONTEND_URL = "http://localhost:3000"

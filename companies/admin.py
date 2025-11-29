@@ -13,22 +13,28 @@ class CompanyAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
         "specialization",
+        "registration_completed",
+        "registration_completed_at",
     ]
     list_filter = [
         "created_at",
         "updated_at",
+        "registration_completed",
+        "registration_completed_at",
     ]
     search_fields = [
         "name",
         "domain",
         "owner__username",
         "owner__email",
+        "registration_completed",
+        "registration_completed_at",
     ]
     ordering = ["-created_at"]
     readonly_fields = ["created_at", "updated_at"]
 
     fieldsets = (
-        ("Company Information", {"fields": ("name", "domain", "owner", "specialization")}),
+        ("Company Information", {"fields": ("name", "domain", "owner", "specialization", "registration_completed", "registration_completed_at")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
 

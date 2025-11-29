@@ -71,6 +71,10 @@ from subscriptions.views import (
     BroadcastViewSet,
     PaymentGatewayViewSet,
     PublicPlanListView,
+    create_paytabs_payment,
+    paytabs_callback,
+    paytabs_return,
+    check_payment_status,
 )
 
 # Create a router and register viewsets
@@ -86,7 +90,9 @@ router.register(r"settings/channels", ChannelViewSet, basename="channel")
 router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
 router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup")
-router.register(r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog")
+router.register(
+    r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog"
+)
 router.register(r"developers", DeveloperViewSet, basename="developer")
 router.register(r"projects", ProjectViewSet, basename="project")
 router.register(r"units", UnitViewSet, basename="unit")
@@ -103,6 +109,7 @@ router.register(
 router.register(r"suppliers", SupplierViewSet, basename="supplier")
 router.register(r"plans", PlanViewSet, basename="plan")
 router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
+# Note: payments router is registered but custom payment endpoints above take precedence
 router.register(r"payments", PaymentViewSet, basename="payment")
 router.register(r"invoices", InvoiceViewSet, basename="invoice")
 router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
@@ -111,6 +118,21 @@ router.register(r"payment-gateways", PaymentGatewayViewSet, basename="paymentgat
 urlpatterns = [
     path("", home, name="home"),
     path("admin/", admin.site.urls),
+    # Custom payment endpoints - must be before router.urls to avoid conflicts
+    path(
+        "api/payments/create-paytabs-session/",
+        create_paytabs_payment,
+        name="create_paytabs_payment",
+    ),
+    path("api/payments/paytabs-callback/", paytabs_callback, name="paytabs_callback"),
+    path("api/payments/paytabs-return/", paytabs_return, name="paytabs_return"),
+    # Status endpoint - use a path that won't conflict with router
+    path(
+        "api/payment-status/<int:subscription_id>/",
+        check_payment_status,
+        name="check_payment_status",
+    ),
+    # Router URLs (includes /api/payments/ which would conflict if placed before custom endpoints)
     path("api/", include(router.urls)),
     # JWT Authentication endpoints
     path(
@@ -125,7 +147,9 @@ urlpatterns = [
     path("api/auth/verify-email/", verify_email, name="verify_email"),
     path("api/auth/forgot-password/", forgot_password, name="forgot_password"),
     path("api/auth/reset-password/", reset_password, name="reset_password"),
-    path("api/auth/request-2fa/", request_two_factor_auth, name="request_two_factor_auth"),
+    path(
+        "api/auth/request-2fa/", request_two_factor_auth, name="request_two_factor_auth"
+    ),
     path("api/auth/verify-2fa/", verify_two_factor_auth, name="verify_two_factor_auth"),
     path("api/public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),

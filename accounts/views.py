@@ -188,6 +188,7 @@ def register_company(request):
         company = result['company']
         owner = result['owner']
         subscription = result.get('subscription')
+        requires_payment = result.get('requires_payment', False)
         
         # Generate JWT tokens
         refresh = RefreshToken.for_user(owner)
@@ -215,6 +216,7 @@ def register_company(request):
                 'domain': company.domain,
                 'specialization': company.specialization,
             },
+            'requires_payment': requires_payment,
         }
         
         if subscription:

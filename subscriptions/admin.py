@@ -122,6 +122,7 @@ class PaymentAdmin(admin.ModelAdmin):
         "payment_status",
         "created_at",
         "updated_at",
+        "tran_ref",
     ]
     list_filter = [
         "payment_status",
@@ -145,6 +146,7 @@ class PaymentAdmin(admin.ModelAdmin):
                     "amount",
                     "payment_method",
                     "payment_status",
+                    "tran_ref",
                 )
             },
         ),

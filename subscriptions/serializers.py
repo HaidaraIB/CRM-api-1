@@ -2,6 +2,17 @@ from rest_framework import serializers
 from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
 
 
+class CreatePaytabsPaymentSerializer(serializers.Serializer):
+    subscription_id = serializers.IntegerField()
+
+
+class PaytabsCallbackSerializer(serializers.Serializer):
+    tran_ref = serializers.CharField(required=False)
+    cart_id = serializers.CharField(required=False)
+    cart_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    payment_result = serializers.DictField(required=False)
+
+
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plan

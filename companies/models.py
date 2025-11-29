@@ -21,6 +21,9 @@ class Company(models.Model):
     owner = models.ForeignKey(
         "accounts.User", on_delete=models.CASCADE, related_name="companies"
     )
+    # Track if registration was completed (payment made)
+    registration_completed = models.BooleanField(default=False)
+    registration_completed_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

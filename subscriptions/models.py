@@ -91,13 +91,35 @@ class Subscription(models.Model):
         return f"{self.company.name} - {self.plan.name}"
 
 
+class PaymentGateway(models.Model):
+    name = models.CharField(max_length=255, unique=True)
+    description = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=PaymentGatewayStatus.choices(),
+        default=PaymentGatewayStatus.SETUP_REQUIRED.value,
+    )
+    enabled = models.BooleanField(default=False)
+    config = models.JSONField(blank=True, default=dict)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "payment_gateways"
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.status})"
+
 class Payment(models.Model):
     subscription = models.ForeignKey(
         Subscription, on_delete=models.CASCADE, related_name="payments"
     )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_method = models.CharField(max_length=255)
-    payment_status = models.CharField(max_length=255)
+    payment_method = models.ForeignKey(PaymentGateway, on_delete=models.CASCADE, related_name="payments")
+    payment_status = models.CharField(max_length=255, choices=PaymentStatus.choices())
+    tran_ref = models.CharField(max_length=255, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -155,22 +177,4 @@ class Broadcast(models.Model):
         return f"{self.subject} ({status_display})"
 
 
-class PaymentGateway(models.Model):
-    name = models.CharField(max_length=255, unique=True)
-    description = models.TextField(blank=True)
-    status = models.CharField(
-        max_length=20,
-        choices=PaymentGatewayStatus.choices(),
-        default=PaymentGatewayStatus.SETUP_REQUIRED.value,
-    )
-    enabled = models.BooleanField(default=False)
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "payment_gateways"
-        ordering = ["name"]
-
-    def __str__(self):
-        return f"{self.name} ({self.status})"
