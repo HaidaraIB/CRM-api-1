@@ -30,7 +30,15 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'haidaraib.pythonanywhere.com']
+ALLOWED_HOSTS = [
+    'localhost', 
+    '127.0.0.1', 
+    'haidaraib.pythonanywhere.com',
+    '.vercel.app',
+    '.vercel.dev',
+    '.netlify.app',
+    '.netlify.com',
+]
 
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
@@ -42,10 +50,15 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3001",
 ]
 
-# Allow all Netlify domains (for production)
+# Allow all Netlify and Vercel domains (for production)
+# This includes both subdomain and custom domains on Vercel
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.netlify\.app$",
     r"^https://.*\.netlify\.com$",
+    r"^https://.*\.vercel\.app$",
+    r"^https://.*\.vercel\.dev$",
+    # Allow custom domains (you can add specific domains here if needed)
+    # Example: r"^https://yourdomain\.com$",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
