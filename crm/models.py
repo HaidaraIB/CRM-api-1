@@ -144,7 +144,38 @@ class Deal(models.Model):
         blank=True,
         null=True,
     )
-    stage = models.CharField(max_length=50, choices=DealStage.choices())
+    stage = models.CharField(max_length=50, choices=DealStage.choices(), default=DealStage.IN_PROGRESS.value)
+    # Additional fields for deal details
+    payment_method = models.CharField(max_length=50, blank=True, null=True, help_text="Payment method (Cash, Installment, etc.)")
+    status = models.CharField(max_length=50, blank=True, null=True, help_text="Deal status (Reservation, Contracted, Closed, etc.)")
+    value = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, help_text="Total deal value")
+    start_date = models.DateField(blank=True, null=True, help_text="Deal start date")
+    closed_date = models.DateField(blank=True, null=True, help_text="Deal closed date")
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="Discount percentage")
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Discount amount")
+    sales_commission_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="Sales commission percentage")
+    sales_commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Sales commission amount")
+    description = models.TextField(blank=True, null=True, help_text="Deal description/notes")
+    # Real estate specific fields
+    unit = models.CharField(max_length=255, blank=True, null=True, help_text="Unit code (for real estate deals)")
+    project = models.CharField(max_length=255, blank=True, null=True, help_text="Project name (for real estate deals)")
+    # User tracking
+    started_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="started_deals",
+        blank=True,
+        null=True,
+        help_text="User who started the deal"
+    )
+    closed_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="closed_deals",
+        blank=True,
+        null=True,
+        help_text="User who closed the deal"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

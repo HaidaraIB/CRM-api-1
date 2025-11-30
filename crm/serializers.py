@@ -165,6 +165,10 @@ class DealSerializer(serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
     employee_username = serializers.CharField(source="employee.username", read_only=True)
+    started_by_username = serializers.CharField(source="started_by.username", read_only=True, allow_null=True)
+    closed_by_username = serializers.CharField(source="closed_by.username", read_only=True, allow_null=True)
+    unit_code = serializers.CharField(source="unit.code", read_only=True, allow_null=True)
+    project_name = serializers.CharField(source="project.name", read_only=True, allow_null=True)
     class Meta:
         model = Deal
         fields = [
@@ -176,6 +180,24 @@ class DealSerializer(serializers.ModelSerializer):
             "employee",
             "employee_username",
             "stage",
+            "payment_method",
+            "status",
+            "value",
+            "start_date",
+            "closed_date",
+            "discount_percentage",
+            "discount_amount",
+            "sales_commission_percentage",
+            "sales_commission_amount",
+            "description",
+            "unit",
+            "unit_code",
+            "project",
+            "project_name",
+            "started_by",
+            "started_by_username",
+            "closed_by",
+            "closed_by_username",
             "created_at",
             "updated_at",
         ]
@@ -186,7 +208,11 @@ class DealListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
     client_name = serializers.CharField(source="client.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
-    employee_username = serializers.CharField(source="employee.username", read_only=True)
+    employee_username = serializers.CharField(source="employee.username", read_only=True, allow_null=True)
+    started_by_username = serializers.CharField(source="started_by.username", read_only=True, allow_null=True)
+    closed_by_username = serializers.CharField(source="closed_by.username", read_only=True, allow_null=True)
+    unit_code = serializers.CharField(source="unit.code", read_only=True, allow_null=True)
+    project_name = serializers.CharField(source="project.name", read_only=True, allow_null=True)
     class Meta:
         model = Deal
         fields = [
@@ -197,8 +223,27 @@ class DealListSerializer(serializers.ModelSerializer):
             "company_name",
             "employee",
             "employee_username",
+            "started_by",
+            "started_by_username",
+            "closed_by",
+            "closed_by_username",
             "stage",
+            "payment_method",
+            "status",
+            "value",
+            "start_date",
+            "closed_date",
+            "discount_percentage",
+            "discount_amount",
+            "sales_commission_percentage",
+            "sales_commission_amount",
+            "description",
+            "unit",
+            "unit_code",
+            "project",
+            "project_name",
             "created_at",
+            "updated_at",
         ]
 
 
