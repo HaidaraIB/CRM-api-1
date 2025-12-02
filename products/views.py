@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import IsAdmin, CanAccessProductCategory, CanAccessProduct, CanAccessSupplier
+from accounts.permissions import IsAdmin, CanAccessProductCategory, CanAccessProduct, CanAccessSupplier, HasActiveSubscription
 from .models import Product, ProductCategory, Supplier
 from .serializers import (
     ProductSerializer,
@@ -19,7 +19,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ProductCategory.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessProductCategory]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessProductCategory]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name"]
@@ -58,7 +58,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Product.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessProduct]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessProduct]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "category__name"]
     ordering_fields = ["created_at", "name"]
@@ -96,7 +96,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Supplier.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessSupplier]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessSupplier]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "phone"]
     ordering_fields = ["created_at", "name"]

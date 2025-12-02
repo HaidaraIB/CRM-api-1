@@ -1,4 +1,33 @@
 from rest_framework import permissions
+from subscriptions.models import Subscription
+
+
+class HasActiveSubscription(permissions.BasePermission):
+    """
+    Permission class to check if user's company has an active subscription.
+    Super Admin is exempt from this check.
+    """
+    message = "Your subscription is not active. Please contact support or complete your payment to access the system."
+    
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Super Admin doesn't need active subscription
+        if request.user.is_super_admin():
+            return True
+        
+        # Check if user has a company
+        if not request.user.company:
+            return False
+        
+        # Check if company has an active subscription
+        has_active_subscription = Subscription.objects.filter(
+            company=request.user.company,
+            is_active=True
+        ).exists()
+        
+        return has_active_subscription
 
 
 class IsSuperAdmin(permissions.BasePermission):

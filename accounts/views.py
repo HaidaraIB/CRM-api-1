@@ -20,7 +20,7 @@ from .serializers import (
     RequestTwoFactorAuthSerializer,
     VerifyTwoFactorAuthSerializer,
 )
-from .permissions import CanAccessUser
+from .permissions import CanAccessUser, HasActiveSubscription
 from companies.models import Company
 from django.conf import settings
 from .utils import send_email_verification, send_password_reset_email, send_two_factor_auth_email
@@ -45,7 +45,7 @@ class UserViewSet(viewsets.ModelViewSet):
     """
 
     queryset = User.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessUser]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessUser]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["username", "email", "first_name", "last_name", "phone", "role"]
     ordering_fields = ["date_joined", "last_login", "username"]
@@ -122,7 +122,7 @@ class UserViewSet(viewsets.ModelViewSet):
             return UserListSerializer
         return UserSerializer
 
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])  # me endpoint doesn't require active subscription
     def me(self, request):
         serializer = UserSerializer(request.user, context=self.get_serializer_context())
         return Response(serializer.data, status=status.HTTP_200_OK)

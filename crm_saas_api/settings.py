@@ -30,6 +30,10 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
+# Get base domain from environment variable
+# This is used to automatically allow company subdomains
+BASE_DOMAIN = os.getenv("BASE_DOMAIN", "")
+
 ALLOWED_HOSTS = [
     'localhost', 
     '127.0.0.1', 
@@ -39,6 +43,14 @@ ALLOWED_HOSTS = [
     '.netlify.app',
     '.netlify.com',
 ]
+
+# Automatically allow all subdomains of the base domain in ALLOWED_HOSTS
+# This is required for Django to accept requests from company subdomains
+if BASE_DOMAIN:
+    # Add base domain
+    ALLOWED_HOSTS.append(BASE_DOMAIN)
+    # Add wildcard for all subdomains
+    ALLOWED_HOSTS.append(f'.{BASE_DOMAIN}')
 
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
@@ -53,15 +65,52 @@ CORS_ALLOWED_ORIGINS = [
 # Allow all Netlify and Vercel domains (for production)
 # This includes both subdomain and custom domains on Vercel
 CORS_ALLOWED_ORIGIN_REGEXES = [
+    # Allow localhost with any port (for development)
+    r"^http://localhost:\d+$",
+    r"^http://127\.0\.0\.1:\d+$",
+    r"^http://0\.0\.0\.0:\d+$",
+    # Allow subdomains of localhost (for local development with subdomains)
+    # This matches: http://company.localhost:3000, http://memo.com.localhost:3000, etc.
+    r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.localhost:\d+$",
+    r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.127\.0\.0\.1:\d+$",
+    # Allow Netlify domains
     r"^https://.*\.netlify\.app$",
     r"^https://.*\.netlify\.com$",
+    # Allow Vercel domains
     r"^https://.*\.vercel\.app$",
     r"^https://.*\.vercel\.dev$",
     # Allow custom domains (you can add specific domains here if needed)
     # Example: r"^https://yourdomain\.com$",
 ]
 
+# Automatically allow all subdomains of the base domain
+# This allows company subdomains to access the API automatically
+# Format: https://company-domain.example.com
+if BASE_DOMAIN:
+    # Escape dots in domain for regex
+    escaped_domain = BASE_DOMAIN.replace('.', r'\.')
+    # Allow any subdomain of the base domain (alphanumeric and hyphens only)
+    # This matches company domains like: company1.example.com, my-company.example.com
+    subdomain_regex = rf"^https?://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}$"
+    CORS_ALLOWED_ORIGIN_REGEXES.append(subdomain_regex)
+    
+    # Also allow the base domain itself (for main app)
+    base_domain_regex = rf"^https?://{escaped_domain}$"
+    CORS_ALLOWED_ORIGIN_REGEXES.append(base_domain_regex)
+    
+    # Allow localhost with base domain (for local development with subdomains)
+    localhost_subdomain_regex = rf"^http://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}:\d+$"
+    CORS_ALLOWED_ORIGIN_REGEXES.append(localhost_subdomain_regex)
+
 CORS_ALLOW_CREDENTIALS = True
+
+# In development mode, you can allow all origins (for easier debugging)
+# Set CORS_ALLOW_ALL_ORIGINS = True in development if you're having CORS issues
+# In production, this should ALWAYS be False
+CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "False").lower() == "true"
+
+# If CORS_ALLOW_ALL_ORIGINS is True, the specific origins/regexes above will be ignored
+# Only use this in development for debugging CORS issues
 
 CORS_ALLOW_METHODS = [
     "DELETE",
@@ -75,6 +124,7 @@ CORS_ALLOW_METHODS = [
 CORS_ALLOW_HEADERS = [
     "accept",
     "accept-encoding",
+    "accept-language",  # Added for language support in 2FA requests
     "authorization",
     "content-type",
     "dnt",
@@ -82,7 +132,13 @@ CORS_ALLOW_HEADERS = [
     "user-agent",
     "x-csrftoken",
     "x-requested-with",
+    # Additional headers that might be needed
+    "cache-control",
+    "pragma",
 ]
+
+# Allow preflight requests to be cached for 1 hour
+CORS_PREFLIGHT_MAX_AGE = 3600
 
 
 # Application definition

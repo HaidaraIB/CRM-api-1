@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import IsAdmin, CanAccessServiceProvider, CanAccessService, CanAccessServicePackage
+from accounts.permissions import IsAdmin, CanAccessServiceProvider, CanAccessService, CanAccessServicePackage, HasActiveSubscription
 from .models import Service, ServicePackage, ServiceProvider
 from .serializers import (
     ServiceSerializer,
@@ -19,7 +19,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Service.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessService]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessService]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "category"]
     ordering_fields = ["created_at", "name"]
@@ -57,7 +57,7 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ServicePackage.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessServicePackage]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessServicePackage]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name"]
@@ -95,7 +95,7 @@ class ServiceProviderViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ServiceProvider.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessServiceProvider]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessServiceProvider]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "phone"]
     ordering_fields = ["created_at", "name"]

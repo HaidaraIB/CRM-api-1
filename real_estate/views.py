@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import IsAdmin, CanAccessDeveloper, CanAccessProject, CanAccessUnit, CanAccessOwner
+from accounts.permissions import IsAdmin, CanAccessDeveloper, CanAccessProject, CanAccessUnit, CanAccessOwner, HasActiveSubscription
 from .models import Developer, Project, Unit, Owner
 from .serializers import (
     DeveloperSerializer,
@@ -21,7 +21,7 @@ class DeveloperViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Developer.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessDeveloper]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessDeveloper]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name"]
@@ -64,7 +64,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Project.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessProject]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessProject]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "developer__name"]
     ordering_fields = ["created_at", "name"]
@@ -102,7 +102,7 @@ class UnitViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Unit.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessUnit]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessUnit]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "project__name"]
     ordering_fields = ["created_at", "name"]
@@ -140,7 +140,7 @@ class OwnerViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Owner.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessOwner]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessOwner]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code", "phone"]
     ordering_fields = ["created_at", "name"]

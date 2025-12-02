@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin
+from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription
 from .models import Client, Deal, Task, Campaign, ClientTask
 from .serializers import (
     ClientSerializer,
@@ -23,7 +23,7 @@ class ClientViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Client.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessClient]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "phone_number", "priority", "type", "communication_way__name", "status__name"]
     ordering_fields = ["created_at", "name", "priority"]
@@ -54,7 +54,7 @@ class DealViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Deal.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessDeal]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessDeal]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["client__name", "stage", "company__name"]
     ordering_fields = ["created_at", "updated_at", "stage"]
@@ -85,7 +85,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Task.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessTask]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessTask]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "stage__name", "deal__client__name"]
     ordering_fields = ["created_at", "reminder_date", "stage__name"]
@@ -116,7 +116,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Campaign.objects.all()
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name", "budget"]
@@ -197,7 +197,7 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
     """
 
     queryset = ClientTask.objects.all()
-    permission_classes = [IsAuthenticated, CanAccessClient]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "stage__name", "client__name"]
     ordering_fields = ["created_at", "reminder_date", "stage__name"]
