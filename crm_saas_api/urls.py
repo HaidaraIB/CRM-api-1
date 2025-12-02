@@ -76,6 +76,7 @@ from subscriptions.views import (
     paytabs_return,
     check_payment_status,
 )
+from integrations import urls as integrations_urls
 
 # Create a router and register viewsets
 router = DefaultRouter()
@@ -154,6 +155,8 @@ urlpatterns = [
     path("api/public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
+    # Integrations URLs
+    path("api/integrations/", include(integrations_urls)),
     # API Documentation
     path(
         "api/docs/",

@@ -161,6 +161,7 @@ INSTALLED_APPS = [
     "products",
     "subscriptions",
     "settings",
+    "integrations",
     "drf_spectacular",
     "drf_spectacular_sidecar",
 ]
@@ -324,4 +325,20 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 PAYTABS_CALLBACK_URL = f"{API_BASE_URL}/api/payments/paytabs-callback/"
 PAYTABS_RETURN_URL = f"{API_BASE_URL}/api/payments/paytabs-return/"
 # Frontend URL for redirects after payment
-FRONTEND_URL = "http://localhost:3000"
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# ==================== Integrations OAuth Settings ====================
+# Meta (Facebook/Instagram) OAuth
+META_CLIENT_ID = os.getenv("META_CLIENT_ID", "")
+META_CLIENT_SECRET = os.getenv("META_CLIENT_SECRET", "")
+META_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/meta/"
+
+# TikTok OAuth
+TIKTOK_CLIENT_ID = os.getenv("TIKTOK_CLIENT_ID", "")
+TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
+TIKTOK_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/tiktok/"
+
+# WhatsApp Business API (uses Meta OAuth)
+WHATSAPP_CLIENT_ID = os.getenv("WHATSAPP_CLIENT_ID", META_CLIENT_ID)
+WHATSAPP_CLIENT_SECRET = os.getenv("WHATSAPP_CLIENT_SECRET", META_CLIENT_SECRET)
+WHATSAPP_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/whatsapp/"
