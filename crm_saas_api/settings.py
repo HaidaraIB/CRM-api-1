@@ -35,6 +35,12 @@ DEBUG = True
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "")
 
 ALLOWED_HOSTS = [
+    "api.loop-crm.app"
+    "www.api.loop-crm.app"
+    "dashboard.loop-crm.app"
+    "www.dashboard.loop-crm.app"
+    "admin.loop-crm.app"
+    "www.admin.loop-crm.app"
     'localhost', 
     '127.0.0.1', 
     'haidaraib.pythonanywhere.com',
@@ -73,14 +79,9 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     # This matches: http://company.localhost:3000, http://memo.com.localhost:3000, etc.
     r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.localhost:\d+$",
     r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.127\.0\.0\.1:\d+$",
-    # Allow Netlify domains
-    r"^https://.*\.netlify\.app$",
-    r"^https://.*\.netlify\.com$",
-    # Allow Vercel domains
-    r"^https://.*\.vercel\.app$",
-    r"^https://.*\.vercel\.dev$",
-    # Allow custom domains (you can add specific domains here if needed)
-    # Example: r"^https://yourdomain\.com$",
+
+    r"^https://.*\.loop-crm\.app$",
+    r"^https://loop-crm\.app$",
 ]
 
 # Automatically allow all subdomains of the base domain

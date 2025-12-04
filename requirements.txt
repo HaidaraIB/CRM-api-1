@@ -6,3 +6,4 @@ drf-spectacular-sidecar
 djangorestframework-simplejwt
 django-cors-headers
 requests
+gunicorn
