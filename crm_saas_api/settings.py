@@ -35,12 +35,12 @@ DEBUG = True
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "")
 
 ALLOWED_HOSTS = [
-    "api.loop-crm.app"
-    "www.api.loop-crm.app"
-    "dashboard.loop-crm.app"
-    "www.dashboard.loop-crm.app"
-    "admin.loop-crm.app"
-    "www.admin.loop-crm.app"
+    "api.loop-crm.app",
+    "www.api.loop-crm.app",
+    "dashboard.loop-crm.app",
+    "www.dashboard.loop-crm.app",
+    "admin.loop-crm.app",
+    "www.admin.loop-crm.app",
     "localhost",
     "localhost:8000",
     "127.0.0.1",
