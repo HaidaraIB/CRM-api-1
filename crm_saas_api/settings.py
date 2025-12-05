@@ -41,13 +41,10 @@ ALLOWED_HOSTS = [
     "www.dashboard.loop-crm.app"
     "admin.loop-crm.app"
     "www.admin.loop-crm.app"
-    'localhost', 
-    '127.0.0.1', 
-    'haidaraib.pythonanywhere.com',
-    '.vercel.app',
-    '.vercel.dev',
-    '.netlify.app',
-    '.netlify.com',
+    "localhost",
+    "localhost:8000",
+    "127.0.0.1",
+    "haidaraib.pythonanywhere.com",
 ]
 
 # Automatically allow all subdomains of the base domain in ALLOWED_HOSTS
@@ -56,7 +53,7 @@ if BASE_DOMAIN:
     # Add base domain
     ALLOWED_HOSTS.append(BASE_DOMAIN)
     # Add wildcard for all subdomains
-    ALLOWED_HOSTS.append(f'.{BASE_DOMAIN}')
+    ALLOWED_HOSTS.append(f".{BASE_DOMAIN}")
 
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
@@ -91,7 +88,6 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     # This matches: http://company.localhost:3000, http://memo.com.localhost:3000, etc.
     r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.localhost:\d+$",
     r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.127\.0\.0\.1:\d+$",
-
     r"^https://.*\.loop-crm\.app$",
     r"^https://loop-crm\.app$",
 ]
@@ -101,18 +97,22 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 # Format: https://company-domain.example.com
 if BASE_DOMAIN:
     # Escape dots in domain for regex
-    escaped_domain = BASE_DOMAIN.replace('.', r'\.')
+    escaped_domain = BASE_DOMAIN.replace(".", r"\.")
     # Allow any subdomain of the base domain (alphanumeric and hyphens only)
     # This matches company domains like: company1.example.com, my-company.example.com
-    subdomain_regex = rf"^https?://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}$"
+    subdomain_regex = (
+        rf"^https?://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}$"
+    )
     CORS_ALLOWED_ORIGIN_REGEXES.append(subdomain_regex)
-    
+
     # Also allow the base domain itself (for main app)
     base_domain_regex = rf"^https?://{escaped_domain}$"
     CORS_ALLOWED_ORIGIN_REGEXES.append(base_domain_regex)
-    
+
     # Allow localhost with base domain (for local development with subdomains)
-    localhost_subdomain_regex = rf"^http://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}:\d+$"
+    localhost_subdomain_regex = (
+        rf"^http://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}:\d+$"
+    )
     CORS_ALLOWED_ORIGIN_REGEXES.append(localhost_subdomain_regex)
 
 CORS_ALLOW_CREDENTIALS = True
@@ -259,9 +259,13 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
-STATICFILES_DIRS = [
-    BASE_DIR / "static",
-] if (BASE_DIR / "static").exists() else []
+STATICFILES_DIRS = (
+    [
+        BASE_DIR / "static",
+    ]
+    if (BASE_DIR / "static").exists()
+    else []
+)
 
 # Media files (User uploaded content)
 # https://docs.djangoproject.com/en/5.2/topics/files/
@@ -354,4 +358,6 @@ TIKTOK_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/
 # WhatsApp Business API (uses Meta OAuth)
 WHATSAPP_CLIENT_ID = os.getenv("WHATSAPP_CLIENT_ID", META_CLIENT_ID)
 WHATSAPP_CLIENT_SECRET = os.getenv("WHATSAPP_CLIENT_SECRET", META_CLIENT_SECRET)
-WHATSAPP_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/whatsapp/"
+WHATSAPP_REDIRECT_URI = (
+    f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/whatsapp/"
+)
