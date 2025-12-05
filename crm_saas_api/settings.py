@@ -66,6 +66,18 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
+    "http://api.loop-crm.app"
+    "https://api.loop-crm.app"
+    "http://www.api.loop-crm.app"
+    "https://www.api.loop-crm.app"
+    "http://dashboard.loop-crm.app"
+    "https://dashboard.loop-crm.app"
+    "http://www.dashboard.loop-crm.app"
+    "https://www.dashboard.loop-crm.app"
+    "http://admin.loop-crm.app"
+    "https://admin.loop-crm.app"
+    "http://www.admin.loop-crm.app"
+    "https://www.admin.loop-crm.app"
 ]
 
 # Allow all Netlify and Vercel domains (for production)
