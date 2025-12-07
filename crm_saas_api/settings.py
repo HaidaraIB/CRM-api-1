@@ -117,6 +117,31 @@ if BASE_DOMAIN:
 
 CORS_ALLOW_CREDENTIALS = True
 
+# CSRF Trusted Origins - required for CSRF protection in production
+# These are the origins that Django will accept CSRF tokens from
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "https://api.loop-crm.app",
+    "https://www.api.loop-crm.app",
+    "https://dashboard.loop-crm.app",
+    "https://www.dashboard.loop-crm.app",
+    "https://admin.loop-crm.app",
+    "https://www.admin.loop-crm.app",
+]
+
+# Automatically add base domain and subdomains to CSRF_TRUSTED_ORIGINS
+if BASE_DOMAIN:
+    CSRF_TRUSTED_ORIGINS.append(f"https://{BASE_DOMAIN}")
+    CSRF_TRUSTED_ORIGINS.append(f"http://{BASE_DOMAIN}")
+    # Add regex pattern for all subdomains
+    # Note: CSRF_TRUSTED_ORIGINS doesn't support regex, so we'll add common patterns
+    # For dynamic subdomains, consider using CSRF_TRUSTED_ORIGINS with wildcard or environment variable
+
 # In development mode, you can allow all origins (for easier debugging)
 # Set CORS_ALLOW_ALL_ORIGINS = True in development if you're having CORS issues
 # In production, this should ALWAYS be False
@@ -293,6 +318,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # SessionAuthentication is kept for admin panel, but CSRF is handled via CSRF_TRUSTED_ORIGINS
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
