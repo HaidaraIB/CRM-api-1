@@ -35,6 +35,7 @@ from accounts.views import (
     CustomTokenObtainPairView,
     register_company,
     verify_email,
+    resend_verification,
     forgot_password,
     reset_password,
     request_two_factor_auth,
@@ -72,7 +73,6 @@ from subscriptions.views import (
     PaymentGatewayViewSet,
     PublicPlanListView,
     create_paytabs_payment,
-    paytabs_callback,
     paytabs_return,
     check_payment_status,
 )
@@ -82,11 +82,14 @@ from integrations import urls as integrations_urls
 router = DefaultRouter()
 router.register(r"users", UserViewSet, basename="user")
 router.register(r"companies", CompanyViewSet, basename="company")
+
 router.register(r"clients", ClientViewSet, basename="client")
+router.register(r"client-tasks", ClientTaskViewSet, basename="clienttask")
+
 router.register(r"deals", DealViewSet, basename="deal")
 router.register(r"tasks", TaskViewSet, basename="task")
-router.register(r"client-tasks", ClientTaskViewSet, basename="clienttask")
 router.register(r"campaigns", CampaignViewSet, basename="campaign")
+
 router.register(r"settings/channels", ChannelViewSet, basename="channel")
 router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
@@ -94,27 +97,31 @@ router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup
 router.register(
     r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog"
 )
+
 router.register(r"developers", DeveloperViewSet, basename="developer")
 router.register(r"projects", ProjectViewSet, basename="project")
 router.register(r"units", UnitViewSet, basename="unit")
 router.register(r"owners", OwnerViewSet, basename="owner")
+
 router.register(r"services", ServiceViewSet, basename="service")
 router.register(r"service-packages", ServicePackageViewSet, basename="servicepackage")
 router.register(
     r"service-providers", ServiceProviderViewSet, basename="serviceprovider"
 )
+
 router.register(r"products", ProductViewSet, basename="product")
 router.register(
     r"product-categories", ProductCategoryViewSet, basename="productcategory"
 )
 router.register(r"suppliers", SupplierViewSet, basename="supplier")
+
 router.register(r"plans", PlanViewSet, basename="plan")
 router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
-# Note: payments router is registered but custom payment endpoints above take precedence
 router.register(r"payments", PaymentViewSet, basename="payment")
 router.register(r"invoices", InvoiceViewSet, basename="invoice")
-router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"payment-gateways", PaymentGatewayViewSet, basename="paymentgateway")
+
+router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 
 urlpatterns = [
     path("", home, name="home"),
@@ -125,7 +132,6 @@ urlpatterns = [
         create_paytabs_payment,
         name="create_paytabs_payment",
     ),
-    path("api/payments/paytabs-callback/", paytabs_callback, name="paytabs_callback"),
     path("api/payments/paytabs-return/", paytabs_return, name="paytabs_return"),
     # Status endpoint - use a path that won't conflict with router
     path(
@@ -146,6 +152,7 @@ urlpatterns = [
         name="check_registration_availability",
     ),
     path("api/auth/verify-email/", verify_email, name="verify_email"),
+    path("api/auth/resend-verification/", resend_verification, name="resend_verification"),
     path("api/auth/forgot-password/", forgot_password, name="forgot_password"),
     path("api/auth/reset-password/", reset_password, name="reset_password"),
     path(

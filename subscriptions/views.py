@@ -37,7 +37,6 @@ from .serializers import (
     PaymentGatewaySerializer,
     PaymentGatewayListSerializer,
     CreatePaytabsPaymentSerializer,
-    PaytabsCallbackSerializer,
 )
 from accounts.permissions import IsSuperAdmin
 from .utils import send_broadcast_email
@@ -309,7 +308,6 @@ def create_paytabs_payment(request):
     if not user_name:
         user_name = subscription.company.owner.username
 
-    callback_url = f"{settings.PAYTABS_CALLBACK_URL}?subscription_id={subscription_id}"
     return_url = f"{settings.PAYTABS_RETURN_URL}?subscription_id={subscription_id}"
 
     customer_phone = subscription.company.owner.phone or ""
@@ -324,7 +322,6 @@ def create_paytabs_payment(request):
             customer_name=user_name,
             customer_phone=customer_phone,
             subscription_id=subscription_id,
-            callback_url=callback_url,
             return_url=return_url,
         )
 
@@ -400,173 +397,6 @@ def create_paytabs_payment(request):
 @csrf_exempt
 @api_view(["POST", "GET"])
 @permission_classes([AllowAny])
-def paytabs_callback(request):
-    """
-    Handle Paytabs webhook callback
-    POST /api/payments/paytabs-callback/ (server-to-server callback)
-    Paytabs sends JSON in request body
-    """
-    logger = logging.getLogger(__name__)
-
-    try:
-        # Parse data from multiple sources (PayTabs can send via GET query params or POST body)
-        payload = {}
-        
-        # First, try to get from query parameters
-        if request.GET:
-            payload = dict(request.GET)
-            # Convert list values to single values (Django QueryDict returns lists)
-            for key, value in payload.items():
-                if isinstance(value, list) and len(value) > 0:
-                    payload[key] = value[0]
-        
-        # Then try POST data
-        if request.method == "POST" and request.POST:
-            post_data = dict(request.POST)
-            for key, value in post_data.items():
-                if isinstance(value, list) and len(value) > 0:
-                    post_data[key] = value[0]
-            payload.update(post_data)
-        
-        # Finally, try JSON body (PayTabs sends JSON for server-to-server callbacks)
-        if request.body:
-            try:
-                json_payload = json.loads(request.body.decode("utf-8"))
-                payload.update(json_payload)
-            except Exception as e:
-                logger.warning(f"Failed to parse JSON body: {str(e)}")
-                # Try request.data (DRF parsed data)
-                try:
-                    if hasattr(request, 'data'):
-                        payload.update(dict(request.data))
-                except:
-                    pass
-
-        # Try multiple possible field names for tran_ref from all sources
-        tran_ref = (
-            payload.get("tran_ref")
-            or payload.get("tranRef")
-            or payload.get("tranref")
-            or request.GET.get("tran_ref")
-            or request.GET.get("tranRef")
-            or request.GET.get("tranref")
-            or request.POST.get("tran_ref")
-            or request.POST.get("tranRef")
-            or request.POST.get("tranref")
-        )
-        
-        # Also try from request.data if available (DRF)
-        if not tran_ref and hasattr(request, 'data'):
-            try:
-                tran_ref = (
-                    request.data.get("tran_ref")
-                    or request.data.get("tranRef")
-                    or request.data.get("tranref")
-                )
-            except:
-                pass
-
-        logger.info(
-            f"PayTabs callback - Method: {request.method}, Payload: {payload}, Query: {request.GET.dict()}, POST: {request.POST.dict() if hasattr(request, 'POST') else {}}"
-        )
-
-        if not tran_ref:
-            # Log all available data for debugging
-            logger.error(
-                f"Missing tran_ref - Full request data: {dict(request.GET)}, Body: {request.body.decode('utf-8') if request.body else 'None'}"
-            )
-            return Response(
-                {"error": "Missing tran_ref", "received_data": payload},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Get Paytabs gateway
-        paytabs_gateway = PaymentGateway.objects.filter(
-            name__icontains="paytabs", enabled=True
-        ).first()
-
-        if not paytabs_gateway:
-            logger.error("Paytabs gateway not found")
-            return Response(
-                {"error": "Paytabs gateway not found"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        result = verify_paytabs_payment(tran_ref)
-
-        logger.info(f"PayTabs verified result: {result}")
-
-        # Extract cart_id from verified result
-        cart_id = result.get("cart_id")
-        if not cart_id:
-            logger.error("Missing cart_id in verified result")
-            return Response(
-                {"error": "Invalid transaction result"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Extract subscription ID from cart_id (format: SUB-{id})
-        try:
-            subscription_id = int(cart_id.replace("SUB-", ""))
-            subscription = Subscription.objects.get(id=subscription_id)
-        except (ValueError, Subscription.DoesNotExist) as e:
-            logger.error(f"Invalid subscription ID: {cart_id}, error: {str(e)}")
-            return Response(
-                {"error": "Invalid subscription ID"}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        amount = float(result.get("cart_amount", 0))
-        # Find or create payment record using tran_ref or subscription
-        payment, created = Payment.objects.get_or_create(
-            subscription=subscription,
-            payment_method=paytabs_gateway,
-            tran_ref=tran_ref,
-            amount=amount,
-            payment_status=PaymentStatus.PENDING.value,
-        )
-
-        if created:
-            logger.info(f"Created new payment record: {payment.id}")
-
-        # Update payment status based on verified result
-        status_code = result.get("payment_result", {}).get("response_status")
-        if status_code == "A":  # Approved
-            payment.payment_status = PaymentStatus.COMPLETED.value
-            payment.save()
-
-            subscription.is_active = True
-            subscription.save()
-
-            # Mark company registration as completed
-            company = subscription.company
-            if company:
-                company.registration_completed = True
-                company.registration_completed_at = timezone.now()
-                company.save()
-
-            logger.info(
-                f"Payment successful - tran_ref: {tran_ref}, subscription_id: {subscription_id}"
-            )
-        else:
-            payment.payment_status = PaymentStatus.FAILED.value
-            payment.save()
-            logger.warning(
-                f"Payment failed - tran_ref: {tran_ref}, status: {status_code}"
-            )
-
-        return Response({"status": "ok"})
-
-    except Exception as e:
-        logger.error(f"Error processing callback: {str(e)}", exc_info=True)
-        return Response(
-            {"error": f"Error processing callback: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-
-@csrf_exempt
-@api_view(["POST", "GET"])
-@permission_classes([AllowAny])
 def paytabs_return(request):
     """
     Handle Paytabs return URL - PayTabs redirects here after payment (like in uchat_paytabs_gateway)
@@ -578,7 +408,7 @@ def paytabs_return(request):
     try:
         # Parse data from multiple sources (PayTabs can send via GET query params or POST body)
         payload = {}
-        
+
         # First, try to get from query parameters (most common when PayTabs redirects)
         if request.GET:
             payload = dict(request.GET)
@@ -586,110 +416,51 @@ def paytabs_return(request):
             for key, value in payload.items():
                 if isinstance(value, list) and len(value) > 0:
                     payload[key] = value[0]
-        
-        # Then try POST data
-        if request.method == "POST" and request.POST:
-            payload.update(dict(request.POST))
-            for key, value in payload.items():
-                if isinstance(value, list) and len(value) > 0:
-                    payload[key] = value[0]
-        
-        # Finally, try JSON body
-        if request.body:
-            try:
-                json_payload = json.loads(request.body.decode("utf-8"))
-                payload.update(json_payload)
-            except Exception:
-                pass
 
-        # Extract tran_ref from multiple possible field names and sources
-        # PayTabs might send it in various formats
-        tran_ref = (
-            payload.get("tran_ref")
-            or payload.get("tranRef")
-            or payload.get("tranref")
-            or payload.get("tranRef")
-            or payload.get("transaction_ref")
-            or payload.get("transactionRef")
-            or payload.get("transactionReference")
-            or request.GET.get("tran_ref")
-            or request.GET.get("tranRef")
-            or request.GET.get("tranref")
-            or request.GET.get("transaction_ref")
-            or request.GET.get("transactionRef")
-            or request.POST.get("tran_ref")
-            or request.POST.get("tranRef")
-            or request.POST.get("tranref")
-            or request.POST.get("transaction_ref")
-            or request.POST.get("transactionRef")
-        )
-        
-        # Also check if it's in the raw query string
-        if not tran_ref and request.META.get('QUERY_STRING'):
-            import urllib.parse
-            query_params = urllib.parse.parse_qs(request.META.get('QUERY_STRING', ''))
-            for key in ['tran_ref', 'tranRef', 'tranref', 'transaction_ref', 'transactionRef']:
-                if key in query_params and query_params[key]:
-                    tran_ref = query_params[key][0] if isinstance(query_params[key], list) else query_params[key]
-                    break
-        
-        # Check nested structures (PayTabs might send data in nested format)
-        if not tran_ref:
-            for key_path in [
-                ['transaction', 'tran_ref'],
-                ['transaction', 'tranRef'],
-                ['payment', 'tran_ref'],
-                ['payment', 'tranRef'],
-                ['data', 'tran_ref'],
-                ['data', 'tranRef'],
-            ]:
-                current = payload
-                try:
-                    for key in key_path:
-                        current = current.get(key, {})
-                    if current and isinstance(current, str):
-                        tran_ref = current
-                        break
-                except (AttributeError, TypeError):
-                    continue
-
-        logger.info(
-            f"PayTabs return - Method: {request.method}, Payload: {payload}, Query: {dict(request.GET)}, POST: {dict(request.POST) if hasattr(request, 'POST') else {}}, Body: {request.body.decode('utf-8') if request.body else 'None'}"
-        )
-        
         # If tran_ref is missing, try to get it from the payment record using subscription_id
-        if not tran_ref:
-            subscription_id_param = request.GET.get("subscription_id") or payload.get("subscription_id")
-            if subscription_id_param:
-                try:
-                    subscription_id = int(subscription_id_param)
-                    # Find the most recent payment for this subscription
-                    paytabs_gateway = PaymentGateway.objects.filter(
-                        name__icontains="paytabs", enabled=True
-                    ).first()
-                    
-                    if paytabs_gateway:
-                        payment = Payment.objects.filter(
+        tran_ref = None
+        subscription_id_param = request.GET.get("subscription_id") or payload.get(
+            "subscription_id"
+        )
+        if subscription_id_param:
+            try:
+                subscription_id = int(subscription_id_param)
+                # Find the most recent payment for this subscription
+                paytabs_gateway = PaymentGateway.objects.filter(
+                    name__icontains="paytabs", enabled=True
+                ).first()
+
+                if paytabs_gateway:
+                    payment = (
+                        Payment.objects.filter(
                             subscription_id=subscription_id,
-                            payment_method=paytabs_gateway
-                        ).order_by("-created_at").first()
-                        
-                        if payment and payment.tran_ref:
-                            tran_ref = payment.tran_ref
-                            logger.info(f"Found tran_ref from payment record: {tran_ref}")
-                except (ValueError, Payment.DoesNotExist) as e:
-                    logger.warning(f"Could not find payment record: {str(e)}")
-        
+                            payment_method=paytabs_gateway,
+                        )
+                        .order_by("-created_at")
+                        .first()
+                    )
+
+                    if payment and payment.tran_ref:
+                        tran_ref = payment.tran_ref
+                        logger.info(f"Found tran_ref from payment record: {tran_ref}")
+            except (ValueError, Payment.DoesNotExist) as e:
+                logger.warning(f"Could not find payment record: {str(e)}")
+
         if not tran_ref:
-            logger.error("Missing tran_ref in return URL - all data: %s", {
-                "GET": dict(request.GET),
-                "POST": dict(request.POST) if hasattr(request, 'POST') else {},
-                "body": request.body.decode('utf-8') if request.body else None,
-                "payload": payload
-            })
+            logger.error(
+                "Missing tran_ref in return URL - all data: %s",
+                {
+                    "GET": dict(request.GET),
+                    "POST": dict(request.POST) if hasattr(request, "POST") else {},
+                    "body": request.body.decode("utf-8") if request.body else None,
+                    "payload": payload,
+                },
+            )
             # Redirect to frontend with error status
             frontend_url = settings.FRONTEND_URL
-            return redirect(f"{frontend_url}/payment/success?status=failed&message=Missing transaction reference")
+            return redirect(
+                f"{frontend_url}/payment/success?status=failed&message=Missing transaction reference"
+            )
 
         # Verify transaction (like uchat_paytabs_gateway)
         result = verify_paytabs_payment(tran_ref)
@@ -700,13 +471,17 @@ def paytabs_return(request):
         if not cart_id:
             logger.error("Missing cart_id in verified result")
             frontend_url = settings.FRONTEND_URL
-            return redirect(f"{frontend_url}/payment/success?status=failed&message=Invalid transaction")
+            return redirect(
+                f"{frontend_url}/payment/success?status=failed&message=Invalid transaction"
+            )
 
         subscription_id = int(cart_id.replace("SUB-", ""))
         subscription = Subscription.objects.get(id=subscription_id)
 
         # Get subscription_id from URL params if available (for redirect)
-        url_subscription_id = request.GET.get("subscription_id") or payload.get("subscription_id")
+        url_subscription_id = request.GET.get("subscription_id") or payload.get(
+            "subscription_id"
+        )
         if url_subscription_id:
             try:
                 subscription_id = int(url_subscription_id)
@@ -734,11 +509,14 @@ def paytabs_return(request):
             if paytabs_gateway:
                 amount = float(result.get("cart_amount", 0))
                 # Find existing payment or create new one
-                payment = Payment.objects.filter(
-                    subscription=subscription,
-                    payment_method=paytabs_gateway
-                ).order_by("-created_at").first()
-                
+                payment = (
+                    Payment.objects.filter(
+                        subscription=subscription, payment_method=paytabs_gateway
+                    )
+                    .order_by("-created_at")
+                    .first()
+                )
+
                 if payment:
                     # Update existing payment
                     payment.payment_status = PaymentStatus.COMPLETED.value
@@ -758,15 +536,21 @@ def paytabs_return(request):
         # Redirect to frontend success page
         frontend_url = settings.FRONTEND_URL
         if payment_status == "A":
-            return redirect(f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=success&tranRef={tran_ref}")
+            return redirect(
+                f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=success&tranRef={tran_ref}"
+            )
         else:
-            return redirect(f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=failed&message=Payment failed")
+            return redirect(
+                f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=failed&message=Payment failed"
+            )
 
     except Exception as e:
         logger.error(f"Error processing return: {str(e)}", exc_info=True)
         frontend_url = settings.FRONTEND_URL
         subscription_id = request.GET.get("subscription_id") or ""
-        return redirect(f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=error&message={str(e)}")
+        return redirect(
+            f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=error&message={str(e)}"
+        )
 
 
 @api_view(["GET"])
@@ -780,8 +564,10 @@ def check_payment_status(request, subscription_id):
     logger = logging.getLogger(__name__)
     try:
         subscription = Subscription.objects.get(id=subscription_id)
-        logger.info(f"Checking payment status for subscription {subscription_id}, is_active: {subscription.is_active}")
-        
+        logger.info(
+            f"Checking payment status for subscription {subscription_id}, is_active: {subscription.is_active}"
+        )
+
         paytabs_gateway = PaymentGateway.objects.filter(
             name__icontains="paytabs", enabled=True
         ).first()
@@ -803,47 +589,58 @@ def check_payment_status(request, subscription_id):
         except Exception as e:
             logger.warning(f"Error fetching payment: {str(e)}")
             payment = None
-        
+
         # Refresh subscription from DB to get latest is_active status
         subscription.refresh_from_db()
-        
+
         # Get payment status from DB
         payment_status_value = payment.payment_status if payment else "pending"
         paytabs_status = None
-        
+
         # PRIORITY: If subscription is active, payment MUST be completed
         # This is the source of truth - if subscription is active, payment is done
         if subscription.is_active:
             payment_status_value = PaymentStatus.COMPLETED.value
             paytabs_status = "A"
-            logger.info(f"Subscription {subscription_id} is ACTIVE - returning completed status immediately")
+            logger.info(
+                f"Subscription {subscription_id} is ACTIVE - returning completed status immediately"
+            )
         elif payment:
             # If payment exists and has tran_ref, try to get paytabs_status
             if payment.tran_ref:
                 try:
                     result = verify_paytabs_payment(payment.tran_ref)
-                    paytabs_status = result.get("payment_result", {}).get("response_status")
+                    paytabs_status = result.get("payment_result", {}).get(
+                        "response_status"
+                    )
                 except Exception as e:
                     logger.warning(f"Could not verify payment with PayTabs: {str(e)}")
                     # If payment is completed in DB but verification fails, assume approved
                     if payment.payment_status == PaymentStatus.COMPLETED.value:
                         paytabs_status = "A"
-            
+
             # If payment is completed in DB, ensure paytabs_status is set
-            if payment.payment_status == PaymentStatus.COMPLETED.value and not paytabs_status:
+            if (
+                payment.payment_status == PaymentStatus.COMPLETED.value
+                and not paytabs_status
+            ):
                 paytabs_status = "A"
-        
+
         # Return all fields the frontend needs - ensure values match what frontend expects
         response_data = {
             "subscription_id": subscription_id,
-            "subscription_active": bool(subscription.is_active),  # Ensure it's a boolean
+            "subscription_active": bool(
+                subscription.is_active
+            ),  # Ensure it's a boolean
             "payment_status": payment_status_value,  # Should be "completed" if done
             "paytabs_status": paytabs_status,  # Should be "A" if approved
         }
-        
-        logger.info(f"Payment status check for subscription {subscription_id}: subscription.is_active={subscription.is_active}, payment_status={payment_status_value}, paytabs_status={paytabs_status}, payment exists={payment is not None}")
+
+        logger.info(
+            f"Payment status check for subscription {subscription_id}: subscription.is_active={subscription.is_active}, payment_status={payment_status_value}, paytabs_status={paytabs_status}, payment exists={payment is not None}"
+        )
         logger.info(f"Returning response: {response_data}")
-        
+
         return Response(response_data, status=status.HTTP_200_OK)
     except Payment.DoesNotExist:
         return Response(

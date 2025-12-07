@@ -6,13 +6,6 @@ class CreatePaytabsPaymentSerializer(serializers.Serializer):
     subscription_id = serializers.IntegerField()
 
 
-class PaytabsCallbackSerializer(serializers.Serializer):
-    tran_ref = serializers.CharField(required=False)
-    cart_id = serializers.CharField(required=False)
-    cart_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
-    payment_result = serializers.DictField(required=False)
-
-
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plan
@@ -37,6 +30,7 @@ class PlanSerializer(serializers.ModelSerializer):
 
 class PlanListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     class Meta:
         model = Plan
         fields = [
@@ -79,6 +73,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
 
 class SubscriptionListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     company_name = serializers.CharField(source="company.name", read_only=True)
     plan_name = serializers.CharField(source="plan.name", read_only=True)
 
@@ -98,8 +93,12 @@ class SubscriptionListSerializer(serializers.ModelSerializer):
 
 
 class PaymentSerializer(serializers.ModelSerializer):
-    subscription_company_name = serializers.CharField(source="subscription.company.name", read_only=True)
-    subscription_plan_name = serializers.CharField(source="subscription.plan.name", read_only=True)
+    subscription_company_name = serializers.CharField(
+        source="subscription.company.name", read_only=True
+    )
+    subscription_plan_name = serializers.CharField(
+        source="subscription.plan.name", read_only=True
+    )
 
     class Meta:
         model = Payment
@@ -119,7 +118,10 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 class PaymentListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
-    subscription_company_name = serializers.CharField(source="subscription.company.name", read_only=True)
+
+    subscription_company_name = serializers.CharField(
+        source="subscription.company.name", read_only=True
+    )
 
     class Meta:
         model = Payment
@@ -135,7 +137,9 @@ class PaymentListSerializer(serializers.ModelSerializer):
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
-    company_name = serializers.CharField(source="subscription.company.name", read_only=True)
+    company_name = serializers.CharField(
+        source="subscription.company.name", read_only=True
+    )
     plan_name = serializers.CharField(source="subscription.plan.name", read_only=True)
 
     class Meta:
@@ -157,7 +161,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
 class InvoiceListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
-    company_name = serializers.CharField(source="subscription.company.name", read_only=True)
+
+    company_name = serializers.CharField(
+        source="subscription.company.name", read_only=True
+    )
 
     class Meta:
         model = Invoice
@@ -191,6 +198,7 @@ class BroadcastSerializer(serializers.ModelSerializer):
 
 class BroadcastListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     class Meta:
         model = Broadcast
         fields = [
@@ -220,6 +228,7 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
 
 class PaymentGatewayListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     class Meta:
         model = PaymentGateway
         fields = [
@@ -229,4 +238,3 @@ class PaymentGatewayListSerializer(serializers.ModelSerializer):
             "status",
             "enabled",
         ]
-

@@ -228,23 +228,19 @@ def register_company(request):
                 'end_date': subscription.end_date.isoformat(),
             }
 
+        # Email verification is now handled on-demand via the resend-verification endpoint
+        # Don't send verification email automatically during registration
         verification_info = {}
         try:
             expiry_hours = getattr(settings, "EMAIL_VERIFICATION_EXPIRY_HOURS", 48)
             verification = EmailVerification.create_for_user(owner, expiry_hours=expiry_hours)
-            # Get language from request header or default to 'en'
-            language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')
-            if 'ar' in language.lower():
-                language = 'ar'
-            else:
-                language = 'en'
-            sent = send_email_verification(owner, verification, language=language)
+            # Don't send email automatically - user will request it from the modal
             verification_info = {
-                "sent": sent,
+                "sent": False,
                 "expires_at": verification.expires_at.isoformat(),
             }
         except Exception as exc:
-            logger.warning("Unable to send verification email: %s", exc)
+            logger.warning("Unable to create verification: %s", exc)
             verification_info = {
                 "sent": False,
                 "error": str(exc),
@@ -359,6 +355,70 @@ def verify_email(request):
         {"message": "Email verified successfully."},
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def resend_verification(request):
+    """
+    Resend email verification code to the user's email.
+    """
+    email = request.data.get("email")
+    if not email:
+        return Response(
+            {"error": "Email is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response(
+            {"error": "User with this email does not exist."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    
+    # Check if email is already verified
+    if user.email_verified:
+        return Response(
+            {"message": "Email is already verified."},
+            status=status.HTTP_200_OK,
+        )
+    
+    # Check if user is requesting for their own email or is admin
+    if request.user.email != email and not request.user.is_staff:
+        return Response(
+            {"error": "You can only request verification for your own email."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    
+    try:
+        expiry_hours = getattr(settings, "EMAIL_VERIFICATION_EXPIRY_HOURS", 48)
+        verification = EmailVerification.create_for_user(user, expiry_hours=expiry_hours)
+        
+        # Get language from request header or default to 'en'
+        language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')
+        if 'ar' in language.lower():
+            language = 'ar'
+        else:
+            language = 'en'
+        
+        sent = send_email_verification(user, verification, language=language)
+        
+        return Response(
+            {
+                "message": "Verification code sent successfully." if sent else "Failed to send verification email.",
+                "sent": sent,
+                "expires_at": verification.expires_at.isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )
+    except Exception as exc:
+        logger.error("Failed to resend verification email: %s", exc)
+        return Response(
+            {"error": "Failed to send verification email. Please try again later."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @api_view(['POST'])

@@ -27,7 +27,6 @@ def create_paytabs_payment_session(
     customer_name: str,
     customer_phone: str,
     subscription_id: str,
-    callback_url: str,
     return_url: str,
 ):
     """
@@ -39,7 +38,6 @@ def create_paytabs_payment_session(
         customer_name: Customer name
         customer_phone: Customer phone
         subscription_id: Unique subscription ID
-        callback_url: URL for Paytabs to send payment callback
         return_url: URL to redirect customer after payment
 
     Returns:
@@ -84,7 +82,6 @@ def create_paytabs_payment_session(
             "state": "",
             "country": "IQ",
         },
-        "callback": callback_url,
         "return": return_url,
     }
 
