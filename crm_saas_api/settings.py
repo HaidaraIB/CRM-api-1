@@ -209,6 +209,7 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "crm_saas_api.middleware.DisableCSRFForAPI",  # Disable CSRF for API endpoints
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -318,8 +319,9 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        # SessionAuthentication is kept for admin panel, but CSRF is handled via CSRF_TRUSTED_ORIGINS
-        "rest_framework.authentication.SessionAuthentication",
+        # SessionAuthentication removed to avoid CSRF issues with API endpoints
+        # Admin panel uses its own authentication
+        # "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
