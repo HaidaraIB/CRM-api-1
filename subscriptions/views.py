@@ -7,9 +7,12 @@ from django.utils import timezone
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import redirect
+from datetime import timedelta
 import json
 import requests
 import logging
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     Plan,
@@ -265,6 +268,9 @@ def create_paytabs_payment(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     subscription_id = serializer.validated_data.get("subscription_id")
+    plan_id = serializer.validated_data.get("plan_id")
+    billing_cycle_param = serializer.validated_data.get("billing_cycle")
+    
     if not subscription_id:
         return Response(
             {"error": "subscription_id is required"},
@@ -278,22 +284,59 @@ def create_paytabs_payment(request):
             {"error": "Subscription not found"}, status=status.HTTP_404_NOT_FOUND
         )
 
-    # Check if subscription is already active (payment already completed)
-    if subscription.is_active:
+    # If plan_id is provided, update the subscription's plan (for plan changes)
+    if plan_id:
+        try:
+            new_plan = Plan.objects.get(id=plan_id)
+            subscription.plan = new_plan
+            subscription.save(update_fields=['plan', 'updated_at'])
+            logger.info(
+                f"Updated subscription {subscription_id} plan to {new_plan.name} (ID: {plan_id})"
+            )
+        except Plan.DoesNotExist:
+            return Response(
+                {"error": "Plan not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+    # Allow renewals and plan changes even if subscription is active
+    # Only block if subscription is active AND no plan_id or billing_cycle is provided (no action requested)
+    is_renewal = billing_cycle_param is not None
+    if subscription.is_active and not plan_id and not is_renewal:
         return Response(
-            {"error": "Subscription is already active"},
+            {"error": "Subscription is already active. Use renewal or plan change to proceed."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Note: We allow any request with valid subscription_id
-    # The subscription must be inactive (not paid yet) to proceed
-
     plan = subscription.plan
 
-    days_diff = (subscription.end_date - subscription.start_date).days
-    billing_cycle = "yearly" if days_diff >= 365 else "monthly"
+    # Determine billing cycle:
+    # 1. Use provided billing_cycle if available (from frontend selection)
+    # 2. Otherwise, calculate from existing subscription end_date
+    if billing_cycle_param:
+        billing_cycle = billing_cycle_param
+        logger.info(
+            f"Using provided billing_cycle: {billing_cycle} for subscription {subscription_id}"
+        )
+    else:
+        # Determine billing cycle based on end_date and start_date
+        # This should match what was set during registration
+        days_diff = (subscription.end_date - subscription.start_date).days
+        # Use 330 days as threshold to account for slight variations
+        billing_cycle = "yearly" if days_diff >= 330 else "monthly"
+        logger.info(
+            f"Calculated billing_cycle from subscription: {billing_cycle} "
+            f"(days_diff={days_diff}) for subscription {subscription_id}"
+        )
+    
+    # Get the correct amount based on billing cycle
     amount = float(
         plan.price_yearly if billing_cycle == "yearly" else plan.price_monthly
+    )
+    
+    # Log for debugging
+    logger.info(
+        f"Creating payment for subscription {subscription_id}: "
+        f"plan={plan.name}, billing_cycle={billing_cycle}, amount={amount}"
     )
 
     if amount <= 0:
@@ -491,24 +534,16 @@ def paytabs_return(request):
         # Update payment status (like uchat_paytabs_gateway)
         payment_status = result.get("payment_result", {}).get("response_status")
         if payment_status == "A":  # Approved
-            subscription.is_active = True
-            subscription.save()
-
-            # Mark company registration as completed
-            company = subscription.company
-            if company:
-                company.registration_completed = True
-                company.registration_completed_at = timezone.now()
-                company.save()
-
-            # Update or create payment record
+            # Update or create payment record first to get the amount
             paytabs_gateway = PaymentGateway.objects.filter(
                 name__icontains="paytabs", enabled=True
             ).first()
 
+            amount = float(result.get("cart_amount", 0))
+            
+            # Find existing payment or create new one
+            payment = None
             if paytabs_gateway:
-                amount = float(result.get("cart_amount", 0))
-                # Find existing payment or create new one
                 payment = (
                     Payment.objects.filter(
                         subscription=subscription, payment_method=paytabs_gateway
@@ -532,6 +567,68 @@ def paytabs_return(request):
                         payment_status=PaymentStatus.COMPLETED.value,
                         tran_ref=tran_ref,
                     )
+            
+            # Determine billing cycle based on payment amount
+            plan = subscription.plan
+            billing_cycle = None
+            
+            # Check if amount matches yearly price (with small tolerance for rounding)
+            if abs(amount - float(plan.price_yearly)) < 0.01:
+                billing_cycle = "yearly"
+            # Check if amount matches monthly price (with small tolerance for rounding)
+            elif abs(amount - float(plan.price_monthly)) < 0.01:
+                billing_cycle = "monthly"
+            else:
+                # If amount doesn't match exactly, determine by comparing which is closer
+                yearly_diff = abs(amount - float(plan.price_yearly))
+                monthly_diff = abs(amount - float(plan.price_monthly))
+                billing_cycle = "yearly" if yearly_diff < monthly_diff else "monthly"
+                logger.warning(
+                    f"Payment amount {amount} doesn't exactly match plan prices "
+                    f"(yearly: {plan.price_yearly}, monthly: {plan.price_monthly}). "
+                    f"Using {billing_cycle} based on closest match."
+                )
+            
+            # Calculate correct end_date based on billing cycle
+            # Rule: If end_date is in the future, add billing_cycle to it
+            #       If end_date is in the past or present, add billing_cycle to now
+            now = timezone.now()
+            
+            if subscription.end_date > now:
+                # end_date is in the future: extend from end_date
+                base_date = subscription.end_date
+                logger.info(
+                    f"Subscription {subscription.id} end_date is in the future ({subscription.end_date.strftime('%Y-%m-%d %H:%M:%S')}): extending from end_date"
+                )
+            else:
+                # end_date is in the past or present: extend from now
+                base_date = now
+                logger.info(
+                    f"Subscription {subscription.id} end_date is in the past/present ({subscription.end_date.strftime('%Y-%m-%d %H:%M:%S')}): extending from now ({base_date.strftime('%Y-%m-%d %H:%M:%S')})"
+                )
+            
+            if billing_cycle == "yearly":
+                new_end_date = base_date + timedelta(days=365)
+            else:
+                new_end_date = base_date + timedelta(days=30)
+            
+            # Update subscription with correct end_date and activate it
+            subscription.is_active = True
+            subscription.end_date = new_end_date
+            subscription.save(update_fields=['is_active', 'end_date', 'updated_at'])
+            
+            logger.info(
+                f"Activated subscription {subscription.id} for company {subscription.company.name}. "
+                f"Billing cycle: {billing_cycle}, Amount: {amount}, "
+                f"End date set to: {new_end_date.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+
+            # Mark company registration as completed
+            company = subscription.company
+            if company:
+                company.registration_completed = True
+                company.registration_completed_at = timezone.now()
+                company.save()
 
         # Redirect to frontend success page
         frontend_url = settings.FRONTEND_URL

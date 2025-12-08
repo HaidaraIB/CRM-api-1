@@ -79,7 +79,7 @@ class Subscription(models.Model):
     start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField()
     is_active = models.BooleanField(default=True)
-    auto_renew = models.BooleanField(default=True)
+    auto_renew = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -112,12 +112,15 @@ class PaymentGateway(models.Model):
     def __str__(self):
         return f"{self.name} ({self.status})"
 
+
 class Payment(models.Model):
     subscription = models.ForeignKey(
         Subscription, on_delete=models.CASCADE, related_name="payments"
     )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_method = models.ForeignKey(PaymentGateway, on_delete=models.CASCADE, related_name="payments")
+    payment_method = models.ForeignKey(
+        PaymentGateway, on_delete=models.CASCADE, related_name="payments"
+    )
     payment_status = models.CharField(max_length=255, choices=PaymentStatus.choices())
     tran_ref = models.CharField(max_length=255, blank=True, default="")
 
@@ -175,6 +178,3 @@ class Broadcast(models.Model):
     def __str__(self):
         status_display = self.status or "draft"
         return f"{self.subject} ({status_display})"
-
-
-

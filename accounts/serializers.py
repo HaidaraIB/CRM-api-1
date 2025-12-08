@@ -106,6 +106,7 @@ class UserSerializer(serializers.ModelSerializer):
                 "plan": {
                     "id": subscription.plan.id,
                     "name": subscription.plan.name,
+                    "name_ar": subscription.plan.name_ar if subscription.plan.name_ar else None,
                 },
                 "is_active": subscription.is_active,
                 "start_date": subscription.start_date.isoformat() if subscription.start_date else None,
@@ -338,21 +339,25 @@ class RegisterCompanySerializer(serializers.Serializer):
                 price = plan.price_yearly if billing_cycle == 'yearly' else plan.price_monthly
                 requires_payment = price > 0
                 
-                # Calculate end date based on billing cycle
-                if billing_cycle == 'yearly':
-                    end_date = timezone.now() + timedelta(days=365)
-                else:
-                    end_date = timezone.now() + timedelta(days=30)
-                
-                # If payment required, create inactive subscription (will be activated after payment)
-                # Otherwise, create active subscription
+                # Create subscription first to get the actual start_date
+                # Then calculate end_date based on start_date and billing cycle
                 subscription = Subscription.objects.create(
                     company=company,
                     plan=plan,
-                    end_date=end_date,
+                    end_date=timezone.now(),  # Temporary, will update below
                     is_active=not requires_payment,  # Inactive if payment required
                     auto_renew=True,
                 )
+                
+                # Calculate end_date based on billing cycle using the actual start_date
+                if billing_cycle == 'yearly':
+                    end_date = subscription.start_date + timedelta(days=365)
+                else:
+                    end_date = subscription.start_date + timedelta(days=30)
+                
+                # Update subscription with correct end_date
+                subscription.end_date = end_date
+                subscription.save(update_fields=['end_date'])
             except Plan.DoesNotExist:
                 pass  # If plan doesn't exist, continue without subscription
 

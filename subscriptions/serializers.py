@@ -4,6 +4,12 @@ from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGate
 
 class CreatePaytabsPaymentSerializer(serializers.Serializer):
     subscription_id = serializers.IntegerField()
+    plan_id = serializers.IntegerField(required=False, allow_null=True)
+    billing_cycle = serializers.ChoiceField(
+        choices=['monthly', 'yearly'],
+        required=False,
+        allow_null=True
+    )
 
 
 class PlanSerializer(serializers.ModelSerializer):

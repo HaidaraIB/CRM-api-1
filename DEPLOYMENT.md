@@ -357,6 +357,69 @@ sudo chmod -R 755 /var/www/crm-api
 sudo chmod 600 /var/www/crm-api/.env  # حماية ملف .env
 ```
 
+## إعداد المهام المجدولة (Cron Jobs)
+
+### إيقاف الاشتراكات المنتهية تلقائياً
+
+لإيقاف الاشتراكات التي انتهت صلاحيتها تلقائياً، قم بإعداد cron job:
+
+#### 1. فتح crontab
+```bash
+crontab -e
+```
+
+#### 2. إضافة المهام المجدولة
+اختر أحد الخيارات التالية:
+
+**إيقاف الاشتراكات المنتهية - تشغيل كل ساعة:**
+```bash
+0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py end_expired_subscriptions >> /var/log/crm-api-subscriptions.log 2>&1
+```
+
+**إيقاف الاشتراكات المنتهية - تشغيل كل 15 دقيقة (موصى به للدقة):**
+```bash
+*/15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py end_expired_subscriptions >> /var/log/crm-api-subscriptions.log 2>&1
+```
+
+**إيقاف الاشتراكات المنتهية - تشغيل كل يوم في منتصف الليل:**
+```bash
+0 0 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py end_expired_subscriptions >> /var/log/crm-api-subscriptions.log 2>&1
+```
+
+**إرسال تذكيرات التجديد - تشغيل يومياً في الساعة 9 صباحاً:**
+```bash
+0 9 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_subscription_reminders >> /var/log/crm-api-reminders.log 2>&1
+```
+
+**إرسال تذكيرات التجديد - تشغيل مرتين يومياً (9 صباحاً و 6 مساءً):**
+```bash
+0 9,18 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_subscription_reminders >> /var/log/crm-api-reminders.log 2>&1
+```
+
+#### 3. اختبار الأوامر يدوياً
+```bash
+cd /var/www/crm-api
+source venv/bin/activate
+
+# اختبار إيقاف الاشتراكات المنتهية
+python manage.py end_expired_subscriptions --dry-run  # للاختبار فقط
+python manage.py end_expired_subscriptions  # للتطبيق الفعلي
+
+# اختبار إرسال تذكيرات التجديد
+python manage.py send_subscription_reminders --dry-run  # للاختبار فقط
+python manage.py send_subscription_reminders  # للإرسال الفعلي
+python manage.py send_subscription_reminders --days-before 3 --verbose  # مع خيارات إضافية
+```
+
+#### 4. مراقبة السجلات
+```bash
+# سجلات إيقاف الاشتراكات
+tail -f /var/log/crm-api-subscriptions.log
+
+# سجلات تذكيرات التجديد
+tail -f /var/log/crm-api-reminders.log
+```
+
 ## صيانة وتحديثات
 
 ### تحديث المشروع
