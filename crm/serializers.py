@@ -5,7 +5,7 @@ from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber
 
 class ClientPhoneNumberSerializer(serializers.ModelSerializer):
     """Serializer for client phone numbers"""
-    
+
     class Meta:
         model = ClientPhoneNumber
         fields = [
@@ -22,8 +22,12 @@ class ClientPhoneNumberSerializer(serializers.ModelSerializer):
 
 class ClientSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
-    assigned_to_username = serializers.CharField(source="assigned_to.username", read_only=True)
-    communication_way_name = serializers.CharField(source="communication_way.name", read_only=True)
+    assigned_to_username = serializers.CharField(
+        source="assigned_to.username", read_only=True
+    )
+    communication_way_name = serializers.CharField(
+        source="communication_way.name", read_only=True
+    )
     status_name = serializers.CharField(source="status.name", read_only=True)
     phone_numbers = ClientPhoneNumberSerializer(many=True, read_only=True)
 
@@ -57,9 +61,9 @@ class ClientSerializer(serializers.ModelSerializer):
             company_id = None
             if self.instance and self.instance.company_id:
                 company_id = self.instance.company_id
-            elif hasattr(self, 'initial_data'):
-                company_id = self.initial_data.get('company')
-            
+            elif hasattr(self, "initial_data"):
+                company_id = self.initial_data.get("company")
+
             if company_id and value.company_id != company_id:
                 raise serializers.ValidationError(
                     "Communication way must belong to the same company as the client."
@@ -73,9 +77,9 @@ class ClientSerializer(serializers.ModelSerializer):
             company_id = None
             if self.instance and self.instance.company_id:
                 company_id = self.instance.company_id
-            elif hasattr(self, 'initial_data'):
-                company_id = self.initial_data.get('company')
-            
+            elif hasattr(self, "initial_data"):
+                company_id = self.initial_data.get("company")
+
             if company_id and value.company_id != company_id:
                 raise serializers.ValidationError(
                     "Status must belong to the same company as the client."
@@ -84,33 +88,33 @@ class ClientSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """Create client and handle phone numbers"""
-        phone_numbers_data = self.initial_data.get('phone_numbers', [])
+        phone_numbers_data = self.initial_data.get("phone_numbers", [])
         client = Client.objects.create(**validated_data)
-        
+
         # Create phone numbers if provided
         if phone_numbers_data:
             for phone_data in phone_numbers_data:
                 ClientPhoneNumber.objects.create(client=client, **phone_data)
-        elif validated_data.get('phone_number'):
+        elif validated_data.get("phone_number"):
             # If old phone_number field is provided, create a primary phone number
             ClientPhoneNumber.objects.create(
                 client=client,
-                phone_number=validated_data['phone_number'],
-                phone_type='mobile',
-                is_primary=True
+                phone_number=validated_data["phone_number"],
+                phone_type="mobile",
+                is_primary=True,
             )
-        
+
         return client
 
     def update(self, instance, validated_data):
         """Update client and handle phone numbers"""
-        phone_numbers_data = self.initial_data.get('phone_numbers', None)
-        
+        phone_numbers_data = self.initial_data.get("phone_numbers", None)
+
         # Update client fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-        
+
         # Update phone numbers if provided
         if phone_numbers_data is not None:
             # Delete existing phone numbers
@@ -118,23 +122,28 @@ class ClientSerializer(serializers.ModelSerializer):
             # Create new phone numbers
             for phone_data in phone_numbers_data:
                 ClientPhoneNumber.objects.create(client=instance, **phone_data)
-        elif validated_data.get('phone_number') and not instance.phone_numbers.exists():
+        elif validated_data.get("phone_number") and not instance.phone_numbers.exists():
             # If old phone_number field is provided and no phone numbers exist, create one
             ClientPhoneNumber.objects.create(
                 client=instance,
-                phone_number=validated_data['phone_number'],
-                phone_type='mobile',
-                is_primary=True
+                phone_number=validated_data["phone_number"],
+                phone_type="mobile",
+                is_primary=True,
             )
-        
+
         return instance
 
 
 class ClientListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     company_name = serializers.CharField(source="company.name", read_only=True)
-    assigned_to_username = serializers.CharField(source="assigned_to.username", read_only=True)
-    communication_way_name = serializers.CharField(source="communication_way.name", read_only=True)
+    assigned_to_username = serializers.CharField(
+        source="assigned_to.username", read_only=True
+    )
+    communication_way_name = serializers.CharField(
+        source="communication_way.name", read_only=True
+    )
     status_name = serializers.CharField(source="status.name", read_only=True)
     phone_numbers = ClientPhoneNumberSerializer(many=True, read_only=True)
 
@@ -164,11 +173,22 @@ class ClientListSerializer(serializers.ModelSerializer):
 class DealSerializer(serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
-    employee_username = serializers.CharField(source="employee.username", read_only=True)
-    started_by_username = serializers.CharField(source="started_by.username", read_only=True, allow_null=True)
-    closed_by_username = serializers.CharField(source="closed_by.username", read_only=True, allow_null=True)
-    unit_code = serializers.CharField(source="unit.code", read_only=True, allow_null=True)
-    project_name = serializers.CharField(source="project.name", read_only=True, allow_null=True)
+    employee_username = serializers.CharField(
+        source="employee.username", read_only=True
+    )
+    started_by_username = serializers.CharField(
+        source="started_by.username", read_only=True, allow_null=True
+    )
+    closed_by_username = serializers.CharField(
+        source="closed_by.username", read_only=True, allow_null=True
+    )
+    unit_code = serializers.CharField(
+        source="unit.code", read_only=True, allow_null=True
+    )
+    project_name = serializers.CharField(
+        source="project.name", read_only=True, allow_null=True
+    )
+
     class Meta:
         model = Deal
         fields = [
@@ -203,16 +223,85 @@ class DealSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
+    def to_internal_value(self, data):
+        """Convert camelCase to snake_case before validation"""
+        # Create a mutable copy of data
+        if hasattr(data, "copy"):
+            # QueryDict or similar
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = dict(data)
+        else:
+            # Fallback: convert to dict
+            data = dict(data) if data else {}
+
+        # Handle camelCase fields and convert to snake_case
+        # Only convert if snake_case version doesn't exist
+        if "startedBy" in data and "started_by" not in data:
+            data["started_by"] = data.pop("startedBy")
+        elif "startedBy" in data:
+            # Remove camelCase if snake_case exists
+            data.pop("startedBy", None)
+
+        if "closedBy" in data and "closed_by" not in data:
+            data["closed_by"] = data.pop("closedBy")
+        elif "closedBy" in data:
+            data.pop("closedBy", None)
+
+        if "startDate" in data and "start_date" not in data:
+            data["start_date"] = data.pop("startDate")
+        elif "startDate" in data:
+            data.pop("startDate", None)
+
+        if "closedDate" in data and "closed_date" not in data:
+            data["closed_date"] = data.pop("closedDate")
+        elif "closedDate" in data:
+            data.pop("closedDate", None)
+
+        if "paymentMethod" in data and "payment_method" not in data:
+            data["payment_method"] = data.pop("paymentMethod")
+        elif "paymentMethod" in data:
+            data.pop("paymentMethod", None)
+
+        return super().to_internal_value(data)
+
+    def create(self, validated_data):
+        """Create deal and ensure started_by and closed_by are set"""
+        # If started_by is not provided, set it to the current user
+        if (
+            "started_by" not in validated_data
+            or validated_data.get("started_by") is None
+        ):
+            validated_data["started_by"] = self.context["request"].user
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        """Update deal"""
+        return super().update(instance, validated_data)
+
 
 class DealListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     client_name = serializers.CharField(source="client.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
-    employee_username = serializers.CharField(source="employee.username", read_only=True, allow_null=True)
-    started_by_username = serializers.CharField(source="started_by.username", read_only=True, allow_null=True)
-    closed_by_username = serializers.CharField(source="closed_by.username", read_only=True, allow_null=True)
-    unit_code = serializers.CharField(source="unit.code", read_only=True, allow_null=True)
-    project_name = serializers.CharField(source="project.name", read_only=True, allow_null=True)
+    employee_username = serializers.CharField(
+        source="employee.username", read_only=True, allow_null=True
+    )
+    started_by_username = serializers.CharField(
+        source="started_by.username", read_only=True, allow_null=True
+    )
+    closed_by_username = serializers.CharField(
+        source="closed_by.username", read_only=True, allow_null=True
+    )
+    unit_code = serializers.CharField(
+        source="unit.code", read_only=True, allow_null=True
+    )
+    project_name = serializers.CharField(
+        source="project.name", read_only=True, allow_null=True
+    )
+
     class Meta:
         model = Deal
         fields = [
@@ -251,8 +340,12 @@ class DealListSerializer(serializers.ModelSerializer):
 class TaskSerializer(serializers.ModelSerializer):
     deal_client_name = serializers.CharField(source="deal.client.name", read_only=True)
     deal_stage = serializers.CharField(source="deal.stage", read_only=True)
-    deal_employee_username = serializers.CharField(source="deal.employee.username", read_only=True, allow_null=True)
-    stage_name = serializers.CharField(source="stage.name", read_only=True)
+    deal_employee_username = serializers.CharField(
+        source="deal.employee.username", read_only=True, allow_null=True
+    )
+    stage_name = serializers.CharField(
+        source="stage.name", read_only=True, allow_null=True, allow_blank=True
+    )
 
     class Meta:
         model = Task
@@ -271,33 +364,14 @@ class TaskSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
-    def validate_stage(self, value):
-        """Ensure stage belongs to the same company as the deal"""
-        if value:
-            # Get deal from instance or initial_data
-            deal = None
-            if self.instance and self.instance.deal_id:
-                deal = self.instance.deal
-            elif hasattr(self, 'initial_data'):
-                deal_id = self.initial_data.get('deal')
-                if deal_id:
-                    from .models import Deal
-                    try:
-                        deal = Deal.objects.get(pk=deal_id)
-                    except Deal.DoesNotExist:
-                        pass
-            
-            if deal and value.company_id != deal.company_id:
-                raise serializers.ValidationError(
-                    "Stage must belong to the same company as the deal."
-                )
-        return value
-
 
 class TaskListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     deal_client_name = serializers.CharField(source="deal.client.name", read_only=True)
-    deal_employee_username = serializers.CharField(source="deal.employee.username", read_only=True, allow_null=True)
+    deal_employee_username = serializers.CharField(
+        source="deal.employee.username", read_only=True, allow_null=True
+    )
     stage_name = serializers.CharField(source="stage.name", read_only=True)
 
     class Meta:
@@ -337,6 +411,7 @@ class CampaignSerializer(serializers.ModelSerializer):
 
 class CampaignListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     company_name = serializers.CharField(source="company.name", read_only=True)
 
     class Meta:
@@ -356,7 +431,9 @@ class CampaignListSerializer(serializers.ModelSerializer):
 @extend_schema_serializer(component_name="ClientTask")
 class ClientTaskSerializer(serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True)
-    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
     stage_name = serializers.CharField(source="stage.name", read_only=True)
 
     class Meta:
@@ -383,15 +460,16 @@ class ClientTaskSerializer(serializers.ModelSerializer):
             client = None
             if self.instance and self.instance.client_id:
                 client = self.instance.client
-            elif hasattr(self, 'initial_data'):
-                client_id = self.initial_data.get('client')
+            elif hasattr(self, "initial_data"):
+                client_id = self.initial_data.get("client")
                 if client_id:
                     from .models import Client
+
                     try:
                         client = Client.objects.get(pk=client_id)
                     except Client.DoesNotExist:
                         pass
-            
+
             if client and value.company_id != client.company_id:
                 raise serializers.ValidationError(
                     "Stage must belong to the same company as the client."
@@ -401,8 +479,11 @@ class ClientTaskSerializer(serializers.ModelSerializer):
 
 class ClientTaskListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+
     client_name = serializers.CharField(source="client.name", read_only=True)
-    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
     stage_name = serializers.CharField(source="stage.name", read_only=True)
 
     class Meta:
@@ -419,4 +500,3 @@ class ClientTaskListSerializer(serializers.ModelSerializer):
             "created_by_username",
             "created_at",
         ]
-

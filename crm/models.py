@@ -46,6 +46,25 @@ class DealStage(Enum):
         return [(choice.value, choice.name) for choice in cls]
 
 
+class DealStatus(Enum):
+    RESERVATION = "reservation"
+    CONTRACTED = "contracted"
+    CLOSED = "closed"
+
+    @classmethod
+    def choices(cls):
+        return [(choice.value, choice.name) for choice in cls]
+
+
+class DealPaymentMethod(Enum):
+    CASH = "cash"
+    INSTALLMENT = "installment"
+
+    @classmethod
+    def choices(cls):
+        return [(choice.value, choice.name) for choice in cls]
+
+
 class Client(models.Model):
     name = models.CharField(max_length=255)
     priority = models.CharField(max_length=10, choices=Priority.choices())
@@ -70,7 +89,9 @@ class Client(models.Model):
     )
 
     budget = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
-    phone_number = models.CharField(max_length=20, blank=True, null=True)  # Keep for backward compatibility
+    phone_number = models.CharField(
+        max_length=20, blank=True, null=True
+    )  # Keep for backward compatibility
 
     company = models.ForeignKey(
         "companies.Company",
@@ -94,6 +115,7 @@ class Client(models.Model):
 
 class ClientPhoneNumber(models.Model):
     """Model to store multiple phone numbers for a client"""
+
     client = models.ForeignKey(
         Client,
         on_delete=models.CASCADE,
@@ -144,21 +166,66 @@ class Deal(models.Model):
         blank=True,
         null=True,
     )
-    stage = models.CharField(max_length=50, choices=DealStage.choices(), default=DealStage.IN_PROGRESS.value)
+    stage = models.CharField(
+        max_length=50, choices=DealStage.choices(), default=DealStage.IN_PROGRESS.value
+    )
     # Additional fields for deal details
-    payment_method = models.CharField(max_length=50, blank=True, null=True, help_text="Payment method (Cash, Installment, etc.)")
-    status = models.CharField(max_length=50, blank=True, null=True, help_text="Deal status (Reservation, Contracted, Closed, etc.)")
-    value = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True, help_text="Total deal value")
+    payment_method = models.CharField(
+        max_length=50,
+        choices=DealPaymentMethod.choices(),
+        default=DealPaymentMethod.CASH.value,
+        help_text="Payment method (Cash, Installment, etc.)",
+    )
+    status = models.CharField(
+        max_length=50,
+        choices=DealStatus.choices(),
+        default=DealStatus.RESERVATION.value,
+        help_text="Deal status (Reservation, Contracted, Closed, etc.)",
+    )
+    value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        help_text="Total deal value",
+    )
     start_date = models.DateField(blank=True, null=True, help_text="Deal start date")
     closed_date = models.DateField(blank=True, null=True, help_text="Deal closed date")
-    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="Discount percentage")
-    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Discount amount")
-    sales_commission_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text="Sales commission percentage")
-    sales_commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Sales commission amount")
-    description = models.TextField(blank=True, null=True, help_text="Deal description/notes")
+    discount_percentage = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0, help_text="Discount percentage"
+    )
+    discount_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0, help_text="Discount amount"
+    )
+    sales_commission_percentage = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text="Sales commission percentage",
+    )
+    sales_commission_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0, help_text="Sales commission amount"
+    )
+    description = models.TextField(
+        blank=True, null=True, help_text="Deal description/notes"
+    )
     # Real estate specific fields
-    unit = models.CharField(max_length=255, blank=True, null=True, help_text="Unit code (for real estate deals)")
-    project = models.CharField(max_length=255, blank=True, null=True, help_text="Project name (for real estate deals)")
+    unit = models.ForeignKey(
+        "real_estate.Unit",
+        on_delete=models.SET_NULL,
+        related_name="deals",
+        blank=True,
+        null=True,
+        help_text="Unit for real estate deals",
+    )
+    project = models.ForeignKey(
+        "real_estate.Project",
+        on_delete=models.SET_NULL,
+        related_name="deals",
+        blank=True,
+        null=True,
+        help_text="Project for real estate deals",
+    )
     # User tracking
     started_by = models.ForeignKey(
         "accounts.User",
@@ -166,7 +233,7 @@ class Deal(models.Model):
         related_name="started_deals",
         blank=True,
         null=True,
-        help_text="User who started the deal"
+        help_text="User who started the deal",
     )
     closed_by = models.ForeignKey(
         "accounts.User",
@@ -174,7 +241,7 @@ class Deal(models.Model):
         related_name="closed_deals",
         blank=True,
         null=True,
-        help_text="User who closed the deal"
+        help_text="User who closed the deal",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -241,8 +308,8 @@ class ClientTask(models.Model):
 
 
 class Campaign(models.Model):
-    name = models.CharField(max_length=255)
     code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=255)
     budget = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
     company = models.ForeignKey(

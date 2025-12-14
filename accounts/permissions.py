@@ -46,6 +46,27 @@ class IsAdmin(permissions.BasePermission):
         )
 
 
+class IsAdminOrReadOnlyForEmployee(permissions.BasePermission):
+    """
+    Permission class that allows:
+    - Admin: All operations (GET, POST, PUT, DELETE)
+    - Employee: Only GET (read-only) operations
+    """
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        
+        # Admin can do everything
+        if request.user.is_admin():
+            return True
+        
+        # Employee can only do GET requests
+        if request.user.is_employee():
+            return request.method in permissions.SAFE_METHODS
+        
+        return False
+
+
 class IsEmployee(permissions.BasePermission):
     def has_permission(self, request, view):
         return (

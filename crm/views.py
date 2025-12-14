@@ -1,6 +1,6 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription
+from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee
 from .models import Client, Deal, Task, Campaign, ClientTask
 from .serializers import (
     ClientSerializer,
@@ -113,10 +113,11 @@ class CampaignViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Campaign instances.
     Provides CRUD operations: Create, Read, Update, Delete
+    Only Admin can manage campaigns, but employees can read (GET) them
     """
 
     queryset = Campaign.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdmin]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name", "budget"]

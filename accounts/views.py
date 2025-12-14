@@ -67,8 +67,20 @@ class UserViewSet(viewsets.ModelViewSet):
         return queryset.filter(id=user.id)
 
     def perform_create(self, serializer):
-        """Create user and automatically link company owner if user is admin"""
+        """Create user and automatically set company from request user, then link company owner if user is admin"""
+        # Get company from request user (the user creating this new user)
+        request_user = self.request.user
+        company = request_user.company if request_user and request_user.company else None
+        
+        # Set company in the serializer's validated_data if not already set
+        # Note: The serializer has 'company' as SerializerMethodField (read-only),
+        # so we need to set it directly on the model instance after creation
         user = serializer.save()
+        
+        # Set company from request user if not already set
+        if company and not user.company:
+            user.company = company
+            user.save(update_fields=['company'])
         
         # إذا كان المستخدم admin وله company، ربط Company.owner به تلقائياً
         if user.role == Role.ADMIN.value and user.company:
@@ -597,6 +609,41 @@ def request_two_factor_auth(request):
             status=status.HTTP_404_NOT_FOUND
         )
     
+    # Check subscription before sending 2FA code (for all users except Super Admin)
+    if not user.is_super_admin():
+        if user.company:
+            from subscriptions.models import Subscription
+            has_active_subscription = Subscription.objects.filter(
+                company=user.company,
+                is_active=True
+            ).exists()
+            
+            if not has_active_subscription:
+                # Return different error messages for admin vs employee
+                subscription = Subscription.objects.filter(
+                    company=user.company
+                ).order_by('-created_at').first()
+                
+                # Check user role - use role field directly to be sure
+                is_employee_user = user.role == 'employee'
+                
+                if is_employee_user:
+                    # Employees see "account temporarily inactive" message
+                    error_data = {
+                        "error": "Your account is temporarily inactive",
+                        "code": "ACCOUNT_TEMPORARILY_INACTIVE",
+                    }
+                else:
+                    # Admins see subscription inactive message
+                    error_data = {
+                        "error": "Your subscription is not active. Please contact support or complete your payment to access the system.",
+                        "code": "SUBSCRIPTION_INACTIVE",
+                    }
+                    if subscription:
+                        error_data["subscriptionId"] = subscription.id
+                
+                return Response(error_data, status=status.HTTP_403_FORBIDDEN)
+    
     # Create 2FA code
     try:
         expiry_minutes = 10  # 2FA codes expire in 10 minutes
@@ -734,6 +781,52 @@ def verify_two_factor_auth(request):
     
     # Mark as verified
     two_fa.mark_verified()
+    
+    # Check subscription for all users except Super Admin
+    # Super Admin doesn't need active subscription
+    if not user.is_super_admin():
+        from subscriptions.models import Subscription
+        
+        # Check if user has a company
+        if not user.company:
+            # User without company cannot login (except super admin)
+            error_data = {
+                "error": "Your account is not associated with a company. Please contact support.",
+                "code": "NO_COMPANY",
+            }
+            return Response(error_data, status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if company has an active subscription
+        has_active_subscription = Subscription.objects.filter(
+            company=user.company,
+            is_active=True
+        ).exists()
+        
+        if not has_active_subscription:
+            # Return different error messages for admin vs employee
+            subscription = Subscription.objects.filter(
+                company=user.company
+            ).order_by('-created_at').first()
+            
+            # Check user role - use role field directly to be sure
+            is_employee_user = user.role == 'employee'
+            
+            if is_employee_user:
+                # Employees see "account temporarily inactive" message
+                error_data = {
+                    "error": "Your account is temporarily inactive",
+                    "code": "ACCOUNT_TEMPORARILY_INACTIVE",
+                }
+            else:
+                # Admins see subscription inactive message
+                error_data = {
+                    "error": "Your subscription is not active. Please contact support or complete your payment to access the system.",
+                    "code": "SUBSCRIPTION_INACTIVE",
+                }
+                if subscription:
+                    error_data["subscriptionId"] = subscription.id
+            
+            return Response(error_data, status=status.HTTP_403_FORBIDDEN)
     
     # Generate JWT tokens
     refresh = RefreshToken.for_user(user)

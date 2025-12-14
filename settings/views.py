@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.http import FileResponse
 from django.db import models
-from accounts.permissions import IsAdmin, IsSuperAdmin, HasActiveSubscription
+from accounts.permissions import IsAdmin, IsSuperAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee
 from .models import (
     Channel,
     LeadStage,
@@ -33,11 +33,11 @@ class ChannelViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Channel instances.
     Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage channels
+    Only Admin can manage channels, but employees can read (GET) them
     """
 
     queryset = Channel.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdmin]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "type", "priority"]
     ordering_fields = ["created_at", "name", "priority"]
@@ -63,11 +63,11 @@ class LeadStageViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing LeadStage instances.
     Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage lead stages
+    Only Admin can manage lead stages, but employees can read (GET) them
     """
 
     queryset = LeadStage.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdmin]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["order", "name", "created_at"]
@@ -97,11 +97,11 @@ class LeadStatusViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing LeadStatus instances.
     Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage lead statuses
+    Only Admin can manage lead statuses, but employees can read (GET) them
     """
 
     queryset = LeadStatus.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdmin]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "category"]
     ordering_fields = ["is_default", "name", "created_at"]

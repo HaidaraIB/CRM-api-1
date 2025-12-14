@@ -14,7 +14,14 @@ class UserSerializer(serializers.ModelSerializer):
     is_me = serializers.SerializerMethodField()
     company_name = serializers.CharField(source="company.name", read_only=True)
     company_specialization = serializers.CharField(source="company.specialization", read_only=True)
-    company = serializers.SerializerMethodField()  # Override to return full company object
+    company = serializers.SerializerMethodField()  # Override to return full company object for reads
+    company_id = serializers.PrimaryKeyRelatedField(
+        queryset=Company.objects.all(),
+        source='company',
+        write_only=True,
+        required=False,
+        allow_null=True
+    )  # Allow writing company via company_id field
     password = serializers.CharField(write_only=True, required=False)
 
     class Meta:
@@ -29,6 +36,7 @@ class UserSerializer(serializers.ModelSerializer):
             "phone",
             "role",
             "company",
+            "company_id",
             "company_name",
             "company_specialization",
             "is_active",
