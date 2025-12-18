@@ -24,6 +24,7 @@ class User(AbstractUser):
     )
     role = models.CharField(max_length=64, choices=Role.choices())
     phone = models.CharField(max_length=20, blank=True, null=True)
+    profile_photo = models.ImageField(upload_to="profile_photos/", null=True, blank=True)
     email_verified = models.BooleanField(default=False)
 
     def __str__(self):
