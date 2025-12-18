@@ -113,6 +113,53 @@ class Client(models.Model):
         return self.name
 
 
+class ClientEvent(models.Model):
+    """Model to store events related to a client (status changes, assignments, etc.)"""
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="events",
+        help_text="The client this event belongs to"
+    )
+    event_type = models.CharField(
+        max_length=50,
+        help_text="Type of event (status_change, assignment, edit, etc.)"
+    )
+    old_value = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Old value before the change"
+    )
+    new_value = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="New value after the change"
+    )
+    notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Additional details about the event"
+    )
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="created_client_events",
+        blank=True,
+        null=True,
+        help_text="User who triggered the event"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "crm_client_event"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.client.name} - {self.event_type} - {self.created_at}"
+
+
 class ClientPhoneNumber(models.Model):
     """Model to store multiple phone numbers for a client"""
 

@@ -1,6 +1,26 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_serializer
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber, ClientEvent
+
+
+class ClientEventSerializer(serializers.ModelSerializer):
+    """Serializer for client events"""
+    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+
+    class Meta:
+        model = ClientEvent
+        fields = [
+            "id",
+            "client",
+            "event_type",
+            "old_value",
+            "new_value",
+            "notes",
+            "created_by",
+            "created_by_username",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
 
 
 class ClientPhoneNumberSerializer(serializers.ModelSerializer):
@@ -109,11 +129,63 @@ class ClientSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         """Update client and handle phone numbers"""
         phone_numbers_data = self.initial_data.get("phone_numbers", None)
+        request = self.context.get('request')
+        user = request.user if request else None
+
+        # Track changes for event logging
+        changes = []
+        
+        if 'status' in validated_data:
+            new_status = validated_data['status']
+            if instance.status != new_status:
+                old_status_name = instance.status.name if instance.status else "None"
+                new_status_name = new_status.name if new_status else "None"
+                changes.append({
+                    'event_type': 'status_change',
+                    'old_value': old_status_name,
+                    'new_value': new_status_name,
+                    'notes': f"Status changed from {old_status_name} to {new_status_name}"
+                })
+
+        if 'assigned_to' in validated_data:
+            new_assigned = validated_data['assigned_to']
+            if instance.assigned_to != new_assigned:
+                old_assigned_name = instance.assigned_to.username if instance.assigned_to else "None"
+                new_assigned_name = new_assigned.username if new_assigned else "None"
+                changes.append({
+                    'event_type': 'assignment',
+                    'old_value': old_assigned_name,
+                    'new_value': new_assigned_name,
+                    'notes': f"Assigned to {new_assigned_name} (was {old_assigned_name})"
+                })
+
+        # Generic edit detection for other important fields
+        other_fields = ['name', 'priority', 'type', 'budget', 'communication_way']
+        for field in other_fields:
+            if field in validated_data and getattr(instance, field) != validated_data[field]:
+                field_name = field.replace('_', ' ').capitalize()
+                changes.append({
+                    'event_type': 'edit',
+                    'old_value': str(getattr(instance, field)),
+                    'new_value': str(validated_data[field]),
+                    'notes': f"{field_name} updated"
+                })
 
         # Update client fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        # Create event logs
+        for change in changes:
+            ClientEvent.objects.create(
+                client=instance,
+                event_type=change['event_type'],
+                old_value=change['old_value'],
+                new_value=change['new_value'],
+                notes=change['notes'],
+                created_by=user
+            )
 
         # Update phone numbers if provided
         if phone_numbers_data is not None:

@@ -48,6 +48,7 @@ from crm.views import (
     TaskViewSet,
     CampaignViewSet,
     ClientTaskViewSet,
+    ClientEventViewSet,
 )
 from settings.views import (
     ChannelViewSet,
@@ -85,6 +86,7 @@ router.register(r"companies", CompanyViewSet, basename="company")
 
 router.register(r"clients", ClientViewSet, basename="client")
 router.register(r"client-tasks", ClientTaskViewSet, basename="clienttask")
+router.register(r"client-events", ClientEventViewSet, basename="clientevent")
 
 router.register(r"deals", DealViewSet, basename="deal")
 router.register(r"tasks", TaskViewSet, basename="task")

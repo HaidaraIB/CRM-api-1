@@ -1,7 +1,10 @@
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee
-from .models import Client, Deal, Task, Campaign, ClientTask
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientEvent
+from accounts.models import User
 from .serializers import (
     ClientSerializer,
     ClientListSerializer,
@@ -13,6 +16,7 @@ from .serializers import (
     CampaignListSerializer,
     ClientTaskSerializer,
     ClientTaskListSerializer,
+    ClientEventSerializer,
 )
 
 
@@ -45,6 +49,64 @@ class ClientViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return ClientListSerializer
         return ClientSerializer
+
+    @action(detail=False, methods=["post"])
+    def bulk_assign(self, request):
+        """
+        Assign multiple clients to a specific user
+        POST /api/clients/bulk_assign/
+        Body: { "client_ids": [1, 2, 3], "user_id": 4 }
+        """
+        client_ids = request.data.get("client_ids", [])
+        user_id = request.data.get("user_id")
+
+        if not client_ids or not user_id:
+            return Response(
+                {"error": "Both client_ids and user_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            target_user = User.objects.get(pk=user_id, company=request.user.company)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found or does not belong to your company."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Only admins can bulk assign leads
+        if not request.user.is_admin():
+            return Response(
+                {"error": "Only admins can assign leads."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        clients_to_update = Client.objects.filter(
+            id__in=client_ids, company=request.user.company
+        )
+        
+        updated_count = 0
+        for client in clients_to_update:
+            old_assigned_name = client.assigned_to.username if client.assigned_to else "None"
+            if client.assigned_to != target_user:
+                client.assigned_to = target_user
+                client.save()
+                updated_count += 1
+                
+                # Record the event
+                ClientEvent.objects.create(
+                    client=client,
+                    event_type='assignment',
+                    old_value=old_assigned_name,
+                    new_value=target_user.username,
+                    notes=f"Bulk assigned to {target_user.username} (was {old_assigned_name})",
+                    created_by=request.user
+                )
+
+        return Response(
+            {"message": f"Successfully assigned {updated_count} leads."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class DealViewSet(viewsets.ModelViewSet):
@@ -223,3 +285,35 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return ClientTaskListSerializer
         return ClientTaskSerializer
+
+
+class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for viewing ClientEvent instances.
+    Provides read-only access to events.
+    """
+
+    queryset = ClientEvent.objects.all()
+    serializer_class = ClientEventSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["event_type", "notes", "client__name"]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+        
+        # Filter by client ID if provided in query params
+        client_id = self.request.query_params.get('client', None)
+        if client_id:
+            queryset = queryset.filter(client_id=client_id)
+
+        if user.is_admin():
+            return queryset.filter(client__company=user.company)
+
+        if user.is_employee():
+            return queryset.filter(client__assigned_to=user)
+
+        return queryset.none()
