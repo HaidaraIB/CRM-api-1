@@ -24,9 +24,24 @@ python manage.py migrate
 python manage.py setup_reassign_schedule
 ```
 
-### 5. تشغيل Django Q Worker
-يجب تشغيل Django Q Worker في عملية منفصلة لتنفيذ المهام المجدولة:
+### 5. تشغيل مهمة إعادة التعيين
 
+لديك خياران:
+
+#### الخيار 1: استخدام Cron (موصى به - أبسط)
+إذا كان لديك بالفعل cron jobs أخرى، استخدم cron:
+
+```bash
+# إضافة cron job (كل ساعة)
+crontab -e
+
+# أضف هذا السطر (عدّل المسارات):
+0 * * * * cd /path/to/your/CRM-api-1 && /path/to/venv/bin/python manage.py run_reassign_task >> /var/log/crm_reassign.log 2>&1
+```
+
+**للتفاصيل الكاملة، راجع:** `CRON_SETUP.md`
+
+#### الخيار 2: استخدام Django Q2
 **في بيئة التطوير (Terminal منفصل):**
 ```bash
 python manage.py qcluster
@@ -34,6 +49,9 @@ python manage.py qcluster
 
 **في بيئة الإنتاج:**
 يجب إضافة Django Q Worker كخدمة (service) أو process manager (مثل supervisor أو systemd).
+
+**للتفاصيل الكاملة حول النشر على Ubuntu VPS، راجع:**
+`DEPLOY_QCLUSTER_UBUNTU.md`
 
 ## كيفية عمل النظام
 

@@ -392,7 +392,8 @@ WHATSAPP_REDIRECT_URI = (
 )
 
 # ==================== Django Q2 Settings ====================
-# Django Q2 configuration for scheduled tasks
+# Django Q2 configuration for scheduled tasks (Optional - can use cron instead)
+# If using cron, you can remove django-q2 from INSTALLED_APPS and this config
 Q_CLUSTER = {
     'name': 'CRM_Queue',
     'workers': 4,
@@ -405,3 +406,8 @@ Q_CLUSTER = {
     'catch_up': False,  # Don't run missed scheduled tasks
     'sync': False,  # Use async processing
 }
+
+# Note: If using cron instead of django-q2, you can:
+# 1. Remove 'django_q' from INSTALLED_APPS
+# 2. Remove django-q2 from requirements.txt
+# 3. Use: python manage.py run_reassign_task in cron
