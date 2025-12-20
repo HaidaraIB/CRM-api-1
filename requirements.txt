@@ -8,3 +8,4 @@ django-cors-headers
 requests
 gunicorn
 Pillow
+django-q2

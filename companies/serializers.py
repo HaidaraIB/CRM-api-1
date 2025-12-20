@@ -16,6 +16,9 @@ class CompanySerializer(serializers.ModelSerializer):
             "owner",
             "owner_username",
             "owner_email",
+            "auto_assign_enabled",
+            "re_assign_enabled",
+            "re_assign_hours",
             "created_at",
             "updated_at",
         ]

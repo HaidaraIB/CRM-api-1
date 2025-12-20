@@ -109,6 +109,16 @@ class ClientSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Create client and handle phone numbers"""
         phone_numbers_data = self.initial_data.get("phone_numbers", [])
+        
+        # Don't auto-assign to current user unless explicitly provided or auto_assign is enabled
+        # The signal will handle auto-assignment if enabled
+        # Only set assigned_to if it's explicitly provided in the request
+        request = self.context.get('request')
+        if request and 'assigned_to' not in validated_data:
+            # If assigned_to is not provided, set it to None
+            # The auto_assign signal will handle assignment if enabled
+            validated_data['assigned_to'] = None
+        
         client = Client.objects.create(**validated_data)
 
         # Create phone numbers if provided
@@ -150,13 +160,27 @@ class ClientSerializer(serializers.ModelSerializer):
         if 'assigned_to' in validated_data:
             new_assigned = validated_data['assigned_to']
             if instance.assigned_to != new_assigned:
-                old_assigned_name = instance.assigned_to.username if instance.assigned_to else "None"
-                new_assigned_name = new_assigned.username if new_assigned else "None"
+                # Use "Unassigned" instead of "None" for better display
+                old_assigned_name = instance.assigned_to.get_full_name() or instance.assigned_to.username if instance.assigned_to else "Unassigned"
+                new_assigned_name = new_assigned.get_full_name() or new_assigned.username if new_assigned else "Unassigned"
+                # Update assigned_at when assignment changes
+                from django.utils import timezone
+                validated_data['assigned_at'] = timezone.now()
+                
+                # Format notes based on assignment/unassignment
+                if new_assigned:
+                    if instance.assigned_to:
+                        notes = f"Assigned to {new_assigned_name} (was {old_assigned_name})"
+                    else:
+                        notes = f"Assigned to {new_assigned_name}"
+                else:
+                    notes = f"Unassigned (was {old_assigned_name})"
+                
                 changes.append({
                     'event_type': 'assignment',
                     'old_value': old_assigned_name,
                     'new_value': new_assigned_name,
-                    'notes': f"Assigned to {new_assigned_name} (was {old_assigned_name})"
+                    'notes': notes
                 })
 
         # Generic edit detection for other important fields

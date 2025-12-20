@@ -24,6 +24,20 @@ class Company(models.Model):
     # Track if registration was completed (payment made)
     registration_completed = models.BooleanField(default=False)
     registration_completed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Auto assignment settings
+    auto_assign_enabled = models.BooleanField(
+        default=False,
+        help_text="توزيع العملاء على الموظفين حسب النشاط"
+    )
+    re_assign_enabled = models.BooleanField(
+        default=False,
+        help_text="تعيين موظف جديد للعميل في حال لم يتواصل معه الموظف الحالي خلال فترة محددة"
+    )
+    re_assign_hours = models.IntegerField(
+        default=24,
+        help_text="عدد الساعات قبل إعادة تعيين العميل (افتراضي: 24 ساعة)"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -202,6 +202,7 @@ INSTALLED_APPS = [
     "integrations",
     "drf_spectacular",
     "drf_spectacular_sidecar",
+    "django_q",
 ]
 
 MIDDLEWARE = [
@@ -389,3 +390,18 @@ WHATSAPP_CLIENT_SECRET = os.getenv("WHATSAPP_CLIENT_SECRET", META_CLIENT_SECRET)
 WHATSAPP_REDIRECT_URI = (
     f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/whatsapp/"
 )
+
+# ==================== Django Q2 Settings ====================
+# Django Q2 configuration for scheduled tasks
+Q_CLUSTER = {
+    'name': 'CRM_Queue',
+    'workers': 4,
+    'recycle': 500,
+    'timeout': 60,
+    'retry': 120,
+    'queue_limit': 50,
+    'bulk': 10,
+    'orm': 'default',  # Use Django ORM for task storage
+    'catch_up': False,  # Don't run missed scheduled tasks
+    'sync': False,  # Use async processing
+}

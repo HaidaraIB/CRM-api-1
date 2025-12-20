@@ -51,27 +51,95 @@ class ClientViewSet(viewsets.ModelViewSet):
         return ClientSerializer
 
     @action(detail=False, methods=["post"])
+    def assign_unassigned(self, request):
+        """
+        Auto-assign all unassigned clients for companies with auto_assign_enabled
+        POST /api/clients/assign_unassigned/
+        """
+        from crm.signals import get_least_busy_employee
+        from django.utils import timezone
+        
+        user = request.user
+        company = user.company
+        
+        if not company:
+            return Response(
+                {"error": "You must belong to a company."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Only admins can trigger this
+        if not user.is_admin():
+            return Response(
+                {"error": "Only admins can assign unassigned clients."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        # Get unassigned clients for this company
+        unassigned_clients = Client.objects.filter(
+            company=company,
+            assigned_to__isnull=True
+        )
+        
+        if not unassigned_clients.exists():
+            return Response({
+                "message": "No unassigned clients found.",
+                "assigned_count": 0
+            })
+        
+        # Only assign if auto_assign is enabled
+        if not company.auto_assign_enabled:
+            return Response({
+                "message": "Auto assign is not enabled for your company.",
+                "assigned_count": 0
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get the least busy employee
+        employee = get_least_busy_employee(company)
+        
+        if not employee:
+            return Response({
+                "error": "No active employees found in your company.",
+                "assigned_count": 0
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        assigned_count = 0
+        for client in unassigned_clients:
+            client.assigned_to = employee
+            client.assigned_at = timezone.now()
+            client.save(update_fields=['assigned_to', 'assigned_at'])
+            
+            # Record the event
+            ClientEvent.objects.create(
+                client=client,
+                event_type='assignment',
+                old_value="Unassigned",
+                new_value=employee.get_full_name() or employee.username,
+                notes=f"Auto-assigned to {employee.get_full_name() or employee.username}",
+                created_by=user
+            )
+            assigned_count += 1
+        
+        return Response({
+            "message": f"Successfully assigned {assigned_count} client(s) to {employee.get_full_name() or employee.username}.",
+            "assigned_count": assigned_count,
+            "assigned_to": employee.get_full_name() or employee.username
+        })
+
+    @action(detail=False, methods=["post"])
     def bulk_assign(self, request):
         """
-        Assign multiple clients to a specific user
+        Assign multiple clients to a specific user or unassign them
         POST /api/clients/bulk_assign/
-        Body: { "client_ids": [1, 2, 3], "user_id": 4 }
+        Body: { "client_ids": [1, 2, 3], "user_id": 4 } or { "client_ids": [1, 2, 3], "user_id": null }
         """
         client_ids = request.data.get("client_ids", [])
         user_id = request.data.get("user_id")
 
-        if not client_ids or not user_id:
+        if not client_ids:
             return Response(
-                {"error": "Both client_ids and user_id are required."},
+                {"error": "client_ids is required."},
                 status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            target_user = User.objects.get(pk=user_id, company=request.user.company)
-        except User.DoesNotExist:
-            return Response(
-                {"error": "User not found or does not belong to your company."},
-                status=status.HTTP_404_NOT_FOUND,
             )
 
         # Only admins can bulk assign leads
@@ -81,30 +149,60 @@ class ClientViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Handle unassign (user_id is None or null)
+        if user_id is None:
+            target_user = None
+            new_assigned_name = "Unassigned"
+        else:
+            try:
+                target_user = User.objects.get(pk=user_id, company=request.user.company)
+                new_assigned_name = target_user.get_full_name() or target_user.username
+            except User.DoesNotExist:
+                return Response(
+                    {"error": "User not found or does not belong to your company."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
         clients_to_update = Client.objects.filter(
             id__in=client_ids, company=request.user.company
         )
         
+        from django.utils import timezone
+        
         updated_count = 0
         for client in clients_to_update:
-            old_assigned_name = client.assigned_to.username if client.assigned_to else "None"
+            old_assigned_name = client.assigned_to.get_full_name() or client.assigned_to.username if client.assigned_to else "Unassigned"
+            
+            # Check if assignment actually changed
             if client.assigned_to != target_user:
                 client.assigned_to = target_user
-                client.save()
+                if target_user:
+                    client.assigned_at = timezone.now()
+                else:
+                    # When unassigning, clear assigned_at
+                    client.assigned_at = None
+                client.save(update_fields=['assigned_to', 'assigned_at'])
                 updated_count += 1
+                
+                # Format notes based on assignment/unassignment
+                if target_user:
+                    notes = f"Bulk assigned to {new_assigned_name} (was {old_assigned_name})"
+                else:
+                    notes = f"Unassigned (was {old_assigned_name})"
                 
                 # Record the event
                 ClientEvent.objects.create(
                     client=client,
                     event_type='assignment',
                     old_value=old_assigned_name,
-                    new_value=target_user.username,
-                    notes=f"Bulk assigned to {target_user.username} (was {old_assigned_name})",
+                    new_value=new_assigned_name,
+                    notes=notes,
                     created_by=request.user
                 )
 
+        action_text = "assigned" if target_user else "unassigned"
         return Response(
-            {"message": f"Successfully assigned {updated_count} leads."},
+            {"message": f"Successfully {action_text} {updated_count} lead(s)."},
             status=status.HTTP_200_OK,
         )
 

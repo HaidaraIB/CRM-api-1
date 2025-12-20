@@ -107,6 +107,9 @@ class UserSerializer(serializers.ModelSerializer):
             "specialization": company.specialization,
             "registration_completed": company.registration_completed,
             "registration_completed_at": company.registration_completed_at.isoformat() if company.registration_completed_at else None,
+            "auto_assign_enabled": company.auto_assign_enabled,
+            "re_assign_enabled": company.re_assign_enabled,
+            "re_assign_hours": company.re_assign_hours,
         }
         
         if subscription:

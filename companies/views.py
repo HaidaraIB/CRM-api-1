@@ -1,4 +1,6 @@
-from rest_framework import viewsets, filters
+from rest_framework import viewsets, filters, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Company
 from .serializers import CompanySerializer, CompanyListSerializer
@@ -56,3 +58,53 @@ class CompanyViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return CompanyListSerializer
         return CompanySerializer
+    
+    @action(detail=True, methods=['patch'], permission_classes=[IsAuthenticated])
+    def update_assignment_settings(self, request, pk=None):
+        """
+        Update auto assign and re-assign settings for the company
+        PATCH /api/companies/{id}/update_assignment_settings/
+        Body: {
+            "auto_assign_enabled": true/false,
+            "re_assign_enabled": true/false,
+            "re_assign_hours": 24
+        }
+        """
+        company = self.get_object()
+        user = request.user
+        
+        # Check permissions: user must be admin of this company or super admin
+        if not (user.is_super_admin() or (user.is_admin() and user.company == company)):
+            return Response(
+                {'error': 'You do not have permission to update these settings.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Update settings
+        auto_assign_enabled = request.data.get('auto_assign_enabled')
+        re_assign_enabled = request.data.get('re_assign_enabled')
+        re_assign_hours = request.data.get('re_assign_hours')
+        
+        if auto_assign_enabled is not None:
+            company.auto_assign_enabled = bool(auto_assign_enabled)
+        if re_assign_enabled is not None:
+            company.re_assign_enabled = bool(re_assign_enabled)
+        if re_assign_hours is not None:
+            try:
+                hours = int(re_assign_hours)
+                if hours < 1:
+                    return Response(
+                        {'error': 're_assign_hours must be at least 1 hour.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                company.re_assign_hours = hours
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 're_assign_hours must be a valid integer.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        company.save(update_fields=['auto_assign_enabled', 're_assign_enabled', 're_assign_hours'])
+        
+        serializer = CompanySerializer(company, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)

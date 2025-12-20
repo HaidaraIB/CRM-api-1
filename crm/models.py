@@ -105,6 +105,16 @@ class Client(models.Model):
         blank=True,
         null=True,
     )
+    assigned_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="تاريخ ووقت تعيين العميل للموظف"
+    )
+    last_contacted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="تاريخ ووقت آخر تواصل مع العميل"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
