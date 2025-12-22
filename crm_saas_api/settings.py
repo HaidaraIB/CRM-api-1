@@ -370,6 +370,8 @@ PAYTABS_DOMAIN = os.getenv("PAYTABS_DOMAIN")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 PAYTABS_CALLBACK_URL = f"{API_BASE_URL}/api/payments/paytabs-callback/"
 PAYTABS_RETURN_URL = f"{API_BASE_URL}/api/payments/paytabs-return/"
+# Zain Cash return URL
+ZAINCASH_RETURN_URL = f"{API_BASE_URL}/api/payments/zaincash-return/"
 # Frontend URL for redirects after payment
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 

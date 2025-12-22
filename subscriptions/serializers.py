@@ -12,6 +12,16 @@ class CreatePaytabsPaymentSerializer(serializers.Serializer):
     )
 
 
+class CreateZaincashPaymentSerializer(serializers.Serializer):
+    subscription_id = serializers.IntegerField()
+    plan_id = serializers.IntegerField(required=False, allow_null=True)
+    billing_cycle = serializers.ChoiceField(
+        choices=['monthly', 'yearly'],
+        required=False,
+        allow_null=True
+    )
+
+
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plan

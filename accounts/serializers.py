@@ -360,7 +360,6 @@ class RegisterCompanySerializer(serializers.Serializer):
                     plan=plan,
                     end_date=timezone.now(),  # Temporary, will update below
                     is_active=not requires_payment,  # Inactive if payment required
-                    auto_renew=True,
                 )
                 
                 # Calculate end_date based on billing cycle using the actual start_date

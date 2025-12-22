@@ -66,7 +66,6 @@ def send_email_verification(user, verification, language="en"):
                 f"رمز التحقق: {verification.code}\n"
                 f"رابط التحقق: {verification_link}\n\n"
                 f"ينتهي هذا الرمز في {verification.expires_at.strftime('%Y-%m-%d %H:%M %Z')}.\n\n"
-                f"إذا ضغطت على \"التحقق لاحقاً\" داخل التطبيق، يمكنك دائماً العودة إلى هذا البريد واستخدام الرابط أعلاه.\n\n"
                 f"إذا لم تقم بإنشاء حساب، يمكنك تجاهل هذا البريد الإلكتروني."
             )
             template_name = "accounts/email_verification_ar.html"
@@ -79,7 +78,6 @@ def send_email_verification(user, verification, language="en"):
                 "Verification code: {code}\n"
                 "Verification link: {link}\n\n"
                 "This code expires on {expiry}.\n\n"
-                "If you pressed \"verify later\" inside the app, you can always return to this email and use the link above.\n\n"
                 "If you did not create an account, you can ignore this email."
             ).format(
                 name=greeting_name,

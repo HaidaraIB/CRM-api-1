@@ -73,8 +73,11 @@ from subscriptions.views import (
     BroadcastViewSet,
     PaymentGatewayViewSet,
     PublicPlanListView,
+    PublicPaymentGatewayListView,
     create_paytabs_payment,
     paytabs_return,
+    create_zaincash_payment,
+    zaincash_return,
     check_payment_status,
 )
 from integrations import urls as integrations_urls
@@ -135,6 +138,12 @@ urlpatterns = [
         name="create_paytabs_payment",
     ),
     path("api/payments/paytabs-return/", paytabs_return, name="paytabs_return"),
+    path(
+        "api/payments/create-zaincash-session/",
+        create_zaincash_payment,
+        name="create_zaincash_payment",
+    ),
+    path("api/payments/zaincash-return/", zaincash_return, name="zaincash_return"),
     # Status endpoint - use a path that won't conflict with router
     path(
         "api/payment-status/<int:subscription_id>/",
@@ -162,6 +171,7 @@ urlpatterns = [
     ),
     path("api/auth/verify-2fa/", verify_two_factor_auth, name="verify_two_factor_auth"),
     path("api/public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
+    path("api/public/payment-gateways/", PublicPaymentGatewayListView.as_view(), name="public_payment_gateway_list"),
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     # Integrations URLs
