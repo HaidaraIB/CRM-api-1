@@ -8,6 +8,7 @@ import jwt
 import time
 from django.conf import settings
 from .models import PaymentGateway, PaymentGatewayStatus
+from settings.models import SystemSettings
 
 
 def get_zaincash_gateway():
@@ -71,18 +72,24 @@ def create_zaincash_payment_session(
         api_base_url = "https://test.zaincash.iq"
 
     # Zain Cash expects amount in IQD (Iraqi Dinar)
-    # If amount is in USD, convert to IQD (approximate rate: 1 USD = 1300 IQD)
+    # If amount is in USD, convert to IQD using rate from database
     # Also ensure amount is a number (not string) and meets minimum requirements
     import logging
     logger = logging.getLogger(__name__)
     
-    USD_TO_IQD_RATE = 1300  # Approximate conversion rate
+    # Get USD to IQD rate from database settings
+    try:
+        system_settings = SystemSettings.get_settings()
+        USD_TO_IQD_RATE = float(system_settings.usd_to_iqd_rate)
+    except Exception as e:
+        logger.warning(f"Failed to get USD to IQD rate from database, using default 1300: {e}")
+        USD_TO_IQD_RATE = 1300  # Fallback to default rate
     
     # Check if amount seems to be in USD (typically < 1000 for subscription plans)
     # If amount is less than 1000, assume it's USD and convert to IQD
     if amount < 1000:
         amount_iqd = amount * USD_TO_IQD_RATE
-        logger.info(f"Converting amount from USD {amount} to IQD {amount_iqd}")
+        logger.info(f"Converting amount from USD {amount} to IQD {amount_iqd} (rate: {USD_TO_IQD_RATE})")
     else:
         # Assume already in IQD
         amount_iqd = amount

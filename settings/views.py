@@ -14,6 +14,7 @@ from .models import (
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
+    SystemSettings,
 )
 from .serializers import (
     ChannelSerializer,
@@ -25,6 +26,7 @@ from .serializers import (
     SMTPSettingsSerializer,
     SystemBackupSerializer,
     SystemAuditLogSerializer,
+    SystemSettingsSerializer,
 )
 from .services import create_database_backup, restore_database_backup, delete_backup
 
@@ -228,3 +230,34 @@ class SystemAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     search_fields = ["action", "message"]
     ordering_fields = ["created_at", "action"]
     ordering = ["-created_at"]
+
+
+class SystemSettingsViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing System Settings.
+    Only SuperAdmin can manage system settings.
+    Singleton pattern - only one instance exists.
+    """
+    queryset = SystemSettings.objects.all()
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    serializer_class = SystemSettingsSerializer
+
+    def get_queryset(self):
+        """Return singleton instance"""
+        return SystemSettings.objects.filter(pk=1)
+
+    def get_object(self):
+        """Get or create singleton instance"""
+        return SystemSettings.get_settings()
+
+    def list(self, request, *args, **kwargs):
+        """Override list to return singleton as single item"""
+        instance = SystemSettings.get_settings()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        """Override retrieve to always return singleton"""
+        instance = SystemSettings.get_settings()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)

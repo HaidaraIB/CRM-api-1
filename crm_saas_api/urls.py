@@ -56,6 +56,7 @@ from settings.views import (
     LeadStatusViewSet,
     SystemBackupViewSet,
     SystemAuditLogViewSet,
+    SystemSettingsViewSet,
 )
 from real_estate.views import (
     DeveloperViewSet,
@@ -101,6 +102,9 @@ router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
 router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup")
 router.register(
     r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog"
+)
+router.register(
+    r"settings/system", SystemSettingsViewSet, basename="systemsettings"
 )
 
 router.register(r"developers", DeveloperViewSet, basename="developer")

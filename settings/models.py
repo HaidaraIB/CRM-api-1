@@ -231,3 +231,34 @@ class SystemAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.action} @ {self.created_at:%Y-%m-%d %H:%M:%S}"
+
+
+class SystemSettings(models.Model):
+    """
+    System-wide settings configuration.
+    Only one instance should exist (singleton pattern).
+    """
+    usd_to_iqd_rate = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=1300.00,
+        help_text="USD to IQD conversion rate"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_system_settings"
+        verbose_name = "System Settings"
+        verbose_name_plural = "System Settings"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"System Settings (USD to IQD: {self.usd_to_iqd_rate})"
+
+    @classmethod
+    def get_settings(cls):
+        """Get the system settings instance (singleton)"""
+        settings, created = cls.objects.get_or_create(pk=1)
+        return settings

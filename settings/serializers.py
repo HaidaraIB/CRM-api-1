@@ -8,6 +8,7 @@ from .models import (
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
+    SystemSettings,
 )
 
 
@@ -227,5 +228,20 @@ class SystemAuditLogSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+@extend_schema_serializer(component_name="SystemSettings")
+class SystemSettingsSerializer(serializers.ModelSerializer):
+    """Serializer for System Settings"""
+
+    class Meta:
+        model = SystemSettings
+        fields = [
+            "id",
+            "usd_to_iqd_rate",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
