@@ -1376,24 +1376,78 @@ def zaincash_return(request):
                     f"Payment amount was 0, using default monthly price: {amount}"
                 )
 
-            # Calculate new end date
-            start_date = timezone.now()
-            if billing_cycle == "yearly":
-                end_date = start_date + timedelta(days=365)
+            # Calculate new end date using the same logic as PayTabs and Stripe
+            now = timezone.now()
+            
+            # Check if subscription has any completed payments
+            has_completed_payments = Payment.objects.filter(
+                subscription=subscription,
+                payment_status=PaymentStatus.COMPLETED.value
+            ).exists()
+            
+            # Determine base_date based on subscription state:
+            # 1. Renewal: has completed payments AND end_date is in the future -> extend from end_date
+            # 2. Reactivation: has completed payments BUT end_date is in the past -> start from now
+            # 3. New subscription: no completed payments -> start from now or start_date
+            if has_completed_payments and subscription.end_date and subscription.end_date > now:
+                # This is a renewal - extend from existing end_date
+                base_date = subscription.end_date
+                logger.info(
+                    f"Subscription {subscription.id} is a RENEWAL - extending from end_date ({subscription.end_date.strftime('%Y-%m-%d %H:%M:%S')})"
+                )
+            elif has_completed_payments and (not subscription.end_date or subscription.end_date <= now):
+                # This is a reactivation - subscription expired, start from now
+                base_date = now
+                logger.info(
+                    f"Subscription {subscription.id} is a REACTIVATION (expired) - starting from now ({base_date.strftime('%Y-%m-%d %H:%M:%S')})"
+                )
             else:
-                end_date = start_date + timedelta(days=30)
-
-            # Update subscription
-            subscription.start_date = start_date
-            subscription.end_date = end_date
+                # This is a new subscription (first payment) - start from now or start_date
+                if subscription.start_date and subscription.start_date > now:
+                    base_date = subscription.start_date
+                    logger.info(
+                        f"Subscription {subscription.id} is NEW - using start_date ({subscription.start_date.strftime('%Y-%m-%d %H:%M:%S')})"
+                    )
+                else:
+                    base_date = now
+                    logger.info(
+                        f"Subscription {subscription.id} is NEW - using now ({base_date.strftime('%Y-%m-%d %H:%M:%S')})"
+                    )
+            
+            if billing_cycle == "yearly":
+                new_end_date = base_date + timedelta(days=365)
+            else:
+                new_end_date = base_date + timedelta(days=30)
+            
+            # Update subscription with correct end_date and activate it
+            old_is_active = subscription.is_active
+            old_end_date = subscription.end_date
+            logger.info(f"BEFORE UPDATE - Subscription {subscription.id}: is_active={old_is_active}, "
+                       f"end_date={old_end_date.strftime('%Y-%m-%d %H:%M:%S') if old_end_date else 'None'}")
+            
             subscription.is_active = True
-            subscription.save()
+            subscription.end_date = new_end_date
+            # Only update start_date if it's a new subscription
+            if not subscription.start_date or subscription.start_date <= now:
+                subscription.start_date = now
+            subscription.save(update_fields=['is_active', 'end_date', 'start_date', 'updated_at'])
+            
+            # Refresh from DB to verify update
+            subscription.refresh_from_db()
+            logger.info(f"AFTER UPDATE - Subscription {subscription.id}: is_active={subscription.is_active}, "
+                       f"end_date={subscription.end_date.strftime('%Y-%m-%d %H:%M:%S') if subscription.end_date else 'None'}")
+            
+            logger.info(
+                f"✓ Activated subscription {subscription.id} for company {subscription.company.name if subscription.company else 'None'}. "
+                f"Billing cycle: {billing_cycle}, Amount: {amount}, "
+                f"End date set to: {new_end_date.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
             # Create invoice
             Invoice.objects.create(
                 subscription=subscription,
                 amount=amount,
-                due_date=end_date,
+                due_date=new_end_date,
                 status=InvoiceStatus.PAID.value,
             )
 
