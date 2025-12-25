@@ -372,6 +372,8 @@ PAYTABS_CALLBACK_URL = f"{API_BASE_URL}/api/payments/paytabs-callback/"
 PAYTABS_RETURN_URL = f"{API_BASE_URL}/api/payments/paytabs-return/"
 # Zain Cash return URL
 ZAINCASH_RETURN_URL = f"{API_BASE_URL}/api/payments/zaincash-return/"
+# Stripe return URL
+STRIPE_RETURN_URL = f"{API_BASE_URL}/api/payments/stripe-return/"
 # Frontend URL for redirects after payment
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
@@ -413,3 +415,53 @@ Q_CLUSTER = {
 # 1. Remove 'django_q' from INSTALLED_APPS
 # 2. Remove django-q2 from requirements.txt
 # 3. Use: python manage.py run_reassign_task in cron
+
+# Create logs directory if it doesn't exist
+import os
+logs_dir = BASE_DIR / 'logs'
+os.makedirs(logs_dir, exist_ok=True)
+
+# Logging configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'django.log',
+            'formatter': 'verbose',
+        },
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'subscriptions': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}

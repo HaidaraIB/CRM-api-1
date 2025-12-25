@@ -89,6 +89,29 @@ class Subscription(models.Model):
 
     def __str__(self):
         return f"{self.company.name} - {self.plan.name}"
+    
+    def is_truly_active(self):
+        """
+        Check if subscription is truly active (is_active=True AND end_date > now)
+        """
+        from django.utils import timezone
+        return self.is_active and self.end_date > timezone.now()
+    
+    def days_until_expiry(self):
+        """
+        Calculate days until subscription expires. Returns negative if expired.
+        """
+        from django.utils import timezone
+        from datetime import timedelta
+        delta = self.end_date - timezone.now()
+        return delta.days
+    
+    def is_expiring_soon(self, days_threshold=30):
+        """
+        Check if subscription is expiring within the threshold (default 30 days)
+        """
+        days_left = self.days_until_expiry()
+        return 0 < days_left <= days_threshold
 
 
 class PaymentGateway(models.Model):

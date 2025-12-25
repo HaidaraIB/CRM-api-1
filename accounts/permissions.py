@@ -1,13 +1,15 @@
 from rest_framework import permissions
+from django.utils import timezone
 from subscriptions.models import Subscription
 
 
 class HasActiveSubscription(permissions.BasePermission):
     """
     Permission class to check if user's company has an active subscription.
+    Checks both is_active flag and end_date to ensure subscription is truly active.
     Super Admin is exempt from this check.
     """
-    message = "Your subscription is not active. Please contact support or complete your payment to access the system."
+    message = "Your subscription is not active or has expired. Please contact support or complete your payment to access the system."
     
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
@@ -22,12 +24,28 @@ class HasActiveSubscription(permissions.BasePermission):
             return False
         
         # Check if company has an active subscription
-        has_active_subscription = Subscription.objects.filter(
+        # Must be: is_active=True AND end_date > now
+        now = timezone.now()
+        active_subscription = Subscription.objects.filter(
             company=request.user.company,
-            is_active=True
-        ).exists()
+            is_active=True,
+            end_date__gt=now
+        ).first()
         
-        return has_active_subscription
+        # If subscription exists but end_date has passed, update is_active to False
+        if not active_subscription:
+            # Check if there's a subscription that should be deactivated
+            expired_subscription = Subscription.objects.filter(
+                company=request.user.company,
+                is_active=True,
+                end_date__lte=now
+            ).first()
+            
+            if expired_subscription:
+                expired_subscription.is_active = False
+                expired_subscription.save(update_fields=['is_active', 'updated_at'])
+        
+        return active_subscription is not None
 
 
 class IsSuperAdmin(permissions.BasePermission):

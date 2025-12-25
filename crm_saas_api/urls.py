@@ -79,6 +79,8 @@ from subscriptions.views import (
     paytabs_return,
     create_zaincash_payment,
     zaincash_return,
+    create_stripe_payment,
+    stripe_return,
     check_payment_status,
 )
 from integrations import urls as integrations_urls
@@ -148,6 +150,12 @@ urlpatterns = [
         name="create_zaincash_payment",
     ),
     path("api/payments/zaincash-return/", zaincash_return, name="zaincash_return"),
+    path(
+        "api/payments/create-stripe-session/",
+        create_stripe_payment,
+        name="create_stripe_payment",
+    ),
+    path("api/payments/stripe-return/", stripe_return, name="stripe_return"),
     # Status endpoint - use a path that won't conflict with router
     path(
         "api/payment-status/<int:subscription_id>/",

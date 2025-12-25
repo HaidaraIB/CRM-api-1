@@ -10,3 +10,4 @@ gunicorn
 Pillow
 django-q2
 PyJWT
+stripe
