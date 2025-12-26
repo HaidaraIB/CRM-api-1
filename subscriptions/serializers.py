@@ -32,6 +32,16 @@ class CreateStripePaymentSerializer(serializers.Serializer):
     )
 
 
+class CreateQicardPaymentSerializer(serializers.Serializer):
+    subscription_id = serializers.IntegerField()
+    plan_id = serializers.IntegerField(required=False, allow_null=True)
+    billing_cycle = serializers.ChoiceField(
+        choices=['monthly', 'yearly'],
+        required=False,
+        allow_null=True
+    )
+
+
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plan
@@ -250,6 +260,42 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+    
+    def update(self, instance, validated_data):
+        """
+        Custom update to merge config instead of replacing it completely
+        This ensures we don't lose existing configuration values
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Handle config merging
+        if 'config' in validated_data:
+            new_config = validated_data.pop('config')
+            existing_config = instance.config or {}
+            
+            # Log for debugging
+            logger.info(f"Updating PaymentGateway {instance.id} ({instance.name})")
+            logger.info(f"Existing config: {existing_config}")
+            logger.info(f"New config received: {new_config}")
+            
+            # If new_config is empty dict, keep existing config (don't overwrite)
+            if new_config and isinstance(new_config, dict) and len(new_config) > 0:
+                # Merge new config with existing config
+                # Start with existing config, then update with new values
+                merged_config = {**existing_config, **new_config}
+                # Remove None values but keep empty strings and other falsy values that might be valid
+                cleaned_config = {k: v for k, v in merged_config.items() if v is not None}
+                validated_data['config'] = cleaned_config
+                logger.info(f"Merged config: {cleaned_config}")
+            else:
+                # If new_config is empty, keep existing config
+                logger.info(f"New config is empty, keeping existing config: {existing_config}")
+                # Don't update config field - keep existing
+                # validated_data['config'] is not set, so existing config will be preserved
+        
+        # Update other fields normally
+        return super().update(instance, validated_data)
 
 
 class PaymentGatewayListSerializer(serializers.ModelSerializer):

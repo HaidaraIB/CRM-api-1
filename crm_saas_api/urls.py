@@ -81,6 +81,9 @@ from subscriptions.views import (
     zaincash_return,
     create_stripe_payment,
     stripe_return,
+    create_qicard_payment,
+    qicard_return,
+    qicard_webhook,
     check_payment_status,
 )
 from integrations import urls as integrations_urls
@@ -156,6 +159,13 @@ urlpatterns = [
         name="create_stripe_payment",
     ),
     path("api/payments/stripe-return/", stripe_return, name="stripe_return"),
+    path(
+        "api/payments/create-qicard-session/",
+        create_qicard_payment,
+        name="create_qicard_payment",
+    ),
+    path("api/payments/qicard-return/", qicard_return, name="qicard_return"),
+    path("api/payments/qicard-webhook/", qicard_webhook, name="qicard_webhook"),
     # Status endpoint - use a path that won't conflict with router
     path(
         "api/payment-status/<int:subscription_id>/",
