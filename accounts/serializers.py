@@ -535,6 +535,7 @@ class ResetPasswordSerializer(serializers.Serializer):
 class RequestTwoFactorAuthSerializer(serializers.Serializer):
     """Serializer for requesting 2FA code"""
     username = serializers.CharField(required=True)
+    password = serializers.CharField(required=True, write_only=True)
 
     def validate_username(self, value):
         """Normalize username - can be username or email"""
@@ -542,6 +543,7 @@ class RequestTwoFactorAuthSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         username_or_email = attrs.get("username", "").strip()
+        password = attrs.get("password", "")
         user = None
 
         # Try to find user by email or username
@@ -549,15 +551,19 @@ class RequestTwoFactorAuthSerializer(serializers.Serializer):
             try:
                 user = User.objects.get(email__iexact=username_or_email)
             except User.DoesNotExist:
-                raise serializers.ValidationError({"username": "User not found."})
+                raise serializers.ValidationError({"error": "Invalid credentials."})
         else:
             try:
                 user = User.objects.get(username__iexact=username_or_email)
             except User.DoesNotExist:
-                raise serializers.ValidationError({"username": "User not found."})
+                raise serializers.ValidationError({"error": "Invalid credentials."})
 
         if not user.is_active:
-            raise serializers.ValidationError({"username": "User account is inactive."})
+            raise serializers.ValidationError({"error": "User account is inactive."})
+
+        # Validate password
+        if not user.check_password(password):
+            raise serializers.ValidationError({"error": "Invalid credentials."})
 
         attrs["user"] = user
         return attrs

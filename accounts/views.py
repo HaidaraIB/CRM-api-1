@@ -595,12 +595,30 @@ def request_two_factor_auth(request):
     """
     Request 2FA code - sends email with 2FA code
     POST /api/auth/request-2fa/
-    Body: { username: string }
+    Body: { username: string, password: string }
     Response: { message: string, sent: bool, token: string }
     """
     serializer = RequestTwoFactorAuthSerializer(data=request.data)
     
     if not serializer.is_valid():
+        # Normalize error format - extract error message from serializer errors
+        error_message = None
+        if 'error' in serializer.errors:
+            error_value = serializer.errors['error']
+            if isinstance(error_value, list) and len(error_value) > 0:
+                error_message = error_value[0]
+            elif isinstance(error_value, str):
+                error_message = error_value
+        elif 'username' in serializer.errors:
+            error_value = serializer.errors['username']
+            if isinstance(error_value, list) and len(error_value) > 0:
+                error_message = error_value[0]
+            elif isinstance(error_value, str):
+                error_message = error_value
+        
+        # Return normalized error format
+        if error_message:
+            return Response({"error": error_message}, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     user = serializer.validated_data.get("user")

@@ -3,7 +3,7 @@ from django.db import models
 
 class ProductCategory(models.Model):
     name = models.CharField(max_length=255)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     description = models.TextField(blank=True, null=True)
     parent_category = models.ForeignKey(
         "self",
@@ -22,6 +22,9 @@ class ProductCategory(models.Model):
     class Meta:
         db_table = "product_categories"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_product_category_code_per_company')
+        ]
 
     def __str__(self):
         return self.name
@@ -29,7 +32,7 @@ class ProductCategory(models.Model):
 
 class Product(models.Model):
     name = models.CharField(max_length=255)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     description = models.TextField(blank=True, null=True)
     category = models.ForeignKey(
         ProductCategory, on_delete=models.CASCADE, related_name="products"
@@ -56,6 +59,9 @@ class Product(models.Model):
     class Meta:
         db_table = "products"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_product_code_per_company')
+        ]
 
     def __str__(self):
         return self.name
@@ -63,7 +69,7 @@ class Product(models.Model):
 
 class Supplier(models.Model):
     name = models.CharField(max_length=255)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     phone = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     address = models.TextField(blank=True, null=True)
@@ -79,6 +85,9 @@ class Supplier(models.Model):
     class Meta:
         db_table = "suppliers"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_supplier_code_per_company')
+        ]
 
     def __str__(self):
         return self.name

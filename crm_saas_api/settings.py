@@ -44,6 +44,8 @@ ALLOWED_HOSTS = [
     "localhost",
     "localhost:8000",
     "127.0.0.1",
+    "10.0.2.2",  # Android emulator host IP
+    "192.168.1.101",  # Local network IP for physical device testing
     "haidaraib.pythonanywhere.com",
 ]
 
@@ -63,6 +65,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
+    "http://10.0.2.2:8000",  # Android emulator
     "http://api.loop-crm.app",
     "https://api.loop-crm.app",
     "http://www.api.loop-crm.app",
@@ -84,6 +87,10 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^http://localhost:\d+$",
     r"^http://127\.0\.0\.1:\d+$",
     r"^http://0\.0\.0\.0:\d+$",
+    r"^http://10\.0\.2\.2:\d+$",  # Android emulator with any port
+    # Allow local network IPs (for physical device testing)
+    r"^http://192\.168\.\d+\.\d+:\d+$",  # Local network IPs (192.168.x.x)
+    r"^http://10\.\d+\.\d+\.\d+:\d+$",  # Private network IPs (10.x.x.x)
     # Allow subdomains of localhost (for local development with subdomains)
     # This matches: http://company.localhost:3000, http://memo.com.localhost:3000, etc.
     r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.localhost:\d+$",
@@ -170,6 +177,7 @@ CORS_ALLOW_HEADERS = [
     "user-agent",
     "x-csrftoken",
     "x-requested-with",
+    "x-api-key",  # API Key header for application authentication
     # Additional headers that might be needed
     "cache-control",
     "pragma",
@@ -211,6 +219,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "crm_saas_api.middleware.DisableCSRFForAPI",  # Disable CSRF for API endpoints
+    "crm_saas_api.middleware.APIKeyValidationMiddleware",  # Validate API keys
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -394,6 +403,34 @@ WHATSAPP_CLIENT_SECRET = os.getenv("WHATSAPP_CLIENT_SECRET", META_CLIENT_SECRET)
 WHATSAPP_REDIRECT_URI = (
     f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/whatsapp/"
 )
+
+# Meta Webhook Verification Token
+# هذا الـ token يستخدم للتحقق من Webhook عند إعدادته في Meta App
+META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "")
+
+# Integration Encryption Key
+# مفتاح التشفير لـ Access Tokens و Refresh Tokens
+# ⚠️ مهم جداً: يجب إنشاء مفتاح قوي وإضافته في .env
+# يمكن إنشاؤه باستخدام: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+INTEGRATION_ENCRYPTION_KEY = os.getenv("INTEGRATION_ENCRYPTION_KEY", "")
+
+# ==================== API Keys for Application Authentication ====================
+# API Keys to identify and authenticate different applications
+# These keys are sent in the X-API-Key header with every request
+# Generate keys using: python test.py
+# ⚠️ IMPORTANT: Never commit these keys to Git! Store them in .env file only
+
+# Mobile App API Key
+API_KEY_MOBILE = os.getenv("API_KEY_MOBILE", "")
+
+# Web App (CRM-project) API Key
+API_KEY_WEB = os.getenv("API_KEY_WEB", "")
+
+# Admin Panel API Key
+API_KEY_ADMIN = os.getenv("API_KEY_ADMIN", "")
+
+# Note: If no API keys are set, the middleware will skip validation (for development)
+# In production, always set all API keys in .env file
 
 # ==================== Django Q2 Settings ====================
 # Django Q2 configuration for scheduled tasks (Optional - can use cron instead)

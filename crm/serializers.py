@@ -69,6 +69,9 @@ class ClientSerializer(serializers.ModelSerializer):
             "company_name",
             "assigned_to",
             "assigned_to_username",
+            "campaign",
+            "source",
+            "integration_account",
             "created_at",
             "updated_at",
         ]
@@ -261,6 +264,9 @@ class ClientListSerializer(serializers.ModelSerializer):
             "company_name",
             "assigned_to",
             "assigned_to_username",
+            "campaign",
+            "source",
+            "integration_account",
             "created_at",
         ]
 

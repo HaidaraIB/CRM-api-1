@@ -33,15 +33,40 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_service = Service.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر service لهذه الشركة مع code يبدأ بـ SVC
+        last_service = Service.objects.filter(
+            company=company,
+            code__startswith='SVC'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_service and last_service.code:
             try:
-                last_num = int(last_service.code.replace('SVC', ''))
-                new_code = f"SVC{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "SVC001"
-        else:
-            new_code = "SVC001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_service.code.replace('SVC', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"SVC{str(new_num).zfill(3)}"
+            if not Service.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique service code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -71,15 +96,40 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_package = ServicePackage.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر package لهذه الشركة مع code يبدأ بـ PKG
+        last_package = ServicePackage.objects.filter(
+            company=company,
+            code__startswith='PKG'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_package and last_package.code:
             try:
-                last_num = int(last_package.code.replace('PKG', ''))
-                new_code = f"PKG{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "PKG001"
-        else:
-            new_code = "PKG001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_package.code.replace('PKG', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"PKG{str(new_num).zfill(3)}"
+            if not ServicePackage.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique service package code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -109,15 +159,40 @@ class ServiceProviderViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_provider = ServiceProvider.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر provider لهذه الشركة مع code يبدأ بـ PRV
+        last_provider = ServiceProvider.objects.filter(
+            company=company,
+            code__startswith='PRV'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_provider and last_provider.code:
             try:
-                last_num = int(last_provider.code.replace('PRV', ''))
-                new_code = f"PRV{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "PRV001"
-        else:
-            new_code = "PRV001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_provider.code.replace('PRV', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"PRV{str(new_num).zfill(3)}"
+            if not ServiceProvider.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique service provider code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):

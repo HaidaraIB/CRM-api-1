@@ -34,15 +34,40 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_category = ProductCategory.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر category لهذه الشركة مع code يبدأ بـ CAT
+        last_category = ProductCategory.objects.filter(
+            company=company,
+            code__startswith='CAT'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_category and last_category.code:
             try:
-                last_num = int(last_category.code.replace('CAT', ''))
-                new_code = f"CAT{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "CAT001"
-        else:
-            new_code = "CAT001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_category.code.replace('CAT', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"CAT{str(new_num).zfill(3)}"
+            if not ProductCategory.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique product category code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -72,15 +97,40 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_product = Product.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر product لهذه الشركة مع code يبدأ بـ PRD
+        last_product = Product.objects.filter(
+            company=company,
+            code__startswith='PRD'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_product and last_product.code:
             try:
-                last_num = int(last_product.code.replace('PRD', ''))
-                new_code = f"PRD{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "PRD001"
-        else:
-            new_code = "PRD001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_product.code.replace('PRD', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"PRD{str(new_num).zfill(3)}"
+            if not Product.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique product code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -110,15 +160,40 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_supplier = Supplier.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر supplier لهذه الشركة مع code يبدأ بـ SUP
+        last_supplier = Supplier.objects.filter(
+            company=company,
+            code__startswith='SUP'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_supplier and last_supplier.code:
             try:
-                last_num = int(last_supplier.code.replace('SUP', ''))
-                new_code = f"SUP{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "SUP001"
-        else:
-            new_code = "SUP001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_supplier.code.replace('SUP', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"SUP{str(new_num).zfill(3)}"
+            if not Supplier.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique supplier code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):

@@ -4,7 +4,7 @@ from enum import Enum
 
 class Developer(models.Model):
     name = models.CharField(max_length=255)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     company = models.ForeignKey(
         "companies.Company", on_delete=models.CASCADE, related_name="developers"
     )
@@ -15,6 +15,9 @@ class Developer(models.Model):
     class Meta:
         db_table = "developers"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_developer_code_per_company')
+        ]
 
     def __str__(self):
         return self.name
@@ -22,7 +25,7 @@ class Developer(models.Model):
 
 class Project(models.Model):
     name = models.CharField(max_length=255)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     developer = models.ForeignKey(
         Developer, on_delete=models.CASCADE, related_name="projects"
     )
@@ -39,6 +42,9 @@ class Project(models.Model):
     class Meta:
         db_table = "projects"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_project_code_per_company')
+        ]
 
     def __str__(self):
         return self.name
@@ -46,7 +52,7 @@ class Project(models.Model):
 
 class Unit(models.Model):
     name = models.CharField(max_length=255)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="units"
     )
@@ -69,6 +75,9 @@ class Unit(models.Model):
     class Meta:
         db_table = "units"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_unit_code_per_company')
+        ]
 
     def __str__(self):
         return self.name
@@ -76,7 +85,7 @@ class Unit(models.Model):
 
 class Owner(models.Model):
     name = models.CharField(max_length=255)
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     phone = models.CharField(max_length=20, blank=True, null=True)
     city = models.CharField(max_length=255, blank=True, null=True)
     district = models.CharField(max_length=255, blank=True, null=True)
@@ -90,6 +99,9 @@ class Owner(models.Model):
     class Meta:
         db_table = "owners"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_owner_code_per_company')
+        ]
 
     def __str__(self):
         return self.name

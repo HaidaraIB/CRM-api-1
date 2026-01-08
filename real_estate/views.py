@@ -40,15 +40,39 @@ class DeveloperViewSet(viewsets.ModelViewSet):
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'company': 'Company is required'})
         
-        last_developer = Developer.objects.filter(company=company).order_by('-code').first()
+        # البحث عن آخر developer لهذه الشركة مع code يبدأ بـ DEV
+        last_developer = Developer.objects.filter(
+            company=company,
+            code__startswith='DEV'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_developer and last_developer.code:
             try:
-                last_num = int(last_developer.code.replace('DEV', ''))
-                new_code = f"DEV{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "DEV001"
-        else:
-            new_code = "DEV001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_developer.code.replace('DEV', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"DEV{str(new_num).zfill(3)}"
+            if not Developer.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique developer code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -78,15 +102,40 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_project = Project.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر project لهذه الشركة مع code يبدأ بـ PROJ
+        last_project = Project.objects.filter(
+            company=company,
+            code__startswith='PROJ'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_project and last_project.code:
             try:
-                last_num = int(last_project.code.replace('PROJ', ''))
-                new_code = f"PROJ{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "PROJ001"
-        else:
-            new_code = "PROJ001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_project.code.replace('PROJ', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"PROJ{str(new_num).zfill(3)}"
+            if not Project.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique project code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -116,15 +165,40 @@ class UnitViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_unit = Unit.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر unit لهذه الشركة مع code يبدأ بـ UNIT
+        last_unit = Unit.objects.filter(
+            company=company,
+            code__startswith='UNIT'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_unit and last_unit.code:
             try:
-                last_num = int(last_unit.code.replace('UNIT', ''))
-                new_code = f"UNIT{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "UNIT001"
-        else:
-            new_code = "UNIT001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_unit.code.replace('UNIT', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"UNIT{str(new_num).zfill(3)}"
+            if not Unit.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique unit code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -154,15 +228,40 @@ class OwnerViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         # توليد code تلقائياً
-        last_owner = Owner.objects.filter(company=serializer.validated_data['company']).order_by('-code').first()
+        company = serializer.validated_data['company']
+        # البحث عن آخر owner لهذه الشركة مع code يبدأ بـ OWN
+        last_owner = Owner.objects.filter(
+            company=company,
+            code__startswith='OWN'
+        ).order_by('-id').first()
+        
+        new_num = 1
         if last_owner and last_owner.code:
             try:
-                last_num = int(last_owner.code.replace('OWN', ''))
-                new_code = f"OWN{str(last_num + 1).zfill(3)}"
-            except ValueError:
-                new_code = "OWN001"
-        else:
-            new_code = "OWN001"
+                # استخراج الرقم من آخر code
+                code_suffix = last_owner.code.replace('OWN', '').strip()
+                if code_suffix:
+                    last_num = int(code_suffix)
+                    new_num = last_num + 1
+            except (ValueError, AttributeError):
+                new_num = 1
+        
+        # التأكد من أن الـ code فريد (في حالة race condition)
+        max_attempts = 1000
+        attempt = 0
+        new_code = None
+        
+        while attempt < max_attempts:
+            candidate_code = f"OWN{str(new_num).zfill(3)}"
+            if not Owner.objects.filter(company=company, code=candidate_code).exists():
+                new_code = candidate_code
+                break
+            new_num += 1
+            attempt += 1
+        
+        if not new_code:
+            raise ValueError("Unable to generate unique owner code")
+        
         serializer.save(code=new_code)
 
     def get_serializer_class(self):

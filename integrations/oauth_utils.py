@@ -141,6 +141,42 @@ class MetaOAuth(OAuthBase):
         response = requests.get(url, params=params)
         response.raise_for_status()
         return response.json().get('data', [])
+    
+    def get_page_access_token(self, page_id, user_access_token):
+        """الحصول على Page Access Token"""
+        url = f"{self.graph_api_url}/{page_id}"
+        params = {
+            'access_token': user_access_token,
+            'fields': 'access_token',
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json().get('access_token')
+    
+    def get_lead_forms(self, page_id, page_access_token):
+        """الحصول على قائمة Lead Forms الخاصة بصفحة معينة"""
+        url = f"{self.graph_api_url}/{page_id}/leadgen_forms"
+        params = {
+            'access_token': page_access_token,
+            'fields': 'id,name,status,leads_count,created_time',
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json().get('data', [])
+    
+    def get_lead_data(self, leadgen_id, page_access_token):
+        """الحصول على بيانات ليد معين من Meta"""
+        url = f"{self.graph_api_url}/{leadgen_id}"
+        params = {
+            'access_token': page_access_token,
+            'fields': 'id,created_time,field_data',
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
 
 
 class TikTokOAuth(OAuthBase):

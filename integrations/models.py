@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from companies.models import Company
+from .encryption import encrypt_token, decrypt_token
 
 User = get_user_model()
 
@@ -156,6 +157,32 @@ class IntegrationAccount(models.Model):
         if self.is_token_expired() and self.refresh_token:
             # TODO: تنفيذ منطق تجديد Token حسب المنصة
             pass
+    
+    def get_access_token(self):
+        """الحصول على Access Token (مفكوك التشفير)"""
+        if not self.access_token:
+            return None
+        return decrypt_token(self.access_token)
+    
+    def set_access_token(self, token):
+        """حفظ Access Token (مشفر)"""
+        if token:
+            self.access_token = encrypt_token(token)
+        else:
+            self.access_token = None
+    
+    def get_refresh_token(self):
+        """الحصول على Refresh Token (مفكوك التشفير)"""
+        if not self.refresh_token:
+            return None
+        return decrypt_token(self.refresh_token)
+    
+    def set_refresh_token(self, token):
+        """حفظ Refresh Token (مشفر)"""
+        if token:
+            self.refresh_token = encrypt_token(token)
+        else:
+            self.refresh_token = None
 
 
 class IntegrationLog(models.Model):

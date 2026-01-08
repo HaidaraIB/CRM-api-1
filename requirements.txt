@@ -11,3 +11,7 @@ Pillow
 django-q2
 PyJWT
 stripe
+cryptography
+django-ratelimit
+celery
+redis

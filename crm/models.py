@@ -116,6 +116,36 @@ class Client(models.Model):
         help_text="تاريخ ووقت آخر تواصل مع العميل"
     )
 
+    # Integration fields
+    campaign = models.ForeignKey(
+        "crm.Campaign",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clients",
+        help_text="الحملة الإعلانية المرتبطة بهذا العميل"
+    )
+    source = models.CharField(
+        max_length=50,
+        choices=[
+            ('meta_lead_form', 'Meta Lead Form'),
+            ('whatsapp', 'WhatsApp'),
+            ('tiktok', 'TikTok'),
+            ('manual', 'Manual'),
+            ('other', 'Other'),
+        ],
+        default='manual',
+        help_text="مصدر الليد"
+    )
+    integration_account = models.ForeignKey(
+        "integrations.IntegrationAccount",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clients",
+        help_text="حساب التكامل المرتبط بهذا العميل"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -365,7 +395,7 @@ class ClientTask(models.Model):
 
 
 class Campaign(models.Model):
-    code = models.CharField(max_length=50, unique=True)
+    code = models.CharField(max_length=50)
     name = models.CharField(max_length=255)
     budget = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
@@ -375,6 +405,11 @@ class Campaign(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['code', 'company'], name='unique_campaign_code_per_company')
+        ]
 
     def __str__(self):
         return self.name

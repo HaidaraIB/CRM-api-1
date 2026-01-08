@@ -300,7 +300,6 @@ class CampaignViewSet(viewsets.ModelViewSet):
         company = serializer.validated_data['company']
         
         # البحث عن آخر campaign لهذه الشركة مع code يبدأ بـ CAMP
-        # نستخدم order_by('-id') بدلاً من '-code' لضمان الحصول على آخر campaign تم إنشاؤه
         last_campaign = Campaign.objects.filter(
             company=company,
             code__startswith='CAMP'
@@ -317,31 +316,21 @@ class CampaignViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition أو بيانات مكررة)
+        # التأكد من أن الـ code فريد (في حالة race condition)
         max_attempts = 1000
         attempt = 0
         new_code = None
         
         while attempt < max_attempts:
             candidate_code = f"CAMP{str(new_num).zfill(3)}"
-            if not Campaign.objects.filter(code=candidate_code).exists():
+            if not Campaign.objects.filter(company=company, code=candidate_code).exists():
                 new_code = candidate_code
                 break
             new_num += 1
             attempt += 1
         
-        # إذا فشلنا في إيجاد code فريد، استخدم timestamp كبديل
         if not new_code:
-            import time
-            timestamp_suffix = str(int(time.time()))[-6:]  # آخر 6 أرقام من timestamp
-            new_code = f"CAMP{timestamp_suffix}"
-            # تأكد مرة أخرى من عدم التكرار
-            while Campaign.objects.filter(code=new_code).exists():
-                timestamp_suffix = str(int(time.time()) + attempt)[-6:]
-                new_code = f"CAMP{timestamp_suffix}"
-                attempt += 1
-                if attempt > 100:
-                    raise ValueError("Unable to generate unique campaign code")
+            raise ValueError("Unable to generate unique campaign code")
         
         serializer.save(code=new_code)
 
