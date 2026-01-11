@@ -26,6 +26,8 @@ class User(AbstractUser):
     phone = models.CharField(max_length=20, blank=True, null=True)
     profile_photo = models.ImageField(upload_to="profile_photos/", null=True, blank=True)
     email_verified = models.BooleanField(default=False)
+    fcm_token = models.CharField(max_length=255, blank=True, null=True, help_text="Firebase Cloud Messaging token for push notifications")
+    language = models.CharField(max_length=10, default='ar', choices=[('ar', 'Arabic'), ('en', 'English')], help_text="User preferred language for notifications")
 
     def __str__(self):
         return self.username

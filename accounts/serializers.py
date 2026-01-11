@@ -47,8 +47,10 @@ class UserSerializer(serializers.ModelSerializer):
             "date_joined",
             "last_login",
             "is_me",
+            "fcm_token",  # Include FCM token (read-only for security)
+            "language",  # User preferred language
         ]
-        read_only_fields = ["id", "date_joined", "last_login", "email_verified"]
+        read_only_fields = ["id", "date_joined", "last_login", "email_verified", "fcm_token"]
         extra_kwargs = {
             "email": {"required": True},
         }

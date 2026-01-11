@@ -871,3 +871,67 @@ def verify_two_factor_auth(request):
     }
     
     return Response(response_data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_fcm_token(request):
+    """
+    Update FCM token and language for the authenticated user
+    """
+    fcm_token = request.data.get('fcm_token', '').strip()
+    language = request.data.get('language', '').strip()
+    
+    if not fcm_token:
+        return Response(
+            {'error': 'fcm_token is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    user = request.user
+    user.fcm_token = fcm_token
+    
+    # Update language if provided
+    if language in ['ar', 'en']:
+        user.language = language
+    
+    user.save(update_fields=['fcm_token', 'language'])
+    
+    logger.info(f"FCM token and language updated for user {user.username}")
+    
+    return Response(
+        {'message': 'FCM token updated successfully'},
+        status=status.HTTP_200_OK
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_language(request):
+    """
+    Update language preference for the authenticated user
+    """
+    language = request.data.get('language', '').strip()
+    
+    if not language:
+        return Response(
+            {'error': 'language is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    if language not in ['ar', 'en']:
+        return Response(
+            {'error': 'language must be either "ar" or "en"'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    user = request.user
+    user.language = language
+    user.save(update_fields=['language'])
+    
+    logger.info(f"Language updated to {language} for user {user.username}")
+    
+    return Response(
+        {'message': 'Language updated successfully', 'language': language},
+        status=status.HTTP_200_OK
+    )

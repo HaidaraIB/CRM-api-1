@@ -40,6 +40,8 @@ from accounts.views import (
     reset_password,
     request_two_factor_auth,
     verify_two_factor_auth,
+    update_fcm_token,
+    update_language,
 )
 from companies.views import CompanyViewSet
 from crm.views import (
@@ -172,6 +174,9 @@ urlpatterns = [
         check_payment_status,
         name="check_payment_status",
     ),
+    # Custom user endpoints - must be before router.urls to avoid conflicts
+    path("api/users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
+    path("api/users/update-language/", update_language, name="update_language"),
     # Router URLs (includes /api/payments/ which would conflict if placed before custom endpoints)
     path("api/", include(router.urls)),
     # JWT Authentication endpoints
@@ -198,6 +203,8 @@ urlpatterns = [
     path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     # Integrations URLs
     path("api/integrations/", include(integrations_urls)),
+    # Notifications URLs
+    path("api/", include("notifications.urls")),
     # API Documentation
     path(
         "api/docs/",

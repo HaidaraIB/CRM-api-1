@@ -107,9 +107,9 @@ BASE_DOMAIN=loop-crm.app
 # DATABASE_URL=sqlite:///db.sqlite3
 
 # API Settings
-API_BASE_URL=https://api.loop-crm.app
-FRONTEND_URL=https://loop-crm.app
-FRONTEND_APP_URL=https://loop-crm.app
+API_BASE_URL=https://api.yourdomain.com
+FRONTEND_URL=https://yourdomain.com
+FRONTEND_APP_URL=https://yourdomain.com
 
 # CORS Settings
 CORS_ALLOW_ALL_ORIGINS=False
@@ -137,8 +137,8 @@ python3 -c "from django.core.management.utils import get_random_secret_key; prin
 تأكد من أن `settings.py` يحتوي على:
 ```python
 ALLOWED_HOSTS = [
-    'api.loop-crm.app',
-    'www.api.loop-crm.app',
+    'api.yourdomain.com',
+    'www.api.yourdomain.com',
     'localhost',
     '127.0.0.1',
 ]
@@ -153,8 +153,8 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',') if os.getenv('ALLOWED_
 تأكد من إضافة النطاقات الجديدة في `CORS_ALLOWED_ORIGIN_REGEXES`:
 ```python
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://.*\.loop-crm\.app$",
-    r"^https://loop-crm\.app$",
+    r"^https://.*\.yourdomain\.com$",
+    r"^https://yourdomain\.com$",
     # ... باقي الإعدادات
 ]
 ```
@@ -257,7 +257,7 @@ sudo nano /etc/nginx/sites-available/crm-api
 ```nginx
 server {
     listen 80;
-    server_name api.loop-crm.app www.api.loop-crm.app;
+    server_name api.yourdomain.com www.api.yourdomain.com;
 
     # إعادة التوجيه إلى HTTPS (بعد إعداد SSL)
     # return 301 https://$server_name$request_uri;
@@ -324,7 +324,7 @@ sudo apt install certbot python3-certbot-nginx -y
 
 #### 10.2 الحصول على شهادة SSL
 ```bash
-sudo certbot --nginx -d api.loop-crm.app -d www.api.loop-crm.app
+sudo certbot --nginx -d api.yourdomain.com -d www.api.yourdomain.com
 ```
 
 سيقوم Certbot بتحديث إعدادات Nginx تلقائياً لدعم HTTPS.

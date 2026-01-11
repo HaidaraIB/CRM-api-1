@@ -28,12 +28,13 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 
 # Get base domain from environment variable
 # This is used to automatically allow company subdomains
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "")
 
+# Base ALLOWED_HOSTS for production
 ALLOWED_HOSTS = [
     "api.loop-crm.app",
     "www.api.loop-crm.app",
@@ -42,12 +43,21 @@ ALLOWED_HOSTS = [
     "admin.loop-crm.app",
     "www.admin.loop-crm.app",
     "localhost",
-    "localhost:8000",
     "127.0.0.1",
     "10.0.2.2",  # Android emulator host IP
-    "192.168.1.101",  # Local network IP for physical device testing
     "haidaraib.pythonanywhere.com",
 ]
+
+# In DEBUG mode, allow all hosts (for development only)
+# This is safe because DEBUG mode should never be used in production
+if DEBUG:
+    # Allow all hosts in development to avoid DisallowedHost errors
+    # The middleware will still validate local network IPs for additional security
+    ALLOWED_HOSTS = ['*']
+
+# Note: In DEBUG mode, ALLOWED_HOSTS is set to ['*'] to allow all hosts
+# This prevents DisallowedHost errors when IP changes on physical devices
+# ⚠️ IMPORTANT: DEBUG should NEVER be True in production!
 
 # Automatically allow all subdomains of the base domain in ALLOWED_HOSTS
 # This is required for Django to accept requests from company subdomains
@@ -208,6 +218,7 @@ INSTALLED_APPS = [
     "subscriptions",
     "settings",
     "integrations",
+    "notifications",
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_q",
@@ -496,6 +507,11 @@ LOGGING = {
             'propagate': False,
         },
         'subscriptions': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'notifications': {
             'handlers': ['console', 'file'],
             'level': 'INFO',
             'propagate': False,
