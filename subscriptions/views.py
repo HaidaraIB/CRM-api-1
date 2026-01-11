@@ -228,10 +228,60 @@ class BroadcastViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Validate that the broadcast hasn't been sent already
+        if broadcast.status == BroadcastStatus.SENT.value:
+            return Response(
+                {"error": "Broadcast already sent. Cannot reschedule."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Parse and validate the scheduled_at datetime
+        try:
+            from django.utils.dateparse import parse_datetime
+            scheduled_datetime = parse_datetime(scheduled_at)
+            
+            # If Django's parse_datetime fails, try dateutil parser
+            if not scheduled_datetime:
+                try:
+                    from dateutil import parser
+                    scheduled_datetime = parser.parse(scheduled_at)
+                except (ImportError, ValueError, TypeError):
+                    return Response(
+                        {"error": "Invalid datetime format. Please use ISO format (YYYY-MM-DDTHH:MM:SS)"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            
+            if not scheduled_datetime:
+                return Response(
+                    {"error": "Invalid datetime format. Please use ISO format (YYYY-MM-DDTHH:MM:SS)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            
+            # Make timezone aware if it's naive
+            if timezone.is_naive(scheduled_datetime):
+                scheduled_datetime = timezone.make_aware(scheduled_datetime)
+            
+            # Validate that scheduled time is in the future
+            if scheduled_datetime <= timezone.now():
+                return Response(
+                    {"error": "Scheduled time must be in the future"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            
+        except (ValueError, TypeError) as e:
+            return Response(
+                {"error": f"Invalid datetime format: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         broadcast.status = BroadcastStatus.PENDING.value
-        broadcast.scheduled_at = scheduled_at
+        broadcast.scheduled_at = scheduled_datetime
         broadcast.save()
-        return Response({"status": "Broadcast scheduled successfully"})
+        
+        return Response({
+            "status": "Broadcast scheduled successfully",
+            "scheduled_at": scheduled_datetime.isoformat()
+        })
 
 
 class PaymentGatewayViewSet(viewsets.ModelViewSet):

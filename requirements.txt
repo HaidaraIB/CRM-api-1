@@ -16,3 +16,4 @@ django-ratelimit
 celery
 redis
 firebase-admin
+python-dateutil

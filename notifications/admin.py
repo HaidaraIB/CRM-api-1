@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Notification
+from .models import Notification, NotificationSettings
 
 
 @admin.register(Notification)
@@ -19,5 +19,31 @@ class NotificationAdmin(admin.ModelAdmin):
         }),
         ('Status', {
             'fields': ('read', 'read_at', 'sent_at', 'created_at')
+        }),
+    )
+
+
+@admin.register(NotificationSettings)
+class NotificationSettingsAdmin(admin.ModelAdmin):
+    list_display = ['user', 'enabled', 'restrict_time', 'start_hour', 'end_hour', 'updated_at']
+    list_filter = ['enabled', 'restrict_time']
+    search_fields = ['user__username', 'user__email']
+    readonly_fields = ['created_at', 'updated_at']
+    
+    fieldsets = (
+        ('User', {
+            'fields': ('user',)
+        }),
+        ('Global Settings', {
+            'fields': ('enabled', 'notification_types')
+        }),
+        ('Time Restrictions', {
+            'fields': ('restrict_time', 'start_hour', 'end_hour', 'enabled_days')
+        }),
+        ('Filter Settings', {
+            'fields': ('source_settings', 'user_role_settings')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
         }),
     )

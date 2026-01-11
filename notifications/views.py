@@ -4,8 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Q
 from django.utils import timezone
-from .models import Notification, NotificationType
-from .serializers import NotificationSerializer, NotificationListSerializer
+from .models import Notification, NotificationType, NotificationSettings
+from .serializers import NotificationSerializer, NotificationListSerializer, NotificationSettingsSerializer
 from .services import NotificationService
 from accounts.models import User
 import logging
@@ -176,3 +176,100 @@ def send_notification(request):
             {'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+def _camel_to_snake(name):
+    """Convert camelCase to snake_case"""
+    import re
+    # Insert an underscore before any uppercase letter followed by lowercase
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    # Insert an underscore before any uppercase letter that follows a lowercase letter or digit
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
+def _snake_to_camel(name):
+    """Convert snake_case to camelCase"""
+    components = name.split('_')
+    return components[0] + ''.join(x.capitalize() for x in components[1:])
+
+
+def _convert_notification_types_keys(notification_types, to_snake=True):
+    """
+    Convert notification_types keys between camelCase (Flutter) and snake_case (Django)
+    
+    Args:
+        notification_types: Dictionary with keys in either format
+        to_snake: If True, convert camelCase -> snake_case. If False, convert snake_case -> camelCase
+    
+    Returns:
+        Dictionary with converted keys
+    """
+    if not notification_types:
+        return {}
+    
+    converted = {}
+    for key, value in notification_types.items():
+        if to_snake:
+            # Convert camelCase to snake_case (Flutter -> Django)
+            new_key = _camel_to_snake(key)
+        else:
+            # Convert snake_case to camelCase (Django -> Flutter)
+            new_key = _snake_to_camel(key)
+        converted[new_key] = value
+    
+    return converted
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def notification_settings(request):
+    """
+    Get or update notification settings for the authenticated user
+    """
+    user = request.user
+    
+    if request.method == 'GET':
+        # Get or create settings
+        settings_obj = NotificationSettings.get_or_create_for_user(user)
+        serializer = NotificationSettingsSerializer(settings_obj)
+        data = serializer.data
+        
+        # Convert notification_types keys from snake_case to camelCase for Flutter
+        if 'notification_types' in data and data['notification_types']:
+            data['notification_types'] = _convert_notification_types_keys(
+                data['notification_types'],
+                to_snake=False  # Convert to camelCase for Flutter
+            )
+        
+        return Response(data)
+    
+    elif request.method == 'PUT':
+        # Update settings
+        settings_obj = NotificationSettings.get_or_create_for_user(user)
+        
+        # Convert notification_types keys from camelCase to snake_case (Flutter -> Django)
+        request_data = request.data.copy()
+        if 'notification_types' in request_data and request_data['notification_types']:
+            request_data['notification_types'] = _convert_notification_types_keys(
+                request_data['notification_types'],
+                to_snake=True  # Convert to snake_case for Django
+            )
+        
+        serializer = NotificationSettingsSerializer(settings_obj, data=request_data, partial=True)
+        
+        if serializer.is_valid():
+            serializer.save()
+            logger.info(f"Notification settings updated for user {user.username}")
+            
+            # Convert back to camelCase for response
+            response_data = serializer.data
+            if 'notification_types' in response_data and response_data['notification_types']:
+                response_data['notification_types'] = _convert_notification_types_keys(
+                    response_data['notification_types'],
+                    to_snake=False  # Convert to camelCase for Flutter
+                )
+            
+            return Response(response_data)
+        
+        logger.error(f"Serializer errors: {serializer.errors}")
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

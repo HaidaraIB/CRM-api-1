@@ -33,6 +33,11 @@ class Command(BaseCommand):
             action='store_true',
             help='Test all notification types',
         )
+        parser.add_argument(
+            '--skip-settings',
+            action='store_true',
+            help='Skip notification settings check (force send even if disabled)',
+        )
 
     def handle(self, *args, **options):
         # Get user
@@ -56,12 +61,6 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(f'Testing notifications for user: {user.username} (ID: {user.id})')
         )
-        
-        # Show user language
-        user_language = getattr(user, 'language', 'ar') or 'ar'
-        self.stdout.write(
-            self.style.SUCCESS(f'User language: {user_language}')
-        )
 
         if not user.fcm_token:
             self.stdout.write(
@@ -71,15 +70,18 @@ class Command(BaseCommand):
                 )
             )
 
+        # Check notification settings
+        skip_settings = options.get('skip_settings', False)
+
         # Test specific type
         if options.get('type'):
             notification_type = options.get('type')
-            self._test_notification(user, notification_type)
+            self._test_notification(user, notification_type, skip_settings)
             return
 
         # Test all types
         if options.get('all'):
-            self._test_all_notifications(user)
+            self._test_all_notifications(user, skip_settings)
             return
 
         # Default: show menu
@@ -162,7 +164,7 @@ class Command(BaseCommand):
             f'  python manage.py test_notifications --all\n'
         )
 
-    def _test_notification(self, user, notification_type):
+    def _test_notification(self, user, notification_type, skip_settings=False):
         """Test a specific notification type"""
         # Validate type
         valid_types = [choice[0] for choice in NotificationType.choices]
@@ -179,8 +181,20 @@ class Command(BaseCommand):
         type_display = dict(NotificationType.choices).get(notification_type, notification_type)
 
         self.stdout.write(f'\nTesting: {type_display} ({notification_type})')
-        self.stdout.write('-' * 60)
-        self.stdout.write(f'User language: {getattr(user, "language", "ar")}')
+
+        # Check notification settings for this specific type
+        if not skip_settings:
+            from notifications.models import NotificationSettings
+            settings = NotificationSettings.get_or_create_for_user(user)
+            
+            if not settings.is_notification_enabled(notification_type):
+                self.stdout.write(
+                    self.style.ERROR(
+                        '❌ Notification SKIPPED - This notification type is disabled for this user.\n'
+                        '   To force send, use: --skip-settings'
+                    )
+                )
+                return
 
         # Prepare test data based on type
         # Note: We don't pass title/body - translations will be used automatically based on user.language
@@ -192,17 +206,17 @@ class Command(BaseCommand):
                 user=user,
                 notification_type=notification_type,
                 data=data,
+                skip_settings_check=skip_settings,
             )
 
             if result:
                 self.stdout.write(
-                    self.style.SUCCESS('Notification sent successfully!')
+                    self.style.SUCCESS('✓ Notification sent successfully!')
                 )
             else:
                 self.stdout.write(
                     self.style.WARNING(
-                        'Notification saved to database but may not have been sent via FCM '
-                        '(check FCM token and Firebase credentials)'
+                        'Notification saved to database but may not have been sent via FCM'
                     )
                 )
         except Exception as e:
@@ -210,7 +224,7 @@ class Command(BaseCommand):
                 self.style.ERROR(f'Error sending notification: {e}')
             )
 
-    def _test_all_notifications(self, user):
+    def _test_all_notifications(self, user, skip_settings=False):
         """Test all notification types"""
         self.stdout.write('\nTesting all notification types...\n')
         self.stdout.write('=' * 60)
@@ -218,10 +232,22 @@ class Command(BaseCommand):
         all_types = [choice[0] for choice in NotificationType.choices]
         success_count = 0
         failed_count = 0
+        skipped_count = 0
+
+        # Get settings once
+        from notifications.models import NotificationSettings
+        settings = NotificationSettings.get_or_create_for_user(user) if not skip_settings else None
 
         for notification_type in all_types:
             type_display = dict(NotificationType.choices).get(notification_type, notification_type)
-            self.stdout.write(f'\n[{success_count + failed_count + 1}/{len(all_types)}] Testing: {type_display}')
+            self.stdout.write(f'\n[{success_count + failed_count + skipped_count + 1}/{len(all_types)}] Testing: {type_display}')
+
+            # Check if notification is enabled
+            if not skip_settings and settings:
+                if not settings.is_notification_enabled(notification_type):
+                    self.stdout.write(self.style.WARNING('  SKIPPED (disabled in user settings)'))
+                    skipped_count += 1
+                    continue
 
             _, _, data = self._get_test_data(notification_type)
 
@@ -231,22 +257,23 @@ class Command(BaseCommand):
                     user=user,
                     notification_type=notification_type,
                     data=data,
+                    skip_settings_check=skip_settings,
                 )
 
                 if result:
-                    self.stdout.write(self.style.SUCCESS('  OK'))
+                    self.stdout.write(self.style.SUCCESS('  ✓'))
                     success_count += 1
                 else:
-                    self.stdout.write(self.style.WARNING('  Saved (FCM may have failed)'))
+                    self.stdout.write(self.style.WARNING('  Saved'))
                     success_count += 1  # Still counts as success (saved to DB)
             except Exception as e:
-                self.stdout.write(self.style.ERROR(f'  FAILED: {e}'))
+                self.stdout.write(self.style.ERROR(f'  ✗ Failed: {e}'))
                 failed_count += 1
 
         self.stdout.write('\n' + '=' * 60)
         self.stdout.write(
             self.style.SUCCESS(
-                f'\nTest completed: {success_count} succeeded, {failed_count} failed'
+                f'\nCompleted: {success_count} sent, {failed_count} failed, {skipped_count} skipped'
             )
         )
 

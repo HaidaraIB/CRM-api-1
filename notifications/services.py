@@ -6,7 +6,7 @@ import os
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from .models import Notification, NotificationType
+from .models import Notification, NotificationType, NotificationSettings
 from .translations import get_notification_text
 
 if TYPE_CHECKING:
@@ -78,6 +78,9 @@ class NotificationService:
         data: Optional[Dict[str, Any]] = None,
         image_url: Optional[str] = None,
         language: Optional[str] = None,
+        lead_source: Optional[str] = None,
+        sender_role: Optional[str] = None,
+        skip_settings_check: bool = False,
     ) -> bool:
         """
         Send a push notification to a user
@@ -90,7 +93,29 @@ class NotificationService:
             data: Additional data payload (used for formatting translated messages)
             image_url: Optional image URL
             language: Language code ('ar' or 'en'). If not provided, uses user.language or 'ar'
+            lead_source: Optional lead source (for source filtering)
+            sender_role: Optional sender role (for role filtering)
+            skip_settings_check: Skip notification settings check (for admin/system notifications)
         """
+        # Check user notification settings (unless explicitly skipped)
+        if not skip_settings_check:
+            try:
+                settings_obj = NotificationSettings.get_or_create_for_user(user)
+                
+                if not settings_obj.should_send_notification(
+                    notification_type=notification_type,
+                    lead_source=lead_source,
+                    sender_role=sender_role
+                ):
+                    logger.info(
+                        f"Notification {notification_type} skipped for user {user.username} "
+                        f"due to notification settings"
+                    )
+                    return False
+            except Exception as e:
+                logger.warning(f"Error checking notification settings for user {user.username}: {e}")
+                # Continue with sending if settings check fails (fail open)
+        
         # Get user language
         user_language = language or getattr(user, 'language', 'ar') or 'ar'
         
