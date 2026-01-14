@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientEvent
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientEvent
 from accounts.models import User
 from .serializers import (
     ClientSerializer,
@@ -16,6 +16,8 @@ from .serializers import (
     CampaignListSerializer,
     ClientTaskSerializer,
     ClientTaskListSerializer,
+    ClientCallSerializer,
+    ClientCallListSerializer,
     ClientEventSerializer,
 )
 
@@ -372,6 +374,40 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return ClientTaskListSerializer
         return ClientTaskSerializer
+
+
+class ClientCallViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing ClientCall instances.
+    Provides CRUD operations: Create, Read, Update, Delete
+    """
+
+    queryset = ClientCall.objects.all()
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["notes", "call_method__name", "client__name"]
+    ordering_fields = ["created_at", "follow_up_date", "call_method__name"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        if user.is_admin():
+            return queryset.filter(client__company=user.company)
+
+        if user.is_employee():
+            return queryset.filter(client__assigned_to=user)
+
+        return queryset.none()
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ClientCallListSerializer
+        return ClientCallSerializer
 
 
 class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):

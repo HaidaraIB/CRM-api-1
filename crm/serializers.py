@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_serializer
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber, ClientEvent
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientPhoneNumber, ClientEvent
 
 
 class ClientEventSerializer(serializers.ModelSerializer):
@@ -598,6 +598,86 @@ class ClientTaskListSerializer(serializers.ModelSerializer):
             "stage_name",
             "notes",
             "reminder_date",
+            "created_by",
+            "created_by_username",
+            "created_at",
+        ]
+
+
+@extend_schema_serializer(component_name="ClientCall")
+class ClientCallSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
+    call_method_name = serializers.CharField(source="call_method.name", read_only=True)
+
+    class Meta:
+        model = ClientCall
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "call_method",
+            "call_method_name",
+            "notes",
+            "follow_up_date",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_follow_up_date(self, value):
+        """Validate that follow_up_date is required"""
+        if value is None:
+            raise serializers.ValidationError("Follow up date is required for call tasks.")
+        return value
+    
+    def validate_call_method(self, value):
+        """Ensure call_method belongs to the same company as the client"""
+        if value:
+            # Get client from instance or initial_data
+            client = None
+            if self.instance and self.instance.client_id:
+                client = self.instance.client
+            elif hasattr(self, "initial_data"):
+                client_id = self.initial_data.get("client")
+                if client_id:
+                    from .models import Client
+
+                    try:
+                        client = Client.objects.get(pk=client_id)
+                    except Client.DoesNotExist:
+                        pass
+
+            if client and value.company_id != client.company_id:
+                raise serializers.ValidationError(
+                    "Call method must belong to the same company as the client."
+                )
+        return value
+
+
+class ClientCallListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for list views"""
+
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
+    call_method_name = serializers.CharField(source="call_method.name", read_only=True)
+
+    class Meta:
+        model = ClientCall
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "call_method",
+            "call_method_name",
+            "notes",
+            "follow_up_date",
             "created_by",
             "created_by_username",
             "created_at",

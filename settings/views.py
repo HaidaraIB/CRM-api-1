@@ -11,6 +11,7 @@ from .models import (
     Channel,
     LeadStage,
     LeadStatus,
+    CallMethod,
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
@@ -23,6 +24,8 @@ from .serializers import (
     LeadStageListSerializer,
     LeadStatusSerializer,
     LeadStatusListSerializer,
+    CallMethodSerializer,
+    CallMethodListSerializer,
     SMTPSettingsSerializer,
     SystemBackupSerializer,
     SystemAuditLogSerializer,
@@ -132,6 +135,36 @@ class LeadStatusViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return LeadStatusListSerializer
         return LeadStatusSerializer
+
+
+class CallMethodViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing CallMethod instances.
+    Provides CRUD operations: Create, Read, Update, Delete
+    Only Admin can manage call methods, but employees can read (GET) them
+    """
+
+    queryset = CallMethod.objects.all()
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "description"]
+    ordering_fields = ["name", "created_at"]
+    ordering = ["name"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        return queryset.filter(company=user.company)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(company=user.company)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return CallMethodListSerializer
+        return CallMethodSerializer
 
 
 class SMTPSettingsViewSet(viewsets.ModelViewSet):

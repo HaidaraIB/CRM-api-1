@@ -237,29 +237,52 @@ python manage.py setup_reassign_schedule
 
 ### 7. فحص Leads بدون متابعة (Check Lead No Follow Up)
 
-**الوصف:** يفحص العملاء المحتملين الذين لم يتم التواصل معهم منذ فترة معينة ويرسل إشعارات.
+**الوصف:** يفحص العملاء المحتملين الذين لم يتم التواصل معهم منذ فترة معينة ويرسل إشعارات. يتم تشغيل هذا الأمر 4 مرات في اليوم (كل 6 ساعات). بمجرد اتخاذ أي إجراء على العميل (تغيير الحالة، إضافة مهمة، إضافة مكالمة، إلخ)، يتم تحديث `last_contacted_at` ولن يتلقى الموظف هذا الإشعار بعد ذلك.
 
 **الأهمية:** ⭐⭐⭐⭐ (عالية)
 
-**التكرار المقترح:** كل 30 دقيقة
+**التكرار المقترح:** 4 مرات في اليوم (كل 6 ساعات) - في الساعات: 6 صباحاً، 12 ظهراً، 6 مساءً، 12 منتصف الليل
 
-**Command:**
+**Command (4 مرات في اليوم):**
 ```bash
-*/30 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up
+# في الساعة 6 صباحاً
+0 6 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up
+
+# في الساعة 12 ظهراً
+0 12 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up
+
+# في الساعة 6 مساءً
+0 18 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up
+
+# في الساعة 12 منتصف الليل
+0 0 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up
+```
+
+**أو بشكل مختصر (كل 6 ساعات):**
+```bash
+0 */6 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up
 ```
 
 **مع الخيارات:**
 ```bash
-# فحص Leads بدون متابعة لمدة 60 دقيقة
-*/30 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up --minutes 60
+# فحص Leads بدون متابعة لمدة 12 ساعة
+0 */6 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up --hours 12
 
 # للاختبار
-*/30 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up --dry-run
+0 */6 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up --dry-run
 ```
 
 **الخيارات المتاحة:**
-- `--minutes N`: عدد الدقائق بدون متابعة لإرسال الإشعار (افتراضي: 30)
+- `--hours N`: عدد الساعات بدون متابعة لإرسال الإشعار (افتراضي: 6)
 - `--dry-run`: عرض ما سيتم إرساله دون إرسال فعلي
+
+**ملاحظات مهمة:**
+- يتم تحديث `last_contacted_at` تلقائياً عند:
+  - تغيير حالة العميل (Status Change)
+  - إضافة مهمة متابعة (ClientTask)
+  - إضافة مكالمة (ClientCall)
+  - أي تحديث آخر للعميل
+- بمجرد تحديث `last_contacted_at`، لن يتلقى الموظف إشعار `leadNoFollowUp` بعد ذلك
 
 ---
 
@@ -376,6 +399,34 @@ python manage.py setup_reassign_schedule
 
 # للاختبار
 */15 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_task_reminders --dry-run
+```
+
+**الخيارات المتاحة:**
+- `--minutes-before N`: عدد الدقائق قبل موعد التذكير لإرسال الإشعار (افتراضي: 30)
+- `--dry-run`: عرض ما سيتم إرساله دون إرسال فعلي
+
+---
+
+### 11.5. فحص تذكيرات المكالمات (Check Call Reminders)
+
+**الوصف:** يفحص تذكيرات المكالمات (Client Calls) ويرسل إشعارات قبل موعد المتابعة.
+
+**الأهمية:** ⭐⭐⭐ (متوسطة)
+
+**التكرار المقترح:** كل 15 دقيقة
+
+**Command:**
+```bash
+*/15 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_call_reminders
+```
+
+**مع الخيارات:**
+```bash
+# إرسال التذكير قبل 60 دقيقة من الموعد
+*/15 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_call_reminders --minutes-before 60
+
+# للاختبار
+*/15 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_call_reminders --dry-run
 ```
 
 **الخيارات المتاحة:**
@@ -620,8 +671,8 @@ MAILTO=admin@example.com
 # مهام الإشعارات (Notification Cron Jobs)
 # ============================================
 
-# 7. فحص Leads بدون متابعة - كل 30 دقيقة
-*/30 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up >> /var/log/crm/check_lead_no_follow_up.log 2>&1
+# 7. فحص Leads بدون متابعة - 4 مرات في اليوم (كل 6 ساعات)
+0 */6 * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_no_follow_up >> /var/log/crm/check_lead_no_follow_up.log 2>&1
 
 # 8. فحص تذكيرات Leads - كل 15 دقيقة
 */15 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_lead_reminders >> /var/log/crm/check_lead_reminders.log 2>&1
@@ -634,6 +685,9 @@ MAILTO=admin@example.com
 
 # 11. فحص تذكيرات المهام - كل 15 دقيقة
 */15 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_task_reminders >> /var/log/crm/check_task_reminders.log 2>&1
+
+# 11.5. فحص تذكيرات المكالمات - كل 15 دقيقة
+*/15 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_call_reminders >> /var/log/crm/check_call_reminders.log 2>&1
 
 # 12. فحص تذكيرات الصفقات - كل ساعة
 0 * * * * cd /path/to/CRM-api-1 && /path/to/venv/bin/python manage.py check_deal_reminders >> /var/log/crm/check_deal_reminders.log 2>&1
@@ -794,11 +848,12 @@ python manage.py shell
 
 | المهمة | التكرار | الوقت المقترح | الأهمية |
 |--------|---------|----------------|---------|
-| فحص Leads بدون متابعة | كل 30 دقيقة | `*/30 * * * *` | ⭐⭐⭐⭐ |
+| فحص Leads بدون متابعة | 4 مرات في اليوم (كل 6 ساعات) | `0 */6 * * *` | ⭐⭐⭐⭐ |
 | فحص تذكيرات Leads | كل 15 دقيقة | `*/15 * * * *` | ⭐⭐⭐⭐ |
 | فحص رسائل واتساب بانتظار الرد | كل ساعة | `0 * * * *` | ⭐⭐⭐ |
 | فحص أداء الحملات الإعلانية | يومياً | `0 10 * * *` | ⭐⭐⭐⭐ |
 | فحص تذكيرات المهام | كل 15 دقيقة | `*/15 * * * *` | ⭐⭐⭐ |
+| فحص تذكيرات المكالمات | كل 15 دقيقة | `*/15 * * * *` | ⭐⭐⭐ |
 | فحص تذكيرات الصفقات | كل ساعة | `0 * * * *` | ⭐⭐⭐ |
 | إرسال التقارير اليومية | يومياً | `0 9 * * *` | ⭐⭐⭐⭐ |
 | إرسال التقارير الأسبوعية | أسبوعياً | `0 9 * * 1` | ⭐⭐⭐⭐ |

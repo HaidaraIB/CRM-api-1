@@ -190,14 +190,24 @@ class BroadcastViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def send(self, request, pk=None):
         """Send a broadcast immediately"""
+        from subscriptions.utils import send_broadcast_email, send_broadcast_push_notification
+        from subscriptions.models import BroadcastType
+        
         broadcast = self.get_object()
         if broadcast.status == "sent":
             return Response(
                 {"error": "Broadcast already sent"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Send email via SMTP
-        result = send_broadcast_email(broadcast)
+        # Determine broadcast type (default to email if not set)
+        broadcast_type = broadcast.broadcast_type or BroadcastType.EMAIL.value
+        
+        # Send based on broadcast type
+        if broadcast_type == BroadcastType.PUSH.value:
+            result = send_broadcast_push_notification(broadcast)
+        else:
+            # Default to email
+            result = send_broadcast_email(broadcast)
 
         if not result["success"]:
             return Response(
@@ -214,6 +224,7 @@ class BroadcastViewSet(viewsets.ModelViewSet):
             {
                 "status": "Broadcast sent successfully",
                 "recipients_count": result.get("recipients_count", 0),
+                "broadcast_type": broadcast_type,
             }
         )
 

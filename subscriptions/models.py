@@ -14,6 +14,15 @@ class BroadcastStatus(Enum):
         return [(i.value, i.name) for i in cls]
 
 
+class BroadcastType(Enum):
+    EMAIL = "email"
+    PUSH = "push"
+
+    @classmethod
+    def choices(cls):
+        return [(i.value, i.name) for i in cls]
+
+
 class InvoiceStatus(Enum):
     DRAFT = "draft"
     ISSUED = "issued"
@@ -185,6 +194,11 @@ class Broadcast(models.Model):
     subject = models.CharField(max_length=255)
     content = models.TextField()
     target = models.CharField(max_length=50, default="all")
+    broadcast_type = models.CharField(
+        max_length=10,
+        choices=BroadcastType.choices(),
+        default=BroadcastType.EMAIL.value
+    )
     status = models.CharField(
         max_length=20, choices=BroadcastStatus.choices(), null=True
     )

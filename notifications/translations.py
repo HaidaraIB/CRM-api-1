@@ -18,11 +18,11 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     'lead_no_follow_up': {
         'ar': {
             'title': 'بدون متابعة',
-            'body': 'عميل محتمل لم يتم التواصل معه منذ {minutes} دقيقة'
+            'body': 'عميل محتمل لم يتم التواصل معه منذ {hours} ساعة'
         },
         'en': {
             'title': 'No Follow Up',
-            'body': 'A lead has not been contacted for {minutes} minutes'
+            'body': 'A lead has not been contacted for {hours} hours'
         }
     },
     'lead_reengaged': {
@@ -193,6 +193,16 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         'en': {
             'title': 'Task Reminder',
             'body': '{minutes_remaining} minutes remaining for follow-up: {task_title}'
+        }
+    },
+    'call_reminder': {
+        'ar': {
+            'title': 'تذكير مكالمة',
+            'body': 'تبقى {minutes_remaining} دقيقة على موعد مكالمة المتابعة مع {lead_name}'
+        },
+        'en': {
+            'title': 'Call Reminder',
+            'body': '{minutes_remaining} minutes remaining for follow-up call with {lead_name}'
         }
     },
     'task_completed': {

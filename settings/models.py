@@ -233,6 +233,28 @@ class SystemAuditLog(models.Model):
         return f"{self.action} @ {self.created_at:%Y-%m-%d %H:%M:%S}"
 
 
+class CallMethod(models.Model):
+    """Model for call methods (similar to LeadStage and LeadStatus)"""
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    color = models.CharField(max_length=7, default="#808080")  # Hex color
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="call_methods"
+    )
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_call_method"
+        ordering = ["name"]
+        unique_together = ["name", "company"]
+
+    def __str__(self):
+        return self.name
+
+
 class SystemSettings(models.Model):
     """
     System-wide settings configuration.

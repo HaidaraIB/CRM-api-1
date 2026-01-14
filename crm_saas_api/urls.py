@@ -50,12 +50,14 @@ from crm.views import (
     TaskViewSet,
     CampaignViewSet,
     ClientTaskViewSet,
+    ClientCallViewSet,
     ClientEventViewSet,
 )
 from settings.views import (
     ChannelViewSet,
     LeadStageViewSet,
     LeadStatusViewSet,
+    CallMethodViewSet,
     SystemBackupViewSet,
     SystemAuditLogViewSet,
     SystemSettingsViewSet,
@@ -97,6 +99,7 @@ router.register(r"companies", CompanyViewSet, basename="company")
 
 router.register(r"clients", ClientViewSet, basename="client")
 router.register(r"client-tasks", ClientTaskViewSet, basename="clienttask")
+router.register(r"client-calls", ClientCallViewSet, basename="clientcall")
 router.register(r"client-events", ClientEventViewSet, basename="clientevent")
 
 router.register(r"deals", DealViewSet, basename="deal")
@@ -106,6 +109,7 @@ router.register(r"campaigns", CampaignViewSet, basename="campaign")
 router.register(r"settings/channels", ChannelViewSet, basename="channel")
 router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
+router.register(r"settings/call-methods", CallMethodViewSet, basename="callmethod")
 router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup")
 router.register(
     r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog"

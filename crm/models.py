@@ -394,6 +394,42 @@ class ClientTask(models.Model):
         return f"{self.client.name} - {stage_name}"
 
 
+class ClientCall(models.Model):
+    """Model for client calls (similar to ClientTask but for calls)"""
+    client = models.ForeignKey(
+        Client, on_delete=models.CASCADE, related_name="client_calls"
+    )
+    # Link to CallMethod from settings
+    call_method = models.ForeignKey(
+        "settings.CallMethod",
+        on_delete=models.SET_NULL,
+        related_name="client_calls",
+        blank=True,
+        null=True,
+        help_text="Call method for this call",
+    )
+    notes = models.TextField(blank=True, null=True)
+    follow_up_date = models.DateTimeField(blank=True, null=True, help_text="Next call date or follow up date")
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="created_client_calls",
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "crm_client_call"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        call_method_name = self.call_method.name if self.call_method else "No Method"
+        return f"{self.client.name} - {call_method_name}"
+
+
 class Campaign(models.Model):
     code = models.CharField(max_length=50)
     name = models.CharField(max_length=255)

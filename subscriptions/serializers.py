@@ -223,6 +223,7 @@ class BroadcastSerializer(serializers.ModelSerializer):
             "subject",
             "content",
             "target",
+            "broadcast_type",
             "status",
             "scheduled_at",
             "sent_at",

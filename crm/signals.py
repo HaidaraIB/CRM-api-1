@@ -66,13 +66,24 @@ def auto_assign_client(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=ClientTask)
-def update_last_contacted(sender, instance, created, **kwargs):
+def update_last_contacted_from_task(sender, instance, created, **kwargs):
     """
     Update client's last_contacted_at when a new ClientTask is created
     """
     if created and instance.client:
-        instance.client.last_contacted_at = timezone.now()
-        instance.client.save(update_fields=['last_contacted_at'])
+        # Use update to avoid triggering signals again
+        Client.objects.filter(pk=instance.client.pk).update(last_contacted_at=timezone.now())
+
+
+@receiver(post_save, sender='crm.ClientCall')
+def update_last_contacted_from_call(sender, instance, created, **kwargs):
+    """
+    Update client's last_contacted_at when a new ClientCall is created
+    """
+    if created and instance.client:
+        # Use update to avoid triggering signals again
+        from crm.models import Client
+        Client.objects.filter(pk=instance.client.pk).update(last_contacted_at=timezone.now())
 
 
 # ==================== Notification Signals ====================
@@ -113,7 +124,7 @@ def notify_new_lead(sender, instance, created, **kwargs):
 
 @receiver(pre_save, sender=Client)
 def notify_lead_status_changed(sender, instance, **kwargs):
-    """Send notification when lead status changes"""
+    """Send notification when lead status changes and update last_contacted_at"""
     if instance.pk:  # Only for existing instances
         try:
             old_instance = Client.objects.get(pk=instance.pk)
@@ -121,7 +132,10 @@ def notify_lead_status_changed(sender, instance, **kwargs):
             new_status_id = instance.status.id if instance.status else None
             
             if old_status_id != new_status_id and instance.status:
-                # Status changed
+                # Status changed - update last_contacted_at
+                instance.last_contacted_at = timezone.now()
+                
+                # Send notification
                 if instance.assigned_to:
                     try:
                         NotificationService.send_notification(
@@ -188,9 +202,17 @@ def notify_lead_assigned(sender, instance, **kwargs):
 
 @receiver(post_save, sender=Client)
 def notify_lead_updated(sender, instance, created, **kwargs):
-    """Send notification when lead is updated"""
+    """Update last_contacted_at when lead is updated (any field change)"""
     if created:
         return  # Already handled by notify_new_lead
+    
+    # Update last_contacted_at for any update to the client
+    # This ensures that any action taken on the lead will prevent leadNoFollowUp notifications
+    if not instance.last_contacted_at or (timezone.now() - instance.last_contacted_at).total_seconds() > 60:
+        # Only update if it's been more than 1 minute since last update to avoid excessive updates
+        instance.last_contacted_at = timezone.now()
+        # Use update_fields to avoid triggering signals again
+        Client.objects.filter(pk=instance.pk).update(last_contacted_at=timezone.now())
     
     # Notify assigned employee (only if updated, not on status/assignment changes)
     # We skip this to avoid duplicate notifications
@@ -209,7 +231,6 @@ def notify_lead_updated(sender, instance, created, **kwargs):
     #         )
     #     except Exception as e:
     #         logger.error(f"Error sending update notification: {e}")
-    pass
 
 
 @receiver(post_save, sender=Deal)

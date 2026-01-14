@@ -34,6 +34,7 @@ class NotificationType(models.TextChoices):
     TASK_CREATED = 'task_created', 'Task Created'
     TASK_REMINDER = 'task_reminder', 'Task Reminder'
     TASK_COMPLETED = 'task_completed', 'Task Completed'
+    CALL_REMINDER = 'call_reminder', 'Call Reminder'
     
     # Deals
     DEAL_CREATED = 'deal_created', 'Deal Created'
@@ -48,6 +49,7 @@ class NotificationType(models.TextChoices):
     
     # System & Subscription
     LOGIN_FROM_NEW_DEVICE = 'login_from_new_device', 'Login from New Device'
+    BROADCAST = 'broadcast', 'Broadcast'
     SYSTEM_UPDATE = 'system_update', 'System Update'
     SUBSCRIPTION_EXPIRING = 'subscription_expiring', 'Subscription Expiring'
     PAYMENT_FAILED = 'payment_failed', 'Payment Failed'

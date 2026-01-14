@@ -65,8 +65,8 @@
 # مهام الإشعارات (Notification Cron Jobs)
 # ============================================
 
-# 7. فحص Leads بدون متابعة - كل 30 دقيقة
-*/30 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_no_follow_up >> /var/log/crm-api-lead-no-follow-up.log 2>&1
+# 7. فحص Leads بدون متابعة - 4 مرات في اليوم (كل 6 ساعات)
+0 */6 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_no_follow_up >> /var/log/crm-api-lead-no-follow-up.log 2>&1
 
 # 8. فحص تذكيرات Leads - كل 15 دقيقة
 */15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_reminders >> /var/log/crm-api-lead-reminders.log 2>&1
@@ -79,6 +79,9 @@
 
 # 11. فحص تذكيرات المهام - كل 15 دقيقة
 */15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_task_reminders >> /var/log/crm-api-task-reminders.log 2>&1
+
+# 11.5. فحص تذكيرات المكالمات - كل 15 دقيقة
+*/15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_call_reminders >> /var/log/crm-api-call-reminders.log 2>&1
 
 # 12. فحص تذكيرات الصفقات - كل ساعة
 0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_deal_reminders >> /var/log/crm-api-deal-reminders.log 2>&1

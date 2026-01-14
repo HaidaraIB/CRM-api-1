@@ -5,6 +5,7 @@ from .models import (
     Channel,
     LeadStage,
     LeadStatus,
+    CallMethod,
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
@@ -131,6 +132,44 @@ class LeadStatusListSerializer(serializers.ModelSerializer):
             "color",
             "is_default",
             "is_hidden",
+            "company",
+            "company_name",
+            "is_active",
+            "created_at",
+        ]
+
+
+@extend_schema_serializer(component_name="CallMethod")
+class CallMethodSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = CallMethod
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
+            "company",
+            "company_name",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class CallMethodListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for list views"""
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = CallMethod
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
             "company",
             "company_name",
             "is_active",
