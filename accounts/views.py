@@ -666,7 +666,42 @@ def request_two_factor_auth(request):
     # Create 2FA code
     try:
         expiry_minutes = 10  # 2FA codes expire in 10 minutes
-        two_fa = TwoFactorAuth.create_for_user(user, expiry_minutes=expiry_minutes)
+        
+        # For demo account, use a constant 2FA code for testing (from settings)
+        demo_account_username = settings.DEMO_ACCOUNT_USERNAME
+        demo_account_email = settings.DEMO_ACCOUNT_EMAIL
+        demo_2fa_code = settings.DEMO_ACCOUNT_2FA_CODE
+        
+        # Check if this is a demo account (only if demo account is configured)
+        is_demo_account = False
+        if demo_account_username and demo_account_email:
+            is_demo_account = (
+                user.username.lower() == demo_account_username.lower() or 
+                user.email.lower() == demo_account_email.lower()
+            )
+        
+        if is_demo_account and demo_2fa_code:
+            # Use constant code for demo account
+            # Delete old unused 2FA codes for this user
+            TwoFactorAuth.objects.filter(user=user, is_verified=False).delete()
+            
+            # Create 2FA with constant code
+            import uuid
+            from django.utils import timezone
+            from datetime import timedelta
+            
+            token = uuid.uuid4().hex
+            expires_at = timezone.now() + timedelta(minutes=expiry_minutes)
+            two_fa = TwoFactorAuth.objects.create(
+                user=user,
+                code=demo_2fa_code,
+                token=token,
+                expires_at=expires_at,
+            )
+        else:
+            # Normal flow: generate random code
+            two_fa = TwoFactorAuth.create_for_user(user, expiry_minutes=expiry_minutes)
+        
         # Get language from request header or default to 'ar'
         language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'ar')
         if 'en' in language.lower():

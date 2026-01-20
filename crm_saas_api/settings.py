@@ -440,6 +440,11 @@ API_KEY_WEB = os.getenv("API_KEY_WEB", "")
 # Admin Panel API Key
 API_KEY_ADMIN = os.getenv("API_KEY_ADMIN", "")
 
+# Demo account settings for testing (read from .env)
+DEMO_ACCOUNT_USERNAME = os.getenv("DEMO_ACCOUNT_USERNAME", "")
+DEMO_ACCOUNT_EMAIL = os.getenv("DEMO_ACCOUNT_EMAIL", "")
+DEMO_ACCOUNT_2FA_CODE = os.getenv("DEMO_ACCOUNT_2FA_CODE", "")
+
 # Note: If no API keys are set, the middleware will skip validation (for development)
 # In production, always set all API keys in .env file
 
