@@ -409,6 +409,7 @@ class ClientCall(models.Model):
         help_text="Call method for this call",
     )
     notes = models.TextField(blank=True, null=True)
+    call_datetime = models.DateTimeField(blank=True, null=True, help_text="Date and time when the call happened")
     follow_up_date = models.DateTimeField(blank=True, null=True, help_text="Next call date or follow up date")
     created_by = models.ForeignKey(
         "accounts.User",
