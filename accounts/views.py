@@ -667,21 +667,23 @@ def request_two_factor_auth(request):
     try:
         expiry_minutes = 10  # 2FA codes expire in 10 minutes
         
-        # For demo account, use a constant 2FA code for testing (from settings)
-        demo_account_username = settings.DEMO_ACCOUNT_USERNAME
-        demo_account_email = settings.DEMO_ACCOUNT_EMAIL
-        demo_2fa_code = settings.DEMO_ACCOUNT_2FA_CODE
-        
-        # Check if this is a demo account (only if demo account is configured)
-        is_demo_account = False
-        if demo_account_username and demo_account_email:
-            is_demo_account = (
-                user.username.lower() == demo_account_username.lower() or 
-                user.email.lower() == demo_account_email.lower()
-            )
-        
-        if is_demo_account and demo_2fa_code:
-            # Use constant code for demo account
+        # For demo accounts (Google/Apple store review), use constant 2FA from .env
+        demo_2fa_code = None
+        is_google_demo = (
+            (settings.DEMO_GOOGLE_ACCOUNT_USERNAME and user.username.lower() == settings.DEMO_GOOGLE_ACCOUNT_USERNAME.lower())
+            or (settings.DEMO_GOOGLE_ACCOUNT_EMAIL and user.email.lower() == settings.DEMO_GOOGLE_ACCOUNT_EMAIL.lower())
+        )
+        is_apple_demo = (
+            (settings.DEMO_APPLE_ACCOUNT_USERNAME and user.username.lower() == settings.DEMO_APPLE_ACCOUNT_USERNAME.lower())
+            or (settings.DEMO_APPLE_ACCOUNT_EMAIL and user.email.lower() == settings.DEMO_APPLE_ACCOUNT_EMAIL.lower())
+        )
+        if is_google_demo and getattr(settings, "DEMO_GOOGLE_ACCOUNT_2FA_CODE", ""):
+            demo_2fa_code = settings.DEMO_GOOGLE_ACCOUNT_2FA_CODE
+        elif is_apple_demo and getattr(settings, "DEMO_APPLE_ACCOUNT_2FA_CODE", ""):
+            demo_2fa_code = settings.DEMO_APPLE_ACCOUNT_2FA_CODE
+
+        if demo_2fa_code:
+            # Use constant code for demo account (Google or Apple)
             # Delete old unused 2FA codes for this user
             TwoFactorAuth.objects.filter(user=user, is_verified=False).delete()
             
