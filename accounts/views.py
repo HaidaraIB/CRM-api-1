@@ -23,7 +23,11 @@ from .serializers import (
 from .permissions import CanAccessUser, HasActiveSubscription
 from companies.models import Company
 from django.conf import settings
-from .utils import send_email_verification, send_password_reset_email, send_two_factor_auth_email
+from .utils import (
+    send_email_verification,
+    send_password_reset_email,
+    send_two_factor_auth_email,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -58,11 +62,11 @@ class UserViewSet(viewsets.ModelViewSet):
         # Super Admin can access all users
         if user.is_super_admin():
             return queryset
-        
+
         # Admin can access users in their company
         if user.is_admin() and user.company:
             return queryset.filter(company=user.company)
-        
+
         # Employee can only access their own profile
         return queryset.filter(id=user.id)
 
@@ -70,30 +74,32 @@ class UserViewSet(viewsets.ModelViewSet):
         """Create user and automatically set company from request user, then link company owner if user is admin"""
         # Get company from request user (the user creating this new user)
         request_user = self.request.user
-        company = request_user.company if request_user and request_user.company else None
-        
+        company = (
+            request_user.company if request_user and request_user.company else None
+        )
+
         # Set company in the serializer's validated_data if not already set
         # Note: The serializer has 'company' as SerializerMethodField (read-only),
         # so we need to set it directly on the model instance after creation
         user = serializer.save()
-        
+
         # Set company from request user if not already set
         if company and not user.company:
             user.company = company
-            user.save(update_fields=['company'])
-        
+            user.save(update_fields=["company"])
+
         # إذا كان المستخدم admin وله company، ربط Company.owner به تلقائياً
         if user.role == Role.ADMIN.value and user.company:
             # إذا لم يكن للـ company owner أو كان owner مختلف، ربط المستخدم كـ owner
             if not user.company.owner:
                 user.company.owner = user
-                user.company.save(update_fields=['owner'])
+                user.company.save(update_fields=["owner"])
             elif user.company.owner != user:
                 # إذا كان هناك owner آخر، يمكن اختيار استبداله أو عدم التحديث
                 # هنا سنستبدله إذا كان المستخدم الجديد admin
                 user.company.owner = user
-                user.company.save(update_fields=['owner'])
-    
+                user.company.save(update_fields=["owner"])
+
     def perform_update(self, serializer):
         """Update user and handle company owner changes"""
         old_company = None
@@ -101,28 +107,32 @@ class UserViewSet(viewsets.ModelViewSet):
         if self.get_object():
             old_company = self.get_object().company
             old_role = self.get_object().role
-        
+
         user = serializer.save()
         new_company = user.company
         new_role = user.role
-        
+
         # إذا كان المستخدم admin وله company، ربط Company.owner به تلقائياً
         if new_role == Role.ADMIN.value and new_company:
             # إذا تغيرت company أو role، تحديث Company.owner
             if new_company != old_company or new_role != old_role:
                 # إزالة owner من company القديمة (إن وجدت)
-                if old_company and old_company != new_company and old_company.owner == user:
+                if (
+                    old_company
+                    and old_company != new_company
+                    and old_company.owner == user
+                ):
                     old_company.owner = None
-                    old_company.save(update_fields=['owner'])
-                
+                    old_company.save(update_fields=["owner"])
+
                 # ربط Company.owner بالمستخدم الجديد
                 if not new_company.owner or new_company.owner != user:
                     new_company.owner = user
-                    new_company.save(update_fields=['owner'])
+                    new_company.save(update_fields=["owner"])
         elif old_company and old_company.owner == user:
             # إذا لم يعد المستخدم admin أو تمت إزالة company، إزالة owner من company
             old_company.owner = None
-            old_company.save(update_fields=['owner'])
+            old_company.save(update_fields=["owner"])
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -134,7 +144,9 @@ class UserViewSet(viewsets.ModelViewSet):
             return UserListSerializer
         return UserSerializer
 
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])  # me endpoint doesn't require active subscription
+    @action(
+        detail=False, methods=["get"], permission_classes=[IsAuthenticated]
+    )  # me endpoint doesn't require active subscription
     def me(self, request):
         serializer = UserSerializer(request.user, context=self.get_serializer_context())
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -144,42 +156,42 @@ class UserViewSet(viewsets.ModelViewSet):
         """
         Change password for the current authenticated user
         """
-        serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
-        
+        serializer = ChangePasswordSerializer(
+            data=request.data, context={"request": request}
+        )
+
         if serializer.is_valid():
             user = request.user
-            current_password = serializer.validated_data['current_password']
-            new_password = serializer.validated_data['new_password']
-            
+            current_password = serializer.validated_data["current_password"]
+            new_password = serializer.validated_data["new_password"]
+
             # Verify current password
             if not user.check_password(current_password):
                 return Response(
-                    {'error': 'Current password is incorrect.'},
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"error": "Current password is incorrect."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
-            
+
             # Validate new password
             try:
                 validate_password(new_password, user)
             except ValidationError as e:
                 return Response(
-                    {'error': ' '.join(e.messages)},
-                    status=status.HTTP_400_BAD_REQUEST
+                    {"error": " ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST
                 )
-            
+
             # Set new password
             user.set_password(new_password)
             user.save()
-            
+
             return Response(
-                {'message': 'Password changed successfully.'},
-                status=status.HTTP_200_OK
+                {"message": "Password changed successfully."}, status=status.HTTP_200_OK
             )
-        
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def register_company(request):
     """
@@ -194,51 +206,55 @@ def register_company(request):
     Response: { access, refresh, user, company, subscription? }
     """
     serializer = RegisterCompanySerializer(data=request.data)
-    
+
     if serializer.is_valid():
         result = serializer.save()
-        company = result['company']
-        owner = result['owner']
-        subscription = result.get('subscription')
-        requires_payment = result.get('requires_payment', False)
-        
+        company = result["company"]
+        owner = result["owner"]
+        subscription = result.get("subscription")
+        requires_payment = result.get("requires_payment", False)
+
         # Generate JWT tokens
         refresh = RefreshToken.for_user(owner)
-        
+
         # Prepare response data
         response_data = {
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
-            'user': {
-                'id': owner.id,
-                'username': owner.username,
-                'email': owner.email,
-                'first_name': owner.first_name,
-                'last_name': owner.last_name,
-                'phone': owner.phone or "",
-                'profile_photo': request.build_absolute_uri(owner.profile_photo.url) if owner.profile_photo else None,
-                'role': owner.role,
-                'email_verified': owner.email_verified,
-                'company': company.id,
-                'company_name': company.name,
-                'company_specialization': company.specialization,
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "user": {
+                "id": owner.id,
+                "username": owner.username,
+                "email": owner.email,
+                "first_name": owner.first_name,
+                "last_name": owner.last_name,
+                "phone": owner.phone or "",
+                "profile_photo": (
+                    request.build_absolute_uri(owner.profile_photo.url)
+                    if owner.profile_photo
+                    else None
+                ),
+                "role": owner.role,
+                "email_verified": owner.email_verified,
+                "company": company.id,
+                "company_name": company.name,
+                "company_specialization": company.specialization,
             },
-            'company': {
-                'id': company.id,
-                'name': company.name,
-                'domain': company.domain,
-                'specialization': company.specialization,
+            "company": {
+                "id": company.id,
+                "name": company.name,
+                "domain": company.domain,
+                "specialization": company.specialization,
             },
-            'requires_payment': requires_payment,
+            "requires_payment": requires_payment,
         }
-        
+
         if subscription:
-            response_data['subscription'] = {
-                'id': subscription.id,
-                'plan_id': subscription.plan.id,
-                'plan_name': subscription.plan.name,
-                'is_active': subscription.is_active,
-                'end_date': subscription.end_date.isoformat(),
+            response_data["subscription"] = {
+                "id": subscription.id,
+                "plan_id": subscription.plan.id,
+                "plan_name": subscription.plan.name,
+                "is_active": subscription.is_active,
+                "end_date": subscription.end_date.isoformat(),
             }
 
         # Email verification is now handled on-demand via the resend-verification endpoint
@@ -246,7 +262,9 @@ def register_company(request):
         verification_info = {}
         try:
             expiry_hours = getattr(settings, "EMAIL_VERIFICATION_EXPIRY_HOURS", 48)
-            verification = EmailVerification.create_for_user(owner, expiry_hours=expiry_hours)
+            verification = EmailVerification.create_for_user(
+                owner, expiry_hours=expiry_hours
+            )
             # Don't send email automatically - user will request it from the modal
             verification_info = {
                 "sent": False,
@@ -260,20 +278,20 @@ def register_company(request):
             }
 
         response_data["email_verification"] = verification_info
-        
+
         return Response(response_data, status=status.HTTP_201_CREATED)
-    
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def verify_email(request):
     """
     Verify a user's email using a code or token.
     """
     import urllib.parse
-    
+
     serializer = EmailVerificationSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -291,12 +309,12 @@ def verify_email(request):
 
     # Build filters - try to find unverified verification records
     filters = {"user": user, "is_verified": False}
-    
+
     if code:
         code_value = code.strip() if isinstance(code, str) else code
         if code_value:
             filters["code"] = code_value
-    
+
     if token:
         # Handle URL decoding in case token was URL-encoded
         token_value = token.strip() if isinstance(token, str) else token
@@ -317,9 +335,7 @@ def verify_email(request):
 
     # Try to find the verification record
     verification = (
-        EmailVerification.objects.filter(**filters)
-        .order_by("-created_at")
-        .first()
+        EmailVerification.objects.filter(**filters).order_by("-created_at").first()
     )
 
     # If not found, check if there's a verification with this token/code that's already verified
@@ -335,7 +351,7 @@ def verify_email(request):
             except Exception:
                 pass
             alt_filters["token"] = token_value
-        
+
         existing = EmailVerification.objects.filter(**alt_filters).first()
         if existing and existing.is_verified:
             # Email is already verified via this token
@@ -346,7 +362,7 @@ def verify_email(request):
                 {"message": "Email is already verified."},
                 status=status.HTTP_200_OK,
             )
-        
+
         return Response(
             {"error": "Invalid or expired verification code."},
             status=status.HTTP_400_BAD_REQUEST,
@@ -382,7 +398,7 @@ def resend_verification(request):
             {"error": "Email is required."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     try:
         user = User.objects.get(email=email)
     except User.DoesNotExist:
@@ -390,37 +406,43 @@ def resend_verification(request):
             {"error": "User with this email does not exist."},
             status=status.HTTP_404_NOT_FOUND,
         )
-    
+
     # Check if email is already verified
     if user.email_verified:
         return Response(
             {"message": "Email is already verified."},
             status=status.HTTP_200_OK,
         )
-    
+
     # Check if user is requesting for their own email or is admin
     if request.user.email != email and not request.user.is_staff:
         return Response(
             {"error": "You can only request verification for your own email."},
             status=status.HTTP_403_FORBIDDEN,
         )
-    
+
     try:
         expiry_hours = getattr(settings, "EMAIL_VERIFICATION_EXPIRY_HOURS", 48)
-        verification = EmailVerification.create_for_user(user, expiry_hours=expiry_hours)
-        
+        verification = EmailVerification.create_for_user(
+            user, expiry_hours=expiry_hours
+        )
+
         # Get language from request header or default to 'en'
-        language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')
-        if 'ar' in language.lower():
-            language = 'ar'
+        language = request.META.get("HTTP_ACCEPT_LANGUAGE", "en")
+        if "ar" in language.lower():
+            language = "ar"
         else:
-            language = 'en'
-        
+            language = "en"
+
         sent = send_email_verification(user, verification, language=language)
-        
+
         return Response(
             {
-                "message": "Verification code sent successfully." if sent else "Failed to send verification email.",
+                "message": (
+                    "Verification code sent successfully."
+                    if sent
+                    else "Failed to send verification email."
+                ),
                 "sent": sent,
                 "expires_at": verification.expires_at.isoformat(),
             },
@@ -434,7 +456,7 @@ def resend_verification(request):
         )
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def check_registration_availability(request):
     """
@@ -450,7 +472,7 @@ def check_registration_availability(request):
     )
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def forgot_password(request):
     """
@@ -460,40 +482,40 @@ def forgot_password(request):
     Response: { message: string, sent: bool }
     """
     serializer = ForgotPasswordSerializer(data=request.data)
-    
+
     if not serializer.is_valid():
         # Don't reveal if email exists or not
         return Response(
             {"message": "If the email exists, a password reset link has been sent."},
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
-    
+
     user = serializer.validated_data.get("user")
     if not user:
         # Don't reveal if email exists or not
         return Response(
             {"message": "If the email exists, a password reset link has been sent."},
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
-    
+
     # Create password reset token
     try:
         expiry_hours = getattr(settings, "PASSWORD_RESET_EXPIRY_HOURS", 1)
         reset = PasswordReset.create_for_user(user, expiry_hours=expiry_hours)
         # Get language from request header or default to 'en'
-        language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')
-        if 'ar' in language.lower():
-            language = 'ar'
+        language = request.META.get("HTTP_ACCEPT_LANGUAGE", "en")
+        if "ar" in language.lower():
+            language = "ar"
         else:
-            language = 'en'
+            language = "en"
         sent = send_password_reset_email(user, reset, language=language)
-        
+
         return Response(
             {
                 "message": "If the email exists, a password reset link has been sent.",
                 "sent": sent,
             },
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
     except Exception as exc:
         logger.warning("Unable to send password reset email: %s", exc)
@@ -503,11 +525,11 @@ def forgot_password(request):
                 "message": "If the email exists, a password reset link has been sent.",
                 "sent": False,
             },
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def reset_password(request):
     """
@@ -517,24 +539,24 @@ def reset_password(request):
     Response: { message: string }
     """
     import urllib.parse
-    
+
     serializer = ResetPasswordSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
     user = serializer.validated_data["user"]
     code = serializer.validated_data.get("code")
     token = serializer.validated_data.get("token")
     new_password = serializer.validated_data["new_password"]
-    
+
     # Build filters
     filters = {"user": user, "is_used": False}
-    
+
     if code:
         code_value = code.strip() if isinstance(code, str) else code
         if code_value:
             filters["code"] = code_value
-    
+
     if token:
         token_value = token.strip() if isinstance(token, str) else token
         if token_value:
@@ -543,53 +565,49 @@ def reset_password(request):
             except Exception:
                 pass
             filters["token"] = token_value
-    
+
     if not code and not token:
         return Response(
             {"error": "Either code or token must be provided."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     # Find the reset record
-    reset = (
-        PasswordReset.objects.filter(**filters)
-        .order_by("-created_at")
-        .first()
-    )
-    
+    reset = PasswordReset.objects.filter(**filters).order_by("-created_at").first()
+
     if not reset:
         return Response(
             {"error": "Invalid or expired reset code."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     if reset.is_expired:
         reset.delete()
         return Response(
             {"error": "Reset code has expired. Please request a new one."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     if reset.is_used:
         return Response(
             {"error": "This reset code has already been used."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     # Reset password
     user.set_password(new_password)
     user.save()
-    
+
     # Mark reset as used
     reset.mark_used()
-    
+
     return Response(
         {"message": "Password has been reset successfully."},
         status=status.HTTP_200_OK,
     )
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def request_two_factor_auth(request):
     """
@@ -599,53 +617,54 @@ def request_two_factor_auth(request):
     Response: { message: string, sent: bool, token: string }
     """
     serializer = RequestTwoFactorAuthSerializer(data=request.data)
-    
+
     if not serializer.is_valid():
         # Normalize error format - extract error message from serializer errors
         error_message = None
-        if 'error' in serializer.errors:
-            error_value = serializer.errors['error']
+        if "error" in serializer.errors:
+            error_value = serializer.errors["error"]
             if isinstance(error_value, list) and len(error_value) > 0:
                 error_message = error_value[0]
             elif isinstance(error_value, str):
                 error_message = error_value
-        elif 'username' in serializer.errors:
-            error_value = serializer.errors['username']
+        elif "username" in serializer.errors:
+            error_value = serializer.errors["username"]
             if isinstance(error_value, list) and len(error_value) > 0:
                 error_message = error_value[0]
             elif isinstance(error_value, str):
                 error_message = error_value
-        
+
         # Return normalized error format
         if error_message:
-            return Response({"error": error_message}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": error_message}, status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
     user = serializer.validated_data.get("user")
     if not user:
-        return Response(
-            {"error": "User not found."},
-            status=status.HTTP_404_NOT_FOUND
-        )
-    
+        return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
     # Check subscription before sending 2FA code (for all users except Super Admin)
     if not user.is_super_admin():
         if user.company:
             from subscriptions.models import Subscription
+
             has_active_subscription = Subscription.objects.filter(
-                company=user.company,
-                is_active=True
+                company=user.company, is_active=True
             ).exists()
-            
+
             if not has_active_subscription:
                 # Return different error messages for admin vs employee
-                subscription = Subscription.objects.filter(
-                    company=user.company
-                ).order_by('-created_at').first()
-                
+                subscription = (
+                    Subscription.objects.filter(company=user.company)
+                    .order_by("-created_at")
+                    .first()
+                )
+
                 # Check user role - use role field directly to be sure
-                is_employee_user = user.role == 'employee'
-                
+                is_employee_user = user.role == "employee"
+
                 if is_employee_user:
                     # Employees see "account temporarily inactive" message
                     error_data = {
@@ -660,22 +679,28 @@ def request_two_factor_auth(request):
                     }
                     if subscription:
                         error_data["subscriptionId"] = subscription.id
-                
+
                 return Response(error_data, status=status.HTTP_403_FORBIDDEN)
-    
+
     # Create 2FA code
     try:
         expiry_minutes = 10  # 2FA codes expire in 10 minutes
-        
+
         # For demo accounts (Google/Apple store review), use constant 2FA from .env
         demo_2fa_code = None
         is_google_demo = (
-            (settings.DEMO_GOOGLE_ACCOUNT_USERNAME and user.username.lower() == settings.DEMO_GOOGLE_ACCOUNT_USERNAME.lower())
-            or (settings.DEMO_GOOGLE_ACCOUNT_EMAIL and user.email.lower() == settings.DEMO_GOOGLE_ACCOUNT_EMAIL.lower())
+            settings.DEMO_GOOGLE_ACCOUNT_USERNAME
+            and user.username.lower() == settings.DEMO_GOOGLE_ACCOUNT_USERNAME.lower()
+        ) or (
+            settings.DEMO_GOOGLE_ACCOUNT_EMAIL
+            and user.email.lower() == settings.DEMO_GOOGLE_ACCOUNT_EMAIL.lower()
         )
         is_apple_demo = (
-            (settings.DEMO_APPLE_ACCOUNT_USERNAME and user.username.lower() == settings.DEMO_APPLE_ACCOUNT_USERNAME.lower())
-            or (settings.DEMO_APPLE_ACCOUNT_EMAIL and user.email.lower() == settings.DEMO_APPLE_ACCOUNT_EMAIL.lower())
+            settings.DEMO_APPLE_ACCOUNT_USERNAME
+            and user.username.lower() == settings.DEMO_APPLE_ACCOUNT_USERNAME.lower()
+        ) or (
+            settings.DEMO_APPLE_ACCOUNT_EMAIL
+            and user.email.lower() == settings.DEMO_APPLE_ACCOUNT_EMAIL.lower()
         )
         if is_google_demo and getattr(settings, "DEMO_GOOGLE_ACCOUNT_2FA_CODE", ""):
             demo_2fa_code = settings.DEMO_GOOGLE_ACCOUNT_2FA_CODE
@@ -686,12 +711,12 @@ def request_two_factor_auth(request):
             # Use constant code for demo account (Google or Apple)
             # Delete old unused 2FA codes for this user
             TwoFactorAuth.objects.filter(user=user, is_verified=False).delete()
-            
+
             # Create 2FA with constant code
             import uuid
             from django.utils import timezone
             from datetime import timedelta
-            
+
             token = uuid.uuid4().hex
             expires_at = timezone.now() + timedelta(minutes=expiry_minutes)
             two_fa = TwoFactorAuth.objects.create(
@@ -703,22 +728,24 @@ def request_two_factor_auth(request):
         else:
             # Normal flow: generate random code
             two_fa = TwoFactorAuth.create_for_user(user, expiry_minutes=expiry_minutes)
-        
+
         # Get language from request header or default to 'ar'
-        language = request.META.get('HTTP_ACCEPT_LANGUAGE', 'ar')
-        if 'en' in language.lower():
-            language = 'en'
+        language = request.META.get("HTTP_ACCEPT_LANGUAGE", "ar")
+        if "en" in language.lower():
+            language = "en"
         else:
-            language = 'ar'
-        sent = send_two_factor_auth_email(user, two_fa, language=language)
-        
+            language = "ar"
+        if not is_apple_demo and not is_google_demo:
+            sent = send_two_factor_auth_email(user, two_fa, language=language)
+        else:
+            sent = True
         return Response(
             {
                 "message": "2FA code has been sent to your email.",
                 "sent": sent,
                 "token": two_fa.token,  # Return token for verification
             },
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
     except Exception as exc:
         logger.warning("Unable to send 2FA email: %s", exc)
@@ -727,11 +754,11 @@ def request_two_factor_auth(request):
                 "error": "Failed to send 2FA code. Please try again.",
                 "sent": False,
             },
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([AllowAny])
 def verify_two_factor_auth(request):
     """
@@ -741,59 +768,56 @@ def verify_two_factor_auth(request):
     Response: { access: string, refresh: string, user: {...} }
     """
     import urllib.parse
-    
+
     # First verify password
-    username_or_email = request.data.get('username', '').strip()
-    password = request.data.get('password', '')
-    
+    username_or_email = request.data.get("username", "").strip()
+    password = request.data.get("password", "")
+
     if not username_or_email or not password:
         return Response(
             {"error": "Username and password are required."},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     # Find user
     user = None
-    if '@' in username_or_email:
+    if "@" in username_or_email:
         try:
             user = User.objects.get(email__iexact=username_or_email)
         except User.DoesNotExist:
             return Response(
-                {"error": "Invalid credentials."},
-                status=status.HTTP_401_UNAUTHORIZED
+                {"error": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED
             )
     else:
         try:
             user = User.objects.get(username__iexact=username_or_email)
         except User.DoesNotExist:
             return Response(
-                {"error": "Invalid credentials."},
-                status=status.HTTP_401_UNAUTHORIZED
+                {"error": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED
             )
-    
+
     # Verify password
     if not user.check_password(password):
         return Response(
-            {"error": "Invalid credentials."},
-            status=status.HTTP_401_UNAUTHORIZED
+            {"error": "Invalid credentials."}, status=status.HTTP_401_UNAUTHORIZED
         )
-    
+
     # Now verify 2FA code
     serializer = VerifyTwoFactorAuthSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
     code = serializer.validated_data.get("code")
     token = serializer.validated_data.get("token")
-    
+
     # Build filters
     filters = {"user": user, "is_verified": False}
-    
+
     if code:
         code_value = code.strip() if isinstance(code, str) else code
         if code_value:
             filters["code"] = code_value
-    
+
     if token:
         token_value = token.strip() if isinstance(token, str) else token
         if token_value:
@@ -802,47 +826,43 @@ def verify_two_factor_auth(request):
             except Exception:
                 pass
             filters["token"] = token_value
-    
+
     if not code and not token:
         return Response(
             {"error": "Either code or token must be provided."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     # Find the 2FA record
-    two_fa = (
-        TwoFactorAuth.objects.filter(**filters)
-        .order_by("-created_at")
-        .first()
-    )
-    
+    two_fa = TwoFactorAuth.objects.filter(**filters).order_by("-created_at").first()
+
     if not two_fa:
         return Response(
             {"error": "Invalid or expired 2FA code."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     if two_fa.is_expired:
         two_fa.delete()
         return Response(
             {"error": "2FA code has expired. Please request a new one."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     if two_fa.is_verified:
         return Response(
             {"error": "This 2FA code has already been used."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     # Mark as verified
     two_fa.mark_verified()
-    
+
     # Check subscription for all users except Super Admin
     # Super Admin doesn't need active subscription
     if not user.is_super_admin():
         from subscriptions.models import Subscription
-        
+
         # Check if user has a company
         if not user.company:
             # User without company cannot login (except super admin)
@@ -851,22 +871,23 @@ def verify_two_factor_auth(request):
                 "code": "NO_COMPANY",
             }
             return Response(error_data, status=status.HTTP_403_FORBIDDEN)
-        
+
         # Check if company has an active subscription
         has_active_subscription = Subscription.objects.filter(
-            company=user.company,
-            is_active=True
+            company=user.company, is_active=True
         ).exists()
-        
+
         if not has_active_subscription:
             # Return different error messages for admin vs employee
-            subscription = Subscription.objects.filter(
-                company=user.company
-            ).order_by('-created_at').first()
-            
+            subscription = (
+                Subscription.objects.filter(company=user.company)
+                .order_by("-created_at")
+                .first()
+            )
+
             # Check user role - use role field directly to be sure
-            is_employee_user = user.role == 'employee'
-            
+            is_employee_user = user.role == "employee"
+
             if is_employee_user:
                 # Employees see "account temporarily inactive" message
                 error_data = {
@@ -881,94 +902,97 @@ def verify_two_factor_auth(request):
                 }
                 if subscription:
                     error_data["subscriptionId"] = subscription.id
-            
+
             return Response(error_data, status=status.HTTP_403_FORBIDDEN)
-    
+
     # Generate JWT tokens
     refresh = RefreshToken.for_user(user)
-    
+
     # Prepare response data
     response_data = {
-        'access': str(refresh.access_token),
-        'refresh': str(refresh),
-        'user': {
-            'id': user.id,
-            'username': user.username,
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'phone': user.phone or "",
-            'profile_photo': request.build_absolute_uri(user.profile_photo.url) if user.profile_photo else None,
-            'role': user.role,
-            'email_verified': user.email_verified,
-            'company': user.company.id if user.company else None,
-            'company_name': user.company.name if user.company else None,
-            'company_specialization': user.company.specialization if user.company else None,
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "phone": user.phone or "",
+            "profile_photo": (
+                request.build_absolute_uri(user.profile_photo.url)
+                if user.profile_photo
+                else None
+            ),
+            "role": user.role,
+            "email_verified": user.email_verified,
+            "company": user.company.id if user.company else None,
+            "company_name": user.company.name if user.company else None,
+            "company_specialization": (
+                user.company.specialization if user.company else None
+            ),
         },
     }
-    
+
     return Response(response_data, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def update_fcm_token(request):
     """
     Update FCM token and language for the authenticated user
     """
-    fcm_token = request.data.get('fcm_token', '').strip()
-    language = request.data.get('language', '').strip()
-    
+    fcm_token = request.data.get("fcm_token", "").strip()
+    language = request.data.get("language", "").strip()
+
     if not fcm_token:
         return Response(
-            {'error': 'fcm_token is required'},
-            status=status.HTTP_400_BAD_REQUEST
+            {"error": "fcm_token is required"}, status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     user = request.user
     user.fcm_token = fcm_token
-    
+
     # Update language if provided
-    if language in ['ar', 'en']:
+    if language in ["ar", "en"]:
         user.language = language
-    
-    user.save(update_fields=['fcm_token', 'language'])
-    
+
+    user.save(update_fields=["fcm_token", "language"])
+
     logger.info(f"FCM token and language updated for user {user.username}")
-    
+
     return Response(
-        {'message': 'FCM token updated successfully'},
-        status=status.HTTP_200_OK
+        {"message": "FCM token updated successfully"}, status=status.HTTP_200_OK
     )
 
 
-@api_view(['POST'])
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def update_language(request):
     """
     Update language preference for the authenticated user
     """
-    language = request.data.get('language', '').strip()
-    
+    language = request.data.get("language", "").strip()
+
     if not language:
         return Response(
-            {'error': 'language is required'},
-            status=status.HTTP_400_BAD_REQUEST
+            {"error": "language is required"}, status=status.HTTP_400_BAD_REQUEST
         )
-    
-    if language not in ['ar', 'en']:
+
+    if language not in ["ar", "en"]:
         return Response(
-            {'error': 'language must be either "ar" or "en"'},
-            status=status.HTTP_400_BAD_REQUEST
+            {"error": 'language must be either "ar" or "en"'},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
     user = request.user
     user.language = language
-    user.save(update_fields=['language'])
-    
+    user.save(update_fields=["language"])
+
     logger.info(f"Language updated to {language} for user {user.username}")
-    
+
     return Response(
-        {'message': 'Language updated successfully', 'language': language},
-        status=status.HTTP_200_OK
+        {"message": "Language updated successfully", "language": language},
+        status=status.HTTP_200_OK,
     )
