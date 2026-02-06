@@ -873,6 +873,7 @@ def paytabs_return(request):
 
 
 @api_view(["POST"])
+@permission_classes([AllowAny])
 def create_zaincash_payment(request):
     """
     Create a Zain Cash payment session for a subscription
@@ -2184,6 +2185,7 @@ def stripe_return(request):
 
 
 @api_view(["POST"])
+@permission_classes([AllowAny])
 def create_qicard_payment(request):
     """
     Create a QiCard payment session for a subscription
