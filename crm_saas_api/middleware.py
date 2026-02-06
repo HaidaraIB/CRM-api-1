@@ -34,8 +34,16 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         '/api/schema/',
         '/api/redoc/',
         '/api-auth/',
+        '/api/public/',  # Public plans, payment gateways list
+        # Payment gateway callbacks: return URLs and webhooks are called by the
+        # gateway (browser redirect or server POST) and cannot send X-API-Key.
+        '/api/payments/paytabs-return/',
+        '/api/payments/zaincash-return/',
+        '/api/payments/stripe-return/',
+        '/api/payments/qicard-return/',
+        '/api/payments/qicard-webhook/',
     ]
-    
+
     def process_request(self, request):
         # Only check API key for API endpoints
         if not request.path.startswith('/api/'):
