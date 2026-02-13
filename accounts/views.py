@@ -6,7 +6,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from .models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth
+from .models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin
 from .serializers import (
     UserSerializer,
     UserListSerializer,
@@ -19,8 +19,10 @@ from .serializers import (
     ResetPasswordSerializer,
     RequestTwoFactorAuthSerializer,
     VerifyTwoFactorAuthSerializer,
+    LimitedAdminSerializer,
+    CreateLimitedAdminSerializer,
 )
-from .permissions import CanAccessUser, HasActiveSubscription
+from .permissions import CanAccessUser, CanManageLimitedAdmins, HasActiveSubscription, IsSuperAdmin
 from companies.models import Company
 from django.conf import settings
 from .utils import (
@@ -996,3 +998,52 @@ def update_language(request):
         {"message": "Language updated successfully", "language": language},
         status=status.HTTP_200_OK,
     )
+
+
+class LimitedAdminViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing LimitedAdmin instances.
+    Superusers or limited admins with can_manage_limited_admins can manage.
+    List returns all limited admins (active and inactive) so they remain visible in the table.
+    """
+    serializer_class = LimitedAdminSerializer
+    permission_classes = [IsAuthenticated, CanManageLimitedAdmins]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['user__username', 'user__email', 'user__first_name', 'user__last_name']
+    ordering_fields = ['created_at', 'updated_at', 'user__username']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        # Return all limited admins (active and inactive) so deactivated ones stay visible in the table
+        return LimitedAdmin.objects.all().select_related('user', 'created_by')
+    
+    def get_serializer_class(self):
+        """Use CreateLimitedAdminSerializer for creation"""
+        if self.action == 'create':
+            return CreateLimitedAdminSerializer
+        return LimitedAdminSerializer
+    
+    def create(self, request, *args, **kwargs):
+        """Create limited admin and return response using LimitedAdminSerializer."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        # Instance is LimitedAdmin; serialize with LimitedAdminSerializer for response
+        output_serializer = LimitedAdminSerializer(serializer.instance)
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+    def perform_create(self, serializer):
+        """Set created_by when creating"""
+        serializer.save(created_by=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def toggle_active(self, request, pk=None):
+        """Toggle is_active status of limited admin"""
+        # Permission is already checked by CanManageLimitedAdmins permission class
+        limited_admin = self.get_object()
+        limited_admin.is_active = not limited_admin.is_active
+        limited_admin.save(update_fields=['is_active'])
+        
+        serializer = self.get_serializer(limited_admin)
+        return Response(serializer.data)

@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Company
 from .serializers import CompanySerializer, CompanyListSerializer
-from accounts.permissions import IsSuperAdmin
+from accounts.permissions import CanManageTenants
 from accounts.models import User
 
 
@@ -15,7 +15,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Company.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManageTenants]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "domain", "owner__username"]
     ordering_fields = ["created_at", "name"]

@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Role, EmailVerification
+from .models import User, Role, EmailVerification, LimitedAdmin
 from companies.models import Company
 
 
@@ -96,3 +96,48 @@ class EmailVerificationAdmin(admin.ModelAdmin):
     list_display = ["user", "code", "token", "is_verified", "expires_at", "created_at"]
     search_fields = ["user__email", "user__username", "code", "token"]
     list_filter = ["is_verified", "expires_at", "created_at"]
+
+
+@admin.register(LimitedAdmin)
+class LimitedAdminAdmin(admin.ModelAdmin):
+    list_display = [
+        "user",
+        "is_active",
+        "can_view_dashboard",
+        "can_manage_tenants",
+        "can_manage_subscriptions",
+        "created_by",
+        "created_at",
+    ]
+    list_filter = [
+        "is_active",
+        "can_view_dashboard",
+        "can_manage_tenants",
+        "can_manage_subscriptions",
+        "can_manage_payment_gateways",
+        "can_view_reports",
+        "can_manage_communication",
+        "can_manage_settings",
+        "created_at",
+    ]
+    search_fields = ["user__username", "user__email", "user__first_name", "user__last_name"]
+    ordering = ["-created_at"]
+    
+    fieldsets = (
+        ("User", {"fields": ("user", "created_by")}),
+        ("Status", {"fields": ("is_active",)}),
+        ("Permissions", {
+            "fields": (
+                "can_view_dashboard",
+                "can_manage_tenants",
+                "can_manage_subscriptions",
+                "can_manage_payment_gateways",
+                "can_view_reports",
+                "can_manage_communication",
+                "can_manage_settings",
+                "can_manage_limited_admins",
+            )
+        }),
+    )
+    
+    readonly_fields = ["created_at", "updated_at"]

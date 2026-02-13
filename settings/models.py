@@ -260,11 +260,23 @@ class SystemSettings(models.Model):
     System-wide settings configuration.
     Only one instance should exist (singleton pattern).
     """
+    BACKUP_SCHEDULE_CHOICES = [
+        ("daily", "Daily"),
+        ("weekly", "Weekly"),
+        ("monthly", "Monthly"),
+    ]
+
     usd_to_iqd_rate = models.DecimalField(
         max_digits=10,
         decimal_places=2,
         default=1300.00,
         help_text="USD to IQD conversion rate"
+    )
+    backup_schedule = models.CharField(
+        max_length=20,
+        choices=BACKUP_SCHEDULE_CHOICES,
+        default="daily",
+        help_text="Backup schedule: daily, weekly, or monthly",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

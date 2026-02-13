@@ -278,6 +278,7 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "usd_to_iqd_rate",
+            "backup_schedule",
             "created_at",
             "updated_at",
         ]

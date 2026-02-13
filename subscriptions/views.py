@@ -44,7 +44,13 @@ from .serializers import (
     CreateStripePaymentSerializer,
     CreateQicardPaymentSerializer,
 )
-from accounts.permissions import IsSuperAdmin
+from accounts.permissions import (
+    CanManagePlans,
+    CanManageSubscriptions,
+    CanManagePayments,
+    CanManagePaymentGateways,
+    CanManageCommunication,
+)
 from .utils import send_broadcast_email
 from .paytabs_utils import verify_paytabs_payment, create_paytabs_payment_session
 from .zaincash_utils import verify_zaincash_payment, create_zaincash_payment_session, test_zaincash_credentials
@@ -59,7 +65,7 @@ class PlanViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Plan.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManagePlans]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "name_ar", "description", "description_ar"]
     ordering_fields = ["created_at", "price_monthly", "price_yearly"]
@@ -109,7 +115,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Subscription.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManageSubscriptions]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["company__name", "plan__name"]
     ordering_fields = ["created_at", "start_date", "end_date"]
@@ -129,7 +135,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Payment.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManagePayments]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["payment_status", "payment_method", "subscription__company__name"]
     ordering_fields = ["created_at", "amount"]
@@ -149,7 +155,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Invoice.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManagePayments]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["invoice_number", "subscription__company__name", "status"]
     ordering_fields = ["created_at", "due_date", "amount"]
@@ -176,7 +182,7 @@ class BroadcastViewSet(viewsets.ModelViewSet):
     """
 
     queryset = Broadcast.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManageCommunication]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["subject", "content", "target", "status"]
     ordering_fields = ["created_at", "scheduled_at", "sent_at"]
@@ -302,7 +308,7 @@ class PaymentGatewayViewSet(viewsets.ModelViewSet):
     """
 
     queryset = PaymentGateway.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManagePaymentGateways]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "status"]
     ordering_fields = ["name", "created_at"]

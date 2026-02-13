@@ -3,7 +3,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from drf_spectacular.utils import extend_schema_field
-from .models import User, Role, TwoFactorAuth
+from .models import User, Role, TwoFactorAuth, LimitedAdmin
 from companies.models import Company
 from subscriptions.models import Plan, Subscription
 from datetime import timedelta
@@ -23,6 +23,7 @@ class UserSerializer(serializers.ModelSerializer):
         allow_null=True
     )  # Allow writing company via company_id field
     password = serializers.CharField(write_only=True, required=False)
+    limited_admin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -49,6 +50,7 @@ class UserSerializer(serializers.ModelSerializer):
             "is_me",
             "fcm_token",  # Include FCM token (read-only for security)
             "language",  # User preferred language
+            "limited_admin",
         ]
         read_only_fields = ["id", "date_joined", "last_login", "email_verified", "fcm_token"]
         extra_kwargs = {
@@ -131,6 +133,27 @@ class UserSerializer(serializers.ModelSerializer):
             company_data["subscription"] = None
         
         return company_data
+    
+    def get_limited_admin(self, obj):
+        """Return limited admin permissions if user is a limited admin"""
+        try:
+            limited_admin = LimitedAdmin.objects.select_related('user').get(user=obj)
+            return {
+                "id": limited_admin.id,
+                "is_active": limited_admin.is_active,
+                "permissions": {
+                    "can_view_dashboard": limited_admin.can_view_dashboard,
+                    "can_manage_tenants": limited_admin.can_manage_tenants,
+                    "can_manage_subscriptions": limited_admin.can_manage_subscriptions,
+                    "can_manage_payment_gateways": limited_admin.can_manage_payment_gateways,
+                    "can_view_reports": limited_admin.can_view_reports,
+                    "can_manage_communication": limited_admin.can_manage_communication,
+                    "can_manage_settings": limited_admin.can_manage_settings,
+                    "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
+                }
+            }
+        except LimitedAdmin.DoesNotExist:
+            return None
 
 
 class UserListSerializer(serializers.ModelSerializer):
@@ -208,8 +231,15 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Validate using parent class
         data = super().validate(attrs)
 
+        # Get limited admin profile if exists
+        limited_admin = None
+        try:
+            limited_admin = LimitedAdmin.objects.select_related('user').get(user=self.user)
+        except LimitedAdmin.DoesNotExist:
+            pass
+        
         # Add user information to the response
-        data["user"] = {
+        user_data = {
             "id": self.user.id,
             "username": self.user.username,
             "email": self.user.email,
@@ -223,7 +253,27 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             "company_specialization": self.user.company.specialization if self.user.company else None,
             "is_active": self.user.is_active,
             "email_verified": self.user.email_verified,
+            "is_superuser": self.user.is_superuser,
         }
+        
+        # Add limited admin permissions if user is a limited admin
+        if limited_admin:
+            user_data["limited_admin"] = {
+                "id": limited_admin.id,
+                "is_active": limited_admin.is_active,
+                "permissions": {
+                    "can_view_dashboard": limited_admin.can_view_dashboard,
+                    "can_manage_tenants": limited_admin.can_manage_tenants,
+                    "can_manage_subscriptions": limited_admin.can_manage_subscriptions,
+                    "can_manage_payment_gateways": limited_admin.can_manage_payment_gateways,
+                    "can_view_reports": limited_admin.can_view_reports,
+                    "can_manage_communication": limited_admin.can_manage_communication,
+                    "can_manage_settings": limited_admin.can_manage_settings,
+                    "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
+                }
+            }
+        
+        data["user"] = user_data
 
         return data
 
@@ -618,3 +668,136 @@ class VerifyTwoFactorAuthSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+
+
+class LimitedAdminSerializer(serializers.ModelSerializer):
+    """Serializer for LimitedAdmin model"""
+    user_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_superuser=False),
+        source='user',
+        write_only=True
+    )
+    user = serializers.SerializerMethodField(read_only=True)
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    
+    class Meta:
+        model = LimitedAdmin
+        fields = [
+            'id',
+            'user',
+            'user_id',
+            'is_active',
+            'created_by',
+            'created_by_username',
+            'created_at',
+            'updated_at',
+            'can_view_dashboard',
+            'can_manage_tenants',
+            'can_manage_subscriptions',
+            'can_manage_payment_gateways',
+            'can_view_reports',
+            'can_manage_communication',
+            'can_manage_settings',
+            'can_manage_limited_admins',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+    
+    def get_user(self, obj):
+        """Return user details"""
+        if not obj.user:
+            return None
+        return {
+            'id': obj.user.id,
+            'username': obj.user.username,
+            'email': obj.user.email,
+            'first_name': obj.user.first_name,
+            'last_name': obj.user.last_name,
+        }
+    
+    def create(self, validated_data):
+        """Create LimitedAdmin and set created_by"""
+        request = self.context.get('request')
+        if request and request.user:
+            validated_data['created_by'] = request.user
+        return super().create(validated_data)
+    
+    def validate_user_id(self, value):
+        """Ensure user is not a superuser and doesn't already have a LimitedAdmin profile"""
+        if value.is_superuser:
+            raise serializers.ValidationError("Superusers cannot be limited admins.")
+        
+        if LimitedAdmin.objects.filter(user=value).exists():
+            raise serializers.ValidationError("This user already has a limited admin profile.")
+        
+        return value
+
+
+class CreateLimitedAdminSerializer(serializers.Serializer):
+    """Serializer for creating a new user and LimitedAdmin"""
+    username = serializers.CharField(required=True)
+    email = serializers.EmailField(required=True)
+    password = serializers.CharField(required=True, write_only=True)
+    first_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=True)
+    is_active = serializers.BooleanField(default=True)
+    can_view_dashboard = serializers.BooleanField(default=False)
+    can_manage_tenants = serializers.BooleanField(default=False)
+    can_manage_subscriptions = serializers.BooleanField(default=False)
+    can_manage_payment_gateways = serializers.BooleanField(default=False)
+    can_view_reports = serializers.BooleanField(default=False)
+    can_manage_communication = serializers.BooleanField(default=False)
+    can_manage_settings = serializers.BooleanField(default=False)
+    can_manage_limited_admins = serializers.BooleanField(default=False)
+    
+    def validate_username(self, value):
+        """Check if username already exists"""
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("Username already exists.")
+        return value
+    
+    def validate_email(self, value):
+        """Check if email already exists"""
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Email already exists.")
+        return value
+    
+    def validate_password(self, value):
+        """Validate password"""
+        try:
+            validate_password(value)
+        except ValidationError as e:
+            raise serializers.ValidationError(list(e.messages))
+        return value
+    
+    def create(self, validated_data):
+        """Create user and LimitedAdmin"""
+        password = validated_data.pop('password')
+        # created_by is passed from view's save(created_by=...) and must not be passed to User
+        created_by = validated_data.pop('created_by', None)
+        permissions = {
+            'is_active': validated_data.pop('is_active', True),
+            'can_view_dashboard': validated_data.pop('can_view_dashboard', False),
+            'can_manage_tenants': validated_data.pop('can_manage_tenants', False),
+            'can_manage_subscriptions': validated_data.pop('can_manage_subscriptions', False),
+            'can_manage_payment_gateways': validated_data.pop('can_manage_payment_gateways', False),
+            'can_view_reports': validated_data.pop('can_view_reports', False),
+            'can_manage_communication': validated_data.pop('can_manage_communication', False),
+            'can_manage_settings': validated_data.pop('can_manage_settings', False),
+            'can_manage_limited_admins': validated_data.pop('can_manage_limited_admins', False),
+        }
+        
+        # Create user (validated_data now only has username, email, first_name, last_name)
+        user = User.objects.create_user(
+            password=password,
+            is_staff=True,  # Allow access to admin panel
+            **validated_data
+        )
+        
+        # Create LimitedAdmin
+        limited_admin = LimitedAdmin.objects.create(
+            user=user,
+            created_by=created_by,
+            **permissions
+        )
+        
+        return limited_admin

@@ -6,7 +6,11 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.http import FileResponse
 from django.db import models
-from accounts.permissions import IsAdmin, IsSuperAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee
+from accounts.permissions import (
+    HasActiveSubscription,
+    IsAdminOrReadOnlyForEmployee,
+    CanManageSettings,
+)
 from .models import (
     Channel,
     LeadStage,
@@ -174,7 +178,7 @@ class SMTPSettingsViewSet(viewsets.ModelViewSet):
     Singleton pattern - only one instance exists.
     """
     queryset = SMTPSettings.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManageSettings]
     serializer_class = SMTPSettingsSerializer
 
     def get_queryset(self):
@@ -190,7 +194,7 @@ class SystemBackupViewSet(viewsets.ModelViewSet):
 
     queryset = SystemBackup.objects.all().order_by("-created_at")
     serializer_class = SystemBackupSerializer
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManageSettings]
     http_method_names = ["get", "post", "delete"]
 
     def create(self, request, *args, **kwargs):
@@ -258,7 +262,7 @@ class SystemAuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = SystemAuditLog.objects.select_related("actor").all()
     serializer_class = SystemAuditLogSerializer
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManageSettings]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["action", "message"]
     ordering_fields = ["created_at", "action"]
@@ -272,7 +276,7 @@ class SystemSettingsViewSet(viewsets.ModelViewSet):
     Singleton pattern - only one instance exists.
     """
     queryset = SystemSettings.objects.all()
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, CanManageSettings]
     serializer_class = SystemSettingsSerializer
 
     def get_queryset(self):

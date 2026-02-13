@@ -209,3 +209,61 @@ class TwoFactorAuth(models.Model):
         self.is_verified = True
         self.verified_at = timezone.now()
         self.save(update_fields=["is_verified", "verified_at"])
+
+
+class LimitedAdmin(models.Model):
+    """Limited Admin for Super Admin Panel with restricted permissions"""
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="limited_admin_profile",
+        limit_choices_to={'is_superuser': False}
+    )
+    is_active = models.BooleanField(default=True, help_text="Whether this limited admin can access the panel")
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_limited_admins",
+        limit_choices_to={'is_superuser': True}
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # Permissions
+    can_view_dashboard = models.BooleanField(default=False)
+    can_manage_tenants = models.BooleanField(default=False)
+    can_manage_subscriptions = models.BooleanField(default=False)
+    can_manage_payment_gateways = models.BooleanField(default=False)
+    can_view_reports = models.BooleanField(default=False)
+    can_manage_communication = models.BooleanField(default=False)
+    can_manage_settings = models.BooleanField(default=False)
+    can_manage_limited_admins = models.BooleanField(default=False, help_text="Can manage other limited admins")
+    
+    class Meta:
+        db_table = "limited_admins"
+        ordering = ["-created_at"]
+        verbose_name = "Limited Admin"
+        verbose_name_plural = "Limited Admins"
+    
+    def __str__(self):
+        return f"Limited Admin: {self.user.username}"
+    
+    def has_permission(self, permission_name: str) -> bool:
+        """Check if this limited admin has a specific permission"""
+        if not self.is_active:
+            return False
+        
+        permission_map = {
+            'view_dashboard': self.can_view_dashboard,
+            'manage_tenants': self.can_manage_tenants,
+            'manage_subscriptions': self.can_manage_subscriptions,
+            'manage_payment_gateways': self.can_manage_payment_gateways,
+            'view_reports': self.can_view_reports,
+            'manage_communication': self.can_manage_communication,
+            'manage_settings': self.can_manage_settings,
+            'manage_limited_admins': self.can_manage_limited_admins,
+        }
+        
+        return permission_map.get(permission_name, False)
