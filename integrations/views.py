@@ -19,7 +19,7 @@ from .serializers import (
     IntegrationLogSerializer,
     OAuthCallbackSerializer,
 )
-from .oauth_utils import get_oauth_handler, MetaOAuth
+from .oauth_utils import get_oauth_handler, MetaOAuth, TikTokOAuth
 from .decorators import rate_limit_webhook
 import json
 import hmac
@@ -209,6 +209,13 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'token_type': token_data.get('token_type', 'Bearer'),
             }
             
+            # TikTok: حفظ رابط البروفايل وإثراء user_info
+            if account.platform == 'tiktok':
+                link = user_info.get('profile_web_link') or user_info.get('profile_deep_link') or ''
+                if link:
+                    account.account_link = link
+                account.metadata['user_info'] = user_info
+            
             # للحصول على الصفحات (Meta)
             if account.platform == 'meta' and hasattr(oauth_handler, 'get_pages'):
                 try:
@@ -328,8 +335,36 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # TODO: تنفيذ منطق المزامنة حسب المنصة
-        # مثال: جلب المنشورات، الإحصائيات، إلخ
+        # مزامنة حسب المنصة
+        if account.platform == 'tiktok':
+            try:
+                tiktok_oauth = TikTokOAuth()
+                access_token = account.get_access_token()
+                if not access_token:
+                    return Response(
+                        {'error': 'No access token available'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                user_info = tiktok_oauth.get_user_info(access_token, include_profile_and_stats=True)
+                if not account.metadata:
+                    account.metadata = {}
+                account.metadata['user_info'] = user_info
+                account.external_account_name = user_info.get('name') or user_info.get('display_name')
+                link = user_info.get('profile_web_link') or user_info.get('profile_deep_link') or ''
+                if link:
+                    account.account_link = link
+            except Exception as e:
+                IntegrationLog.objects.create(
+                    account=account,
+                    action='sync',
+                    status='error',
+                    message='TikTok sync failed',
+                    error_details=str(e),
+                )
+                return Response(
+                    {'error': str(e)},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         account.last_sync_at = timezone.now()
         account.save()
@@ -342,6 +377,91 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         )
         
         return Response({'message': 'Sync completed successfully'})
+    
+    @action(detail=True, methods=['get'], url_path='tiktok-profile')
+    def tiktok_profile(self, request, pk=None):
+        """
+        الحصول على بروفايل TikTok الكامل (للحسابات المتصلة).
+        GET /api/integrations/accounts/{id}/tiktok-profile/
+        """
+        account = self.get_object()
+        if account.platform != 'tiktok':
+            return Response(
+                {'error': 'This endpoint is only for TikTok accounts'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if account.status != 'connected':
+            return Response(
+                {'error': 'Account is not connected'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            tiktok_oauth = TikTokOAuth()
+            access_token = account.get_access_token()
+            if not access_token:
+                return Response(
+                    {'error': 'No access token'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            user_info = tiktok_oauth.get_user_info(access_token, include_profile_and_stats=True)
+            if not account.metadata:
+                account.metadata = {}
+            account.metadata['user_info'] = user_info
+            account.save(update_fields=['metadata'])
+            return Response({
+                'profile': user_info,
+                'account_link': account.account_link,
+            })
+        except Exception as e:
+            logger.error(f"TikTok profile fetch error: {str(e)}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @action(detail=True, methods=['get'], url_path='tiktok-videos')
+    def tiktok_videos(self, request, pk=None):
+        """
+        قائمة فيديوهات TikTok للحساب (مع pagination).
+        GET /api/integrations/accounts/{id}/tiktok-videos/?cursor=&max_count=20
+        """
+        account = self.get_object()
+        if account.platform != 'tiktok':
+            return Response(
+                {'error': 'This endpoint is only for TikTok accounts'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if account.status != 'connected':
+            return Response(
+                {'error': 'Account is not connected'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        cursor = request.query_params.get('cursor', '')
+        try:
+            max_count = int(request.query_params.get('max_count', 20))
+        except ValueError:
+            max_count = 20
+        max_count = min(max_count, 20)
+        try:
+            tiktok_oauth = TikTokOAuth()
+            access_token = account.get_access_token()
+            if not access_token:
+                return Response(
+                    {'error': 'No access token'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            data = tiktok_oauth.list_videos(
+                access_token,
+                cursor=cursor if cursor else None,
+                max_count=max_count,
+            )
+            return Response(data)
+        except Exception as e:
+            logger.error(f"TikTok videos fetch error: {str(e)}", exc_info=True)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
     
     @action(detail=True, methods=['get'])
     def lead_forms(self, request, pk=None):
@@ -505,6 +625,289 @@ class IntegrationLogViewSet(viewsets.ReadOnlyModelViewSet):
             queryset = queryset.filter(account_id=account_id)
         
         return queryset.order_by('-created_at')
+
+
+# ==================== TikTok Webhook ====================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@rate_limit_webhook(max_requests=200, window=60)
+def tiktok_webhook(request):
+    """
+    استقبال أحداث TikTok (authorization.removed, video.upload.failed, video.publish.completed, ...).
+    يجب الرد فوراً بـ 200 لقبول الحدث.
+    """
+    try:
+        body = json.loads(request.body)
+    except json.JSONDecodeError:
+        return HttpResponse('Bad Request', status=400)
+    
+    client_key = body.get('client_key')
+    if client_key != getattr(settings, 'TIKTOK_CLIENT_ID', ''):
+        logger.warning("TikTok webhook: client_key mismatch")
+        return HttpResponse('OK', status=200)  # still 200 to avoid retries
+    
+    event = body.get('event')
+    user_openid = body.get('user_openid')
+    content_str = body.get('content', '{}')
+    try:
+        content = json.loads(content_str) if isinstance(content_str, str) else content_str
+    except (json.JSONDecodeError, TypeError):
+        content = {}
+    
+    if event == 'authorization.removed' and user_openid:
+        # المستخدم ألغى التفويض من تطبيق TikTok
+        accounts = IntegrationAccount.objects.filter(
+            platform='tiktok',
+            external_account_id=user_openid,
+            status='connected',
+        )
+        for account in accounts:
+            account.set_access_token(None)
+            account.set_refresh_token(None)
+            account.token_expires_at = None
+            account.status = 'disconnected'
+            account.error_message = 'User deauthorized from TikTok'
+            account.save()
+            IntegrationLog.objects.create(
+                account=account,
+                action='webhook_deauthorized',
+                status='success',
+                message='TikTok user deauthorized',
+                response_data={'event': event, 'content': content},
+            )
+            logger.info(f"TikTok account {account.id} disconnected via webhook (open_id={user_openid})")
+    
+    elif event in ('video.upload.failed', 'video.publish.completed'):
+        # تسجيل الحدث في السجل (اختياري للـ CRM)
+        accounts = IntegrationAccount.objects.filter(
+            platform='tiktok',
+            external_account_id=user_openid,
+            status='connected',
+        )
+        for account in accounts:
+            IntegrationLog.objects.create(
+                account=account,
+                action=f'tiktok_{event}',
+                status='success',
+                message=event,
+                response_data=content,
+            )
+    
+    return HttpResponse('OK', status=200)
+
+
+# ==================== TikTok Lead Gen Webhook ====================
+# استقبال ليدز من TikTok Instant Form (TikTok Marketing API / Leads Center).
+# يُسجّل في TikTok Ads Manager → Leads Center → CRM integration → Custom API with Webhooks.
+
+
+def _parse_tiktok_leadgen_payload(body):
+    """
+    استخراج lead_id, advertiser_id, name, phone, email من payload TikTok Lead Gen.
+    يدعم أشكالاً متعددة حسب وثائق TikTok Marketing API / شركاء التكامل.
+    """
+    if not body:
+        return None
+    # دعم content كـ JSON string (أحياناً يُرسل هكذا)
+    data = body.get('data') or body
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return None
+    content_str = body.get('content')
+    if content_str and isinstance(content_str, str):
+        try:
+            data = json.loads(content_str)
+        except json.JSONDecodeError:
+            pass
+    if not isinstance(data, dict):
+        return None
+    lead_id = data.get('lead_id') or data.get('id') or data.get('leadId')
+    form_id = data.get('form_id') or data.get('formId')
+    advertiser_id = str(data.get('advertiser_id') or data.get('advertiserId') or '')
+    # استخراج الاسم والهاتف والبريد من list من نوع [{"key":"Full name","value":"x"}] أو من dict
+    name = None
+    phone = None
+    email = None
+    lead_list = data.get('list') or data.get('answers') or data.get('field_data') or []
+    if isinstance(lead_list, list):
+        key_map = {}
+        for item in lead_list:
+            if isinstance(item, dict):
+                k = (item.get('key') or item.get('name') or item.get('label') or '').lower()
+                v = item.get('value') or item.get('values')
+                if isinstance(v, list):
+                    v = v[0] if v else ''
+                if k and v:
+                    key_map[k] = str(v).strip()
+        name = (key_map.get('full name') or key_map.get('full_name') or key_map.get('name') or
+                key_map.get('contact name') or key_map.get('contact_name') or '')
+        phone = (key_map.get('phone') or key_map.get('phone_number') or key_map.get('mobile') or
+                 key_map.get('tel') or key_map.get('contact phone') or '')
+        email = (key_map.get('email') or key_map.get('email_address') or key_map.get('e-mail') or '')
+    if isinstance(data.get('answers'), dict):
+        ans = data['answers']
+        name = name or ans.get('full_name') or ans.get('name') or ans.get('full name') or ''
+        phone = phone or ans.get('phone') or ans.get('phone_number') or ans.get('mobile') or ''
+        email = email or ans.get('email') or ans.get('email_address') or ''
+    name = name or data.get('full_name') or data.get('name') or data.get('full name') or ''
+    phone = phone or data.get('phone') or data.get('phone_number') or data.get('mobile') or ''
+    email = email or data.get('email') or data.get('email_address') or ''
+    if not lead_id and not name and not phone and not email:
+        return None
+    return {
+        'lead_id': str(lead_id) if lead_id else None,
+        'form_id': str(form_id) if form_id else None,
+        'advertiser_id': advertiser_id or None,
+        'name': (name or 'TikTok Lead').strip(),
+        'phone': (phone or '').strip(),
+        'email': (email or '').strip(),
+        'raw': data,
+    }
+
+
+def _get_company_id_for_tiktok_leadgen(advertiser_id, request):
+    """تحديد company_id من إعدادات التطبيق أو من query param."""
+    company_id = request.GET.get('company_id')
+    if company_id:
+        try:
+            return int(company_id)
+        except (ValueError, TypeError):
+            pass
+    mapping = getattr(settings, 'TIKTOK_LEADGEN_ADVERTISER_MAPPING', '{}')
+    if isinstance(mapping, str):
+        try:
+            mapping = json.loads(mapping) if mapping else {}
+        except json.JSONDecodeError:
+            mapping = {}
+    if advertiser_id and mapping:
+        cid = mapping.get(str(advertiser_id)) or mapping.get(advertiser_id)
+        if cid is not None:
+            try:
+                return int(cid)
+            except (ValueError, TypeError):
+                pass
+    default = getattr(settings, 'TIKTOK_LEADGEN_COMPANY_ID', '')
+    if default:
+        try:
+            return int(default)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@rate_limit_webhook(max_requests=300, window=60)
+def tiktok_leadgen_webhook(request):
+    """
+    Webhook لاستقبال ليدز TikTok Lead Generation (Instant Form).
+    URL للتسجيل في TikTok Ads Manager: {API_BASE_URL}/api/integrations/webhooks/tiktok-leadgen/
+    أو مع company_id: .../tiktok-leadgen/?company_id=1
+    يرد 200 دائماً. يُنشئ Client في الـ CRM ويسجّل في IntegrationLog.
+    """
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        body = {}
+    # الرد 200 فوراً حتى لا تعيد TikTok المحاولة
+    payload = _parse_tiktok_leadgen_payload(body)
+    if not payload:
+        logger.warning("TikTok Lead Gen webhook: could not parse payload: %s", json.dumps(body)[:300])
+        return HttpResponse('OK', status=200)
+    company_id = _get_company_id_for_tiktok_leadgen(payload.get('advertiser_id'), request)
+    if not company_id:
+        logger.warning("TikTok Lead Gen webhook: no company_id (set TIKTOK_LEADGEN_COMPANY_ID or ?company_id= or ADVERTISER_MAPPING)")
+        return HttpResponse('OK', status=200)
+    from companies.models import Company
+    try:
+        company = Company.objects.get(id=company_id)
+    except Company.DoesNotExist:
+        logger.warning("TikTok Lead Gen webhook: company_id=%s not found", company_id)
+        return HttpResponse('OK', status=200)
+    from .models import IntegrationAccount, IntegrationLog
+    from crm.models import Client, ClientPhoneNumber, ClientEvent
+    from crm.signals import get_least_busy_employee
+    account, _ = IntegrationAccount.objects.get_or_create(
+        company=company,
+        platform='tiktok',
+        external_account_id='leadgen_%s' % company_id,
+        defaults={
+            'name': 'TikTok Lead Gen',
+            'status': 'connected',
+        },
+    )
+    lead_id = payload.get('lead_id')
+    if lead_id:
+        if IntegrationLog.objects.filter(
+            account=account,
+            action='tiktok_lead_received',
+            response_data__lead_id=lead_id,
+        ).exists():
+            logger.info("TikTok Lead Gen: duplicate lead_id=%s ignored", lead_id)
+            return HttpResponse('OK', status=200)
+    try:
+        client = Client.objects.create(
+            name=payload['name'],
+            priority='medium',
+            type='fresh',
+            company=company,
+            source='tiktok',
+            integration_account=account,
+            phone_number=payload.get('phone') or None,
+        )
+        if payload.get('phone'):
+            ClientPhoneNumber.objects.create(
+                client=client,
+                phone_number=payload['phone'],
+                phone_type='mobile',
+                is_primary=True,
+            )
+        if company.auto_assign_enabled:
+            employee = get_least_busy_employee(company)
+            if employee:
+                client.assigned_to = employee
+                client.assigned_at = timezone.now()
+                client.save()
+                ClientEvent.objects.create(
+                    client=client,
+                    event_type='assignment',
+                    old_value='Unassigned',
+                    new_value=employee.get_full_name() or employee.username,
+                    notes='Auto-assigned from TikTok Lead Gen',
+                )
+        ClientEvent.objects.create(
+            client=client,
+            event_type='created',
+            new_value='TikTok Lead Gen',
+            notes='Lead from TikTok Instant Form (form_id=%s)' % (payload.get('form_id') or ''),
+        )
+        IntegrationLog.objects.create(
+            account=account,
+            action='tiktok_lead_received',
+            status='success',
+            message='Lead created: %s' % payload['name'],
+            response_data={
+                'lead_id': lead_id,
+                'form_id': payload.get('form_id'),
+                'advertiser_id': payload.get('advertiser_id'),
+                'client_id': client.id,
+            },
+        )
+        logger.info("TikTok Lead Gen: created client id=%s for company_id=%s", client.id, company_id)
+    except Exception as e:
+        logger.exception("TikTok Lead Gen webhook: failed to create client: %s", e)
+        IntegrationLog.objects.create(
+            account=account,
+            action='tiktok_lead_received',
+            status='error',
+            message='Failed to create client',
+            error_details=str(e),
+            response_data={'lead_id': lead_id, 'payload_keys': list(payload.keys())},
+        )
+    return HttpResponse('OK', status=200)
 
 
 # ==================== Webhook Views ====================

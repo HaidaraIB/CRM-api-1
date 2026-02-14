@@ -408,6 +408,13 @@ TIKTOK_CLIENT_ID = os.getenv("TIKTOK_CLIENT_ID", "")
 TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
 TIKTOK_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/tiktok/"
 
+# TikTok Lead Gen (Instant Form) webhook → CRM Company
+# Option A: Single company (all TikTok leads go to this company ID)
+TIKTOK_LEADGEN_COMPANY_ID = os.getenv("TIKTOK_LEADGEN_COMPANY_ID", "")
+# Option B: Map TikTok advertiser_id to our company_id (JSON: {"advertiser_id": "company_id", ...})
+# e.g. TIKTOK_LEADGEN_ADVERTISER_MAPPING='{"123456789": "1", "987654321": "2"}'
+TIKTOK_LEADGEN_ADVERTISER_MAPPING = os.getenv("TIKTOK_LEADGEN_ADVERTISER_MAPPING", "{}")
+
 # WhatsApp Business API (uses Meta OAuth)
 WHATSAPP_CLIENT_ID = os.getenv("WHATSAPP_CLIENT_ID", META_CLIENT_ID)
 WHATSAPP_CLIENT_SECRET = os.getenv("WHATSAPP_CLIENT_SECRET", META_CLIENT_SECRET)
