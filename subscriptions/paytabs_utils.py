@@ -1,11 +1,16 @@
 """
 Paytabs Payment Gateway Integration Utilities
+Plans are priced in USD; PayTabs uses IQD, so we convert using SystemSettings.usd_to_iqd_rate.
 """
 
+import logging
 import requests
 import json
 from django.conf import settings
 from .models import PaymentGateway, PaymentGatewayStatus
+from settings.models import SystemSettings
+
+logger = logging.getLogger(__name__)
 
 
 def get_paytabs_gateway():
@@ -30,10 +35,12 @@ def create_paytabs_payment_session(
     return_url: str,
 ):
     """
-    Create a payment session with Paytabs
+    Create a payment session with Paytabs.
+    Plan prices are in USD; PayTabs expects IQD. We convert using SystemSettings.usd_to_iqd_rate.
+    Other gateways are unaffected (they use their own currency logic).
 
     Args:
-        amount: Payment amount
+        amount: Payment amount in USD (from plan price)
         customer_email: Customer email
         customer_name: Customer name
         customer_phone: Customer phone
@@ -55,14 +62,24 @@ def create_paytabs_payment_session(
     server_key = server_key.strip()
     profile_id = int(profile_id)
 
-    # Prepare payment data
+    # Convert USD (plan price) to IQD using super admin exchange rate. PayTabs only — other gateways unchanged.
+    try:
+        system_settings = SystemSettings.get_settings()
+        usd_to_iqd_rate = float(system_settings.usd_to_iqd_rate)
+    except Exception as e:
+        logger.warning("Failed to get usd_to_iqd_rate from SystemSettings, using default 1300: %s", e)
+        usd_to_iqd_rate = 1300.0
+    amount_iqd = round(amount * usd_to_iqd_rate, 2)
+    logger.info("PayTabs: converting USD %s to IQD %s (rate: %s)", amount, amount_iqd, usd_to_iqd_rate)
+
+    # Prepare payment data (cart_amount in IQD)
     payment_data = {
         "profile_id": profile_id,
         "tran_type": "sale",
         "tran_class": "ecom",
         "cart_id": f"SUB-{subscription_id}",
         "cart_currency": "IQD",
-        "cart_amount": amount,
+        "cart_amount": amount_iqd,
         "cart_description": f"Subscription payment - Subscription {subscription_id}",
         "customer_details": {
             "name": customer_name,
