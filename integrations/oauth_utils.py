@@ -179,142 +179,8 @@ class MetaOAuth(OAuthBase):
         return response.json()
 
 
-class TikTokOAuth(OAuthBase):
-    """
-    OAuth لـ TikTok - كل ما يلزم الـ CRM:
-    - user.info.basic: الاسم، الصورة، المعرف
-    - user.info.profile: البيو، الرابط، التوثيق
-    - user.info.stats: عدد المتابعين، المتابَعين، الإعجابات، الفيديوهات
-    - video.list: قائمة فيديوهات الحساب العامة (للمحتوى والأداء)
-    """
-
-    # حقول User Info حسب الـ scope (TikTok v2)
-    USER_FIELDS_BASIC = 'open_id,union_id,avatar_url,display_name'
-    USER_FIELDS_PROFILE = 'profile_deep_link,profile_web_link,bio_description,is_verified'
-    USER_FIELDS_STATS = 'follower_count,following_count,likes_count,video_count'
-
-    def __init__(self):
-        super().__init__('TIKTOK')
-        self.auth_url = 'https://www.tiktok.com/v2/auth/authorize'
-        self.token_url = 'https://open.tiktokapis.com/v2/oauth/token'
-        self.api_url = 'https://open.tiktokapis.com/v2'
-
-    def get_authorization_url(self, state, scopes=None):
-        """رابط التفويض مع كل الـ scopes المفيدة للـ CRM."""
-        if scopes is None:
-            scopes = [
-                'user.info.basic',
-                'user.info.profile',
-                'user.info.stats',
-                'video.list',
-            ]
-        code_verifier = secrets.token_urlsafe(32)
-        code_challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(code_verifier.encode()).digest()
-        ).decode().rstrip('=')
-        params = {
-            'client_key': self.client_id,
-            'redirect_uri': self.redirect_uri,
-            'scope': ','.join(scopes),
-            'response_type': 'code',
-            'state': state,
-            'code_challenge': code_challenge,
-            'code_challenge_method': 'S256',
-        }
-        return f"{self.auth_url}?{urlencode(params)}", code_verifier
-    
-    def exchange_code_for_token(self, code, code_verifier):
-        """استبدال code بـ access token (TikTok يتطلب application/x-www-form-urlencoded)"""
-        payload = {
-            'client_key': self.client_id,
-            'client_secret': self.client_secret,
-            'code': code,
-            'grant_type': 'authorization_code',
-            'redirect_uri': self.redirect_uri,
-            'code_verifier': code_verifier,
-        }
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-        response = requests.post(self.token_url, data=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        return {
-            'access_token': data.get('access_token'),
-            'refresh_token': data.get('refresh_token'),
-            'expires_in': data.get('expires_in', 86400),  # 24h default per TikTok docs
-            'token_type': data.get('token_type', 'Bearer'),
-        }
-
-    def refresh_token(self, refresh_token):
-        """تجديد access token (TikTok يتطلب application/x-www-form-urlencoded)"""
-        payload = {
-            'client_key': self.client_id,
-            'client_secret': self.client_secret,
-            'grant_type': 'refresh_token',
-            'refresh_token': refresh_token,
-        }
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-        response = requests.post(self.token_url, data=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        return {
-            'access_token': data.get('access_token'),
-            'refresh_token': data.get('refresh_token', refresh_token),
-            'expires_in': data.get('expires_in', 86400),
-        }
-    
-    def get_user_info(self, access_token, include_profile_and_stats=True):
-        """
-        الحصول على معلومات المستخدم الكاملة للـ CRM.
-        TikTok يعيد { data: { user: {...} } }.
-        مع include_profile_and_stats=True يطلب كل الحقول (يحتاج scopes profile + stats).
-        """
-        url = f"{self.api_url}/user/info/"
-        headers = {
-            'Authorization': f'Bearer {access_token}',
-            'Content-Type': 'application/json',
-        }
-        fields = self.USER_FIELDS_BASIC
-        if include_profile_and_stats:
-            fields = f"{self.USER_FIELDS_BASIC},{self.USER_FIELDS_PROFILE},{self.USER_FIELDS_STATS}"
-        params = {'fields': fields}
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        user = (data.get('data') or {}).get('user') or {}
-        return {
-            'open_id': user.get('open_id'),
-            'id': user.get('open_id'),
-            'display_name': user.get('display_name'),
-            'name': user.get('display_name'),
-            'union_id': user.get('union_id'),
-            'avatar_url': user.get('avatar_url'),
-            'profile_web_link': user.get('profile_web_link'),
-            'profile_deep_link': user.get('profile_deep_link'),
-            'bio_description': user.get('bio_description'),
-            'is_verified': user.get('is_verified'),
-            'follower_count': user.get('follower_count'),
-            'following_count': user.get('following_count'),
-            'likes_count': user.get('likes_count'),
-            'video_count': user.get('video_count'),
-            **user,
-        }
-
-    def list_videos(self, access_token, cursor=None, max_count=20):
-        """
-        قائمة فيديوهات المستخدم العامة (scope: video.list).
-        POST v2/video/list/ - max_count default 10, max 20.
-        """
-        url = f"{self.api_url}/video/list/"
-        headers = {
-            'Authorization': f'Bearer {access_token}',
-            'Content-Type': 'application/json',
-        }
-        body = {'max_count': min(max_count, 20)}
-        if cursor:
-            body['cursor'] = cursor
-        response = requests.post(url, headers=headers, json=body)
-        response.raise_for_status()
-        return response.json()
+# TikTok: لا نستخدم OAuth (Login Kit) هنا. TikTok في هذا المشروع = Lead Gen فقط (ويب هوك استقبال الليدز).
+# انظر integrations/views.py → tiktok_leadgen_webhook و READMEs/TIKTOK_LEADGEN_TIKTOK_FOR_BUSINESS_GUIDE.md
 
 
 class WhatsAppOAuth(OAuthBase):
@@ -351,28 +217,110 @@ class WhatsAppOAuth(OAuthBase):
         return self.meta_oauth.refresh_token(refresh_token)
     
     def get_user_info(self, access_token):
-        """الحصول على معلومات WhatsApp Business Account"""
-        # WhatsApp Business API endpoint
-        url = f"https://graph.facebook.com/v18.0/me/businesses"
+        """الحصول على معلومات المستخدم/Business"""
+        url = "https://graph.facebook.com/v18.0/me"
         params = {
             'access_token': access_token,
+            'fields': 'id,name',
         }
-        
         response = requests.get(url, params=params)
         response.raise_for_status()
         return response.json()
 
+    def get_waba_and_phone_numbers(self, access_token):
+        """
+        جلب WABA ID و Phone Number IDs بعد OAuth.
+        يُستدعى بعد exchange_code_for_token.
+        Returns: list of dicts [{"waba_id", "business_id", "phone_numbers": [{"id", "display_phone_number"}, ...]}, ...]
+        """
+        graph = "https://graph.facebook.com/v18.0"
+        out = []
+        # محاولة 1: من me/accounts (صفحات قد ترتبط بـ WABA)
+        try:
+            # قائمة الـ Businesses التي يملكها المستخدم
+            resp = requests.get(
+                f"{graph}/me/businesses",
+                params={
+                    'access_token': access_token,
+                    'fields': 'id,name,owned_whatsapp_business_accounts',
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            businesses = data.get('data') or []
+        except Exception:
+            businesses = []
+        for biz in businesses:
+            business_id = biz.get('id')
+            wabas = (biz.get('owned_whatsapp_business_accounts') or {}).get('data') or []
+            for waba in wabas:
+                waba_id = waba.get('id')
+                if not waba_id:
+                    continue
+                try:
+                    ph_resp = requests.get(
+                        f"{graph}/{waba_id}/phone_numbers",
+                        params={'access_token': access_token},
+                    )
+                    ph_resp.raise_for_status()
+                    phones = (ph_resp.json().get('data') or [])
+                except Exception:
+                    phones = []
+                out.append({
+                    'waba_id': waba_id,
+                    'business_id': business_id,
+                    'phone_numbers': [
+                        {'id': p.get('id'), 'display_phone_number': p.get('display_phone_number') or ''}
+                        for p in phones if p.get('id')
+                    ],
+                })
+        # إذا لم نجد من businesses، نجرب me?fields=whatsapp_business_accounts
+        if not out:
+            try:
+                resp = requests.get(
+                    f"{graph}/me",
+                    params={
+                        'access_token': access_token,
+                        'fields': 'id,name,whatsapp_business_accounts',
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                waba_list = (data.get('whatsapp_business_accounts') or {}).get('data') or []
+                for waba in waba_list:
+                    waba_id = waba.get('id')
+                    if not waba_id:
+                        continue
+                    try:
+                        ph_resp = requests.get(
+                            f"{graph}/{waba_id}/phone_numbers",
+                            params={'access_token': access_token},
+                        )
+                        ph_resp.raise_for_status()
+                        phones = (ph_resp.json().get('data') or [])
+                    except Exception:
+                        phones = []
+                    out.append({
+                        'waba_id': waba_id,
+                        'business_id': None,
+                        'phone_numbers': [
+                            {'id': p.get('id'), 'display_phone_number': p.get('display_phone_number') or ''}
+                            for p in phones if p.get('id')
+                        ],
+                    })
+            except Exception:
+                pass
+        return out
+
 
 def get_oauth_handler(platform):
-    """الحصول على OAuth handler حسب المنصة"""
+    """الحصول على OAuth handler حسب المنصة (TikTok = Lead Gen فقط، لا OAuth)"""
     platform_lower = platform.lower()
-    
+    if platform_lower == 'tiktok':
+        raise ValueError("TikTok integration is Lead Gen only. Use webhook URL in TikTok Ads Manager.")
     if platform_lower == 'meta':
         return MetaOAuth()
-    elif platform_lower == 'tiktok':
-        return TikTokOAuth()
-    elif platform_lower == 'whatsapp':
+    if platform_lower == 'whatsapp':
         return WhatsAppOAuth()
-    else:
-        raise ValueError(f"منصة غير مدعومة: {platform}")
+    raise ValueError(f"منصة غير مدعومة: {platform}")
 

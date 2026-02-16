@@ -2,7 +2,7 @@
 
 > **دليل شامل واحد لجميع التكاملات** - Meta (Facebook/Instagram), WhatsApp, TikTok
 
-**📌 تكامل TikTok (خطوة بخطوة 2026):** [دليل TikTok المفصّل](./TIKTOK_INTEGRATION_GUIDE.md)
+**📌 تكامل TikTok (Lead Gen فقط – مثل Meta Lead Form):** [دليل TikTok Lead Gen](./TIKTOK_INTEGRATION_GUIDE.md) | [دليل المشترك (ماذا يفعل المشترك)](./TIKTOK_LEADGEN_SUBSCRIBER_GUIDE.md) | [TikTok for Business خطوة بخطوة](./TIKTOK_LEADGEN_TIKTOK_FOR_BUSINESS_GUIDE.md)
 
 ---
 
@@ -978,11 +978,12 @@ sudo ufw enable
 ### OAuth Redirect URIs:
 - **Meta**: `{API_BASE_URL}/api/integrations/accounts/oauth/callback/meta/`
 - **WhatsApp**: `{API_BASE_URL}/api/integrations/accounts/oauth/callback/whatsapp/`
-- **TikTok**: `{API_BASE_URL}/api/integrations/accounts/oauth/callback/tiktok/`
+- **TikTok:** لا يوجد OAuth — التكامل = Lead Gen فقط (ويب هوك أدناه).
 
 ### Webhook URLs:
 - **Meta**: `{API_BASE_URL}/api/integrations/webhooks/meta/`
 - **WhatsApp**: `{API_BASE_URL}/api/integrations/webhooks/whatsapp/`
+- **TikTok Lead Gen**: `{API_BASE_URL}/api/integrations/webhooks/tiktok-leadgen/`
 
 ---
 

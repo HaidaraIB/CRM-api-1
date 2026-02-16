@@ -1,11 +1,13 @@
 """
 WhatsApp Business API Webhook Handler
+- GET: التحقق (hub.mode, hub.verify_token, hub.challenge) → إرجاع challenge
+- POST: استقبال الرسائل من entry[0].changes[0].value.messages وربطها بـ tenant عبر phone_number_id
 """
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
-from .models import IntegrationAccount, IntegrationLog
+from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount
 from .decorators import rate_limit_webhook
 from crm.models import Client, ClientPhoneNumber, ClientEvent
 from crm.signals import get_least_busy_employee
@@ -64,8 +66,10 @@ def whatsapp_webhook(request):
         token = request.GET.get('hub.verify_token')
         challenge = request.GET.get('hub.challenge')
         
-        verify_token = getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')
-        
+        verify_token = (
+            getattr(settings, 'WHATSAPP_WEBHOOK_VERIFY_TOKEN', None)
+            or getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')
+        )
         if mode == 'subscribe' and token == verify_token:
             logger.info("WhatsApp webhook verified successfully")
             return HttpResponse(challenge, content_type='text/plain')
@@ -75,6 +79,13 @@ def whatsapp_webhook(request):
     
     # POST: استقبال الرسائل
     if request.method == 'POST':
+        # اختياري: التحقق من IP إذا ضُبط WHATSAPP_WEBHOOK_ALLOWED_IPS (قائمة عناوين Meta)
+        allowed_ips = getattr(settings, 'WHATSAPP_WEBHOOK_ALLOWED_IPS', None)
+        if allowed_ips:
+            client_ip = request.META.get('REMOTE_ADDR', '')
+            if client_ip not in list(allowed_ips):
+                logger.warning("WhatsApp webhook: IP %s not in allowed list", client_ip)
+                return HttpResponse('Forbidden', status=403)
         # التحقق من التوقيع
         if not verify_whatsapp_webhook_signature(request):
             logger.warning("WhatsApp webhook signature verification failed")
@@ -97,10 +108,12 @@ def whatsapp_webhook(request):
                     
                     # التحقق من نوع التغيير
                     if 'messages' in value:
-                        # رسالة واردة
+                        # رسالة واردة: استخراج phone_number_id لربط الرسالة بـ tenant
                         messages = value.get('messages', [])
                         phone_number_id = value.get('metadata', {}).get('phone_number_id')
-                        
+                        if not phone_number_id:
+                            logger.warning("WhatsApp webhook: missing phone_number_id in value.metadata")
+                            continue
                         for message in messages:
                             try:
                                 process_whatsapp_message(message, phone_number_id)
@@ -125,39 +138,36 @@ def whatsapp_webhook(request):
 
 def process_whatsapp_message(message, phone_number_id):
     """
-    معالجة رسالة WhatsApp واردة
-    
-    Args:
-        message: بيانات الرسالة من WhatsApp
-        phone_number_id: Phone Number ID المرسل منه
+    معالجة رسالة WhatsApp واردة.
+    Multi-tenant: نستخرج phone_number_id → نبحث في WhatsAppAccount → نحصل على tenant (company).
     """
-    from_number = message.get('from')  # رقم المرسل
+    from_number = message.get('from')
     message_id = message.get('id')
-    message_type = message.get('type')  # text, image, etc.
+    message_type = message.get('type')
     timestamp = message.get('timestamp')
     
-    # استخراج محتوى الرسالة
     if message_type == 'text':
         text_body = message.get('text', {}).get('body', '')
     else:
-        # للأنواع الأخرى (image, video, etc.) يمكن إضافة معالجة لاحقاً
         text_body = f"[{message_type} message]"
     
     if not from_number:
         logger.warning("No 'from' number in WhatsApp message")
         return
     
-    # البحث عن IntegrationAccount المرتبط بهذا Phone Number ID
     try:
-        account = IntegrationAccount.objects.filter(
-            platform='whatsapp',
+        # البحث عن WhatsAppAccount بالـ phone_number_id (كل عميل له رقم مختلف)
+        wa_account = WhatsAppAccount.objects.filter(
+            phone_number_id=phone_number_id,
             status='connected',
-            metadata__contains={'phone_number_id': phone_number_id}
-        ).first()
+        ).select_related('company', 'integration_account').first()
         
-        if not account:
-            logger.warning(f"No WhatsApp integration account found for phone_number_id={phone_number_id}")
+        if not wa_account:
+            logger.warning("No WhatsAppAccount found for phone_number_id=%s", phone_number_id)
             return
+        
+        company = wa_account.company
+        account = wa_account.integration_account
         
         # البحث عن Client موجود برقم الهاتف
         client = None
@@ -165,28 +175,24 @@ def process_whatsapp_message(message, phone_number_id):
         # البحث في ClientPhoneNumber
         phone_number_obj = ClientPhoneNumber.objects.filter(
             phone_number=from_number,
-            client__company=account.company
+            client__company=company
         ).first()
         
         if phone_number_obj:
             client = phone_number_obj.client
         else:
-            # البحث في phone_number القديم (للتوافق)
             client = Client.objects.filter(
                 phone_number=from_number,
-                company=account.company
+                company=company
             ).first()
         
-        # إذا لم نجد Client، ننشئ واحد جديد
         if not client:
-            # استخراج الاسم من الرسالة (إن أمكن) أو استخدام رقم الهاتف
             name = f"WhatsApp: {from_number}"
-            
             client = Client.objects.create(
                 name=name,
                 priority='medium',
                 type='fresh',
-                company=account.company,
+                company=company,
                 source='whatsapp',
                 integration_account=account,
                 phone_number=from_number,
@@ -201,8 +207,8 @@ def process_whatsapp_message(message, phone_number_id):
             )
             
             # Auto-assignment إذا كان مفعّل
-            if account.company.auto_assign_enabled:
-                employee = get_least_busy_employee(account.company)
+            if company.auto_assign_enabled:
+                employee = get_least_busy_employee(company)
                 if employee:
                     client.assigned_to = employee
                     client.assigned_at = timezone.now()
@@ -238,23 +244,24 @@ def process_whatsapp_message(message, phone_number_id):
             notes=f"WhatsApp message received: {message_type}",
         )
         
-        # تسجيل في IntegrationLog
-        IntegrationLog.objects.create(
-            account=account,
-            action='whatsapp_message_received',
-            status='success',
-            message=f'WhatsApp message received from {from_number}',
-            response_data={
-                'message_id': message_id,
-                'message_type': message_type,
-                'from': from_number,
-            },
-        )
+        # تسجيل في IntegrationLog إن وُجد integration_account
+        if account:
+            IntegrationLog.objects.create(
+                account=account,
+                action='whatsapp_message_received',
+                status='success',
+                message=f'WhatsApp message received from {from_number}',
+                response_data={
+                    'message_id': message_id,
+                    'message_type': message_type,
+                    'from': from_number,
+                },
+            )
         
-        logger.info(f"Processed WhatsApp message from {from_number} for client {client.id}")
+        logger.info("Processed WhatsApp message from %s for client %s", from_number, client.id)
         
     except Exception as e:
-        logger.error(f"Error processing WhatsApp message: {str(e)}", exc_info=True)
+        logger.error("Error processing WhatsApp message: %s", e, exc_info=True)
         raise
 
 

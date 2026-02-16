@@ -403,11 +403,7 @@ META_CLIENT_ID = os.getenv("META_CLIENT_ID", "")
 META_CLIENT_SECRET = os.getenv("META_CLIENT_SECRET", "")
 META_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/meta/"
 
-# TikTok OAuth
-TIKTOK_CLIENT_ID = os.getenv("TIKTOK_CLIENT_ID", "")
-TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
-TIKTOK_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/tiktok/"
-
+# TikTok = Lead Gen only (no OAuth). Webhook receives leads and creates Clients.
 # TikTok Lead Gen (Instant Form) webhook → CRM Company
 # Option A: Single company (all TikTok leads go to this company ID)
 TIKTOK_LEADGEN_COMPANY_ID = os.getenv("TIKTOK_LEADGEN_COMPANY_ID", "")
@@ -425,6 +421,15 @@ WHATSAPP_REDIRECT_URI = (
 # Meta Webhook Verification Token
 # هذا الـ token يستخدم للتحقق من Webhook عند إعدادته في Meta App
 META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "")
+
+# WhatsApp Webhook: إن وُجد يُستخدم للتحقق، وإلا يُستخدم META_WEBHOOK_VERIFY_TOKEN
+WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
+
+# اختياري: عناوين IP المسموح لها باستدعاء ويب هوك واتساب (مفصولة بفاصلة)
+# مثال: WHATSAPP_WEBHOOK_ALLOWED_IPS=31.13.24.1,31.13.64.1
+# إذا تركت فارغة لا يتم التحقق من IP
+_wa_ips = os.getenv("WHATSAPP_WEBHOOK_ALLOWED_IPS", "").strip()
+WHATSAPP_WEBHOOK_ALLOWED_IPS = [s.strip() for s in _wa_ips.split(",") if s.strip()] if _wa_ips else None
 
 # Integration Encryption Key
 # مفتاح التشفير لـ Access Tokens و Refresh Tokens

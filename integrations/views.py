@@ -1,5 +1,6 @@
+import requests
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import redirect
@@ -10,7 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from accounts.permissions import HasActiveSubscription
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount
 from .serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -19,7 +20,7 @@ from .serializers import (
     IntegrationLogSerializer,
     OAuthCallbackSerializer,
 )
-from .oauth_utils import get_oauth_handler, MetaOAuth, TikTokOAuth
+from .oauth_utils import get_oauth_handler, MetaOAuth
 from .decorators import rate_limit_webhook
 import json
 import hmac
@@ -85,44 +86,30 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def platforms(self, request):
-        """الحصول على قائمة المنصات المدعومة"""
+        """الحصول على قائمة المنصات المدعومة (OAuth). TikTok = Lead Gen فقط فلا يظهر في إضافة حساب."""
         platforms = [
-            {
-                'value': choice[0],
-                'label': choice[1],
-            }
-            for choice in IntegrationPlatform.choices
+            {'value': c[0], 'label': c[1]}
+            for c in IntegrationPlatform.choices
+            if c[0] != 'tiktok'
         ]
         return Response(platforms)
     
     @action(detail=True, methods=['post'])
     def connect(self, request, pk=None):
-        """
-        بدء عملية OAuth لربط الحساب
-        
-        هذا سيرجع رابط OAuth للمستخدم للانتقال إليه
-        """
+        """بدء عملية OAuth لربط الحساب (Meta / WhatsApp). TikTok = Lead Gen فقط."""
         account = self.get_object()
-        
+        if account.platform == 'tiktok':
+            return Response(
+                {'error': 'TikTok is Lead Gen only. Use the webhook URL in Integrations → TikTok.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         try:
             oauth_handler = get_oauth_handler(account.platform)
             state = oauth_handler.generate_state()
-            
-            # حفظ state في session أو database للتحقق لاحقاً
-            # يمكن استخدام Redis أو Database
             request.session[f'oauth_state_{account.id}'] = state
             request.session[f'oauth_account_id_{state}'] = account.id
-            
-            if account.platform == 'tiktok':
-                auth_url, code_verifier = oauth_handler.get_authorization_url(state)
-                request.session[f'oauth_code_verifier_{account.id}'] = code_verifier
-            else:
-                auth_url = oauth_handler.get_authorization_url(state)
-            
-            return Response({
-                'authorization_url': auth_url,
-                'state': state,
-            })
+            auth_url = oauth_handler.get_authorization_url(state)
+            return Response({'authorization_url': auth_url, 'state': state})
         except Exception as e:
             return Response(
                 {'error': str(e)},
@@ -172,50 +159,22 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         
         try:
             oauth_handler = get_oauth_handler(account.platform)
-            
-            # استبدال code بـ access token
-            if account.platform == 'tiktok':
-                code_verifier = request.session.get(f'oauth_code_verifier_{account.id}')
-                if not code_verifier:
-                    return Response(
-                        {'error': 'Code verifier not found'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                token_data = oauth_handler.exchange_code_for_token(code, code_verifier)
-            else:
-                token_data = oauth_handler.exchange_code_for_token(code)
-            
-            # الحصول على معلومات المستخدم/الحساب
+            token_data = oauth_handler.exchange_code_for_token(code)
             user_info = oauth_handler.get_user_info(token_data['access_token'])
-            
-            # تحديث الحساب (استخدام methods التشفير)
             account.set_access_token(token_data['access_token'])
             if 'refresh_token' in token_data:
                 account.set_refresh_token(token_data['refresh_token'])
-            
-            # حساب تاريخ انتهاء الصلاحية
             expires_in = token_data.get('expires_in', 0)
             if expires_in:
                 account.token_expires_at = timezone.now() + timedelta(seconds=expires_in)
-            
             account.external_account_id = user_info.get('id') or user_info.get('open_id')
             account.external_account_name = user_info.get('name') or user_info.get('display_name')
             account.status = 'connected'
             account.error_message = None
-            
-            # حفظ معلومات إضافية في metadata
             account.metadata = {
                 'user_info': user_info,
                 'token_type': token_data.get('token_type', 'Bearer'),
             }
-            
-            # TikTok: حفظ رابط البروفايل وإثراء user_info
-            if account.platform == 'tiktok':
-                link = user_info.get('profile_web_link') or user_info.get('profile_deep_link') or ''
-                if link:
-                    account.account_link = link
-                account.metadata['user_info'] = user_info
-            
             # للحصول على الصفحات (Meta)
             if account.platform == 'meta' and hasattr(oauth_handler, 'get_pages'):
                 try:
@@ -228,15 +187,42 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                     # لا نوقف العملية إذا فشل الحصول على الصفحات
                     pass
             
-            # للحصول على WhatsApp Business Account info
+            # للحصول على WhatsApp: WABA + Phone Number IDs وحفظها في جدول WhatsAppAccount
             if account.platform == 'whatsapp':
                 try:
-                    # حفظ Phone Number ID في metadata
-                    # يمكن جلبها من Meta Business API
-                    # account.metadata['phone_number_id'] = phone_number_id
-                    pass
+                    oauth_handler = get_oauth_handler('whatsapp')
+                    if hasattr(oauth_handler, 'get_waba_and_phone_numbers'):
+                        waba_list = oauth_handler.get_waba_and_phone_numbers(token_data['access_token'])
+                        for item in waba_list:
+                            waba_id = item.get('waba_id')
+                            business_id = item.get('business_id')
+                            for ph in item.get('phone_numbers') or []:
+                                phone_number_id = ph.get('id')
+                                if not phone_number_id:
+                                    continue
+                                display = (ph.get('display_phone_number') or '').strip()
+                                wa_account, created = WhatsAppAccount.objects.update_or_create(
+                                    phone_number_id=phone_number_id,
+                                    defaults={
+                                        'company': account.company,
+                                        'waba_id': waba_id,
+                                        'business_id': business_id or '',
+                                        'display_phone_number': display or None,
+                                        'status': 'connected',
+                                        'integration_account': account,
+                                    },
+                                )
+                                wa_account.set_access_token(token_data['access_token'])
+                                wa_account.save()
+                        if waba_list:
+                            first_waba = waba_list[0]
+                            first_phones = first_waba.get('phone_numbers') or []
+                            if first_phones:
+                                account.metadata['waba_id'] = first_waba.get('waba_id')
+                                account.metadata['phone_number_id'] = first_phones[0].get('id')
+                                account.phone_number = first_phones[0].get('display_phone_number')
                 except Exception as e:
-                    pass
+                    logger.warning("WhatsApp WABA/phone fetch failed: %s", e)
             
             account.save()
             
@@ -248,12 +234,8 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 message='Account connected successfully',
             )
             
-            # تنظيف session
             request.session.pop(f'oauth_state_{account.id}', None)
             request.session.pop(f'oauth_account_id_{state}', None)
-            if account.platform == 'tiktok':
-                request.session.pop(f'oauth_code_verifier_{account.id}', None)
-            
             # إعادة التوجيه إلى صفحة النجاح في Frontend
             frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
             return redirect(f"{frontend_url}/integrations?connected=true&account_id={account.id}")
@@ -335,37 +317,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # مزامنة حسب المنصة
-        if account.platform == 'tiktok':
-            try:
-                tiktok_oauth = TikTokOAuth()
-                access_token = account.get_access_token()
-                if not access_token:
-                    return Response(
-                        {'error': 'No access token available'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                user_info = tiktok_oauth.get_user_info(access_token, include_profile_and_stats=True)
-                if not account.metadata:
-                    account.metadata = {}
-                account.metadata['user_info'] = user_info
-                account.external_account_name = user_info.get('name') or user_info.get('display_name')
-                link = user_info.get('profile_web_link') or user_info.get('profile_deep_link') or ''
-                if link:
-                    account.account_link = link
-            except Exception as e:
-                IntegrationLog.objects.create(
-                    account=account,
-                    action='sync',
-                    status='error',
-                    message='TikTok sync failed',
-                    error_details=str(e),
-                )
-                return Response(
-                    {'error': str(e)},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
+        # مزامنة حسب المنصة (TikTok = Lead Gen فقط، لا sync OAuth)
         account.last_sync_at = timezone.now()
         account.save()
         
@@ -378,90 +330,19 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         
         return Response({'message': 'Sync completed successfully'})
     
-    @action(detail=True, methods=['get'], url_path='tiktok-profile')
-    def tiktok_profile(self, request, pk=None):
+    @action(detail=False, methods=['get'], url_path='tiktok-leadgen-config')
+    def tiktok_leadgen_config(self, request):
         """
-        الحصول على بروفايل TikTok الكامل (للحسابات المتصلة).
-        GET /api/integrations/accounts/{id}/tiktok-profile/
+        TikTok Lead Gen فقط: إرجاع رابط الويب هوك لهذه الشركة لتسجيله في TikTok Ads Manager.
+        GET /api/integrations/accounts/tiktok-leadgen-config/
         """
-        account = self.get_object()
-        if account.platform != 'tiktok':
-            return Response(
-                {'error': 'This endpoint is only for TikTok accounts'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        if account.status != 'connected':
-            return Response(
-                {'error': 'Account is not connected'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        try:
-            tiktok_oauth = TikTokOAuth()
-            access_token = account.get_access_token()
-            if not access_token:
-                return Response(
-                    {'error': 'No access token'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            user_info = tiktok_oauth.get_user_info(access_token, include_profile_and_stats=True)
-            if not account.metadata:
-                account.metadata = {}
-            account.metadata['user_info'] = user_info
-            account.save(update_fields=['metadata'])
-            return Response({
-                'profile': user_info,
-                'account_link': account.account_link,
-            })
-        except Exception as e:
-            logger.error(f"TikTok profile fetch error: {str(e)}", exc_info=True)
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-    
-    @action(detail=True, methods=['get'], url_path='tiktok-videos')
-    def tiktok_videos(self, request, pk=None):
-        """
-        قائمة فيديوهات TikTok للحساب (مع pagination).
-        GET /api/integrations/accounts/{id}/tiktok-videos/?cursor=&max_count=20
-        """
-        account = self.get_object()
-        if account.platform != 'tiktok':
-            return Response(
-                {'error': 'This endpoint is only for TikTok accounts'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        if account.status != 'connected':
-            return Response(
-                {'error': 'Account is not connected'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        cursor = request.query_params.get('cursor', '')
-        try:
-            max_count = int(request.query_params.get('max_count', 20))
-        except ValueError:
-            max_count = 20
-        max_count = min(max_count, 20)
-        try:
-            tiktok_oauth = TikTokOAuth()
-            access_token = account.get_access_token()
-            if not access_token:
-                return Response(
-                    {'error': 'No access token'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            data = tiktok_oauth.list_videos(
-                access_token,
-                cursor=cursor if cursor else None,
-                max_count=max_count,
-            )
-            return Response(data)
-        except Exception as e:
-            logger.error(f"TikTok videos fetch error: {str(e)}", exc_info=True)
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        company = request.user.company
+        base = getattr(settings, 'API_BASE_URL', '').rstrip('/')
+        webhook_url = f"{base}/api/integrations/webhooks/tiktok-leadgen/?company_id={company.id}"
+        return Response({
+            'webhook_url': webhook_url,
+            'company_id': company.id,
+        })
     
     @action(detail=True, methods=['get'])
     def lead_forms(self, request, pk=None):
@@ -627,74 +508,80 @@ class IntegrationLogViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.order_by('-created_at')
 
 
-# ==================== TikTok Webhook ====================
+# ==================== WhatsApp Send Message ====================
+# إرسال رسالة واتساب: POST إلى Graph API باستخدام phone_number_id و Access Token الخاص بالـ tenant
 
-@csrf_exempt
-@require_http_methods(["POST"])
-@rate_limit_webhook(max_requests=200, window=60)
-def tiktok_webhook(request):
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_send_message(request):
     """
-    استقبال أحداث TikTok (authorization.removed, video.upload.failed, video.publish.completed, ...).
-    يجب الرد فوراً بـ 200 لقبول الحدث.
+    إرسال رسالة واتساب من رقم الشركة المتصل.
+    POST /api/integrations/whatsapp/send/
+    Body: { "phone_number_id": "optional", "to": "971501234567", "message": "نص الرسالة" }
     """
-    try:
-        body = json.loads(request.body)
-    except json.JSONDecodeError:
-        return HttpResponse('Bad Request', status=400)
-    
-    client_key = body.get('client_key')
-    if client_key != getattr(settings, 'TIKTOK_CLIENT_ID', ''):
-        logger.warning("TikTok webhook: client_key mismatch")
-        return HttpResponse('OK', status=200)  # still 200 to avoid retries
-    
-    event = body.get('event')
-    user_openid = body.get('user_openid')
-    content_str = body.get('content', '{}')
-    try:
-        content = json.loads(content_str) if isinstance(content_str, str) else content_str
-    except (json.JSONDecodeError, TypeError):
-        content = {}
-    
-    if event == 'authorization.removed' and user_openid:
-        # المستخدم ألغى التفويض من تطبيق TikTok
-        accounts = IntegrationAccount.objects.filter(
-            platform='tiktok',
-            external_account_id=user_openid,
-            status='connected',
+    company = request.user.company
+    phone_number_id = request.data.get('phone_number_id')
+    to = request.data.get('to')
+    message = request.data.get('message') or request.data.get('text')
+    if not to or not message:
+        return Response(
+            {'error': 'to and message are required'},
+            status=status.HTTP_400_BAD_REQUEST
         )
-        for account in accounts:
-            account.set_access_token(None)
-            account.set_refresh_token(None)
-            account.token_expires_at = None
-            account.status = 'disconnected'
-            account.error_message = 'User deauthorized from TikTok'
-            account.save()
-            IntegrationLog.objects.create(
-                account=account,
-                action='webhook_deauthorized',
-                status='success',
-                message='TikTok user deauthorized',
-                response_data={'event': event, 'content': content},
-            )
-            logger.info(f"TikTok account {account.id} disconnected via webhook (open_id={user_openid})")
-    
-    elif event in ('video.upload.failed', 'video.publish.completed'):
-        # تسجيل الحدث في السجل (اختياري للـ CRM)
-        accounts = IntegrationAccount.objects.filter(
-            platform='tiktok',
-            external_account_id=user_openid,
-            status='connected',
+    # تطبيع رقم المستلم (إزالة + وفراغات)
+    to = str(to).replace(' ', '').replace('+', '').strip()
+    if not to.isdigit():
+        return Response(
+            {'error': 'Invalid "to" phone number'},
+            status=status.HTTP_400_BAD_REQUEST
         )
-        for account in accounts:
+    qs = WhatsAppAccount.objects.filter(company=company, status='connected')
+    if phone_number_id:
+        qs = qs.filter(phone_number_id=phone_number_id)
+    wa_account = qs.first()
+    if not wa_account:
+        return Response(
+            {'error': 'No connected WhatsApp number for this company'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    access_token = wa_account.get_access_token()
+    if not access_token:
+        return Response(
+            {'error': 'WhatsApp account has no access token'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    url = f"https://graph.facebook.com/v18.0/{wa_account.phone_number_id}/messages"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "text",
+        "text": {"body": message[:4096]},
+    }
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if wa_account.integration_account_id:
             IntegrationLog.objects.create(
-                account=account,
-                action=f'tiktok_{event}',
+                account_id=wa_account.integration_account_id,
+                action='whatsapp_message_sent',
                 status='success',
-                message=event,
-                response_data=content,
+                message=f'Message sent to {to}',
+                response_data=data,
             )
-    
-    return HttpResponse('OK', status=200)
+        return Response(data, status=status.HTTP_200_OK)
+    except requests.RequestException as e:
+        err_body = {'error': str(e)}
+        if getattr(e, 'response', None) is not None:
+            r = e.response
+            try:
+                err_body = r.json()
+            except Exception:
+                err_body = {'error': getattr(r, 'text', str(r))}
+        logger.warning("WhatsApp send failed: %s", err_body)
+        return Response(err_body, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ==================== TikTok Lead Gen Webhook ====================
@@ -878,11 +765,14 @@ def tiktok_leadgen_webhook(request):
                     new_value=employee.get_full_name() or employee.username,
                     notes='Auto-assigned from TikTok Lead Gen',
                 )
+        created_notes = 'Lead from TikTok Instant Form (form_id=%s)' % (payload.get('form_id') or '')
+        if payload.get('email'):
+            created_notes += '. Email: %s' % payload['email']
         ClientEvent.objects.create(
             client=client,
             event_type='created',
             new_value='TikTok Lead Gen',
-            notes='Lead from TikTok Instant Form (form_id=%s)' % (payload.get('form_id') or ''),
+            notes=created_notes,
         )
         IntegrationLog.objects.create(
             account=account,

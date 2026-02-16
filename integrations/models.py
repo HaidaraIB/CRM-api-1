@@ -86,7 +86,7 @@ class IntegrationAccount(models.Model):
         help_text="معلومات إضافية خاصة بالمنصة (JSON)"
     )
     
-    # حالة الحساب
+    # حالة الحساب (يكون disconnected حتى يكتمل OAuth بنجاح)
     status = models.CharField(
         max_length=20,
         choices=[
@@ -95,7 +95,7 @@ class IntegrationAccount(models.Model):
             ('error', 'Error'),
             ('expired', 'Token Expired'),
         ],
-        default='connected',
+        default='disconnected',
         help_text="حالة الاتصال"
     )
     
@@ -221,4 +221,89 @@ class IntegrationLog(models.Model):
     
     def __str__(self):
         return f"{self.account} - {self.action} - {self.status}"
+
+
+class WhatsAppAccount(models.Model):
+    """
+    جدول حسابات واتساب (Embedded Signup Flow).
+    كل صف = رقم واتساب واحد مرتبط بـ tenant (company).
+    يُستخدم للويب هوك (استخراج tenant من phone_number_id) ولإرسال الرسائل.
+    """
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='whatsapp_accounts',
+        help_text="الشركة (tenant) المالكة لهذا الرقم",
+    )
+    waba_id = models.CharField(
+        max_length=64,
+        help_text="WhatsApp Business Account ID من Meta",
+    )
+    phone_number_id = models.CharField(
+        max_length=64,
+        unique=True,
+        help_text="Phone Number ID من Meta (يُستخدم في الويب هوك والإرسال)",
+    )
+    access_token = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Permanent Access Token (مخزن مشفراً)",
+    )
+    business_id = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="معرف Business في Meta إن وُجد",
+    )
+    display_phone_number = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="رقم الهاتف المعروض للمستخدم",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('connected', 'Connected'),
+            ('disconnected', 'Disconnected'),
+            ('error', 'Error'),
+        ],
+        default='connected',
+    )
+    integration_account = models.ForeignKey(
+        IntegrationAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='whatsapp_accounts',
+        help_text="حساب التكامل المرتبط (من OAuth)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'whatsapp_accounts'
+        verbose_name = 'WhatsApp Account'
+        verbose_name_plural = 'WhatsApp Accounts'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['company', 'status']),
+            models.Index(fields=['phone_number_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.company.name} - {self.display_phone_number or self.phone_number_id}"
+
+    def get_access_token(self):
+        """الحصول على Access Token (مفكوك التشفير)"""
+        if not self.access_token:
+            return None
+        return decrypt_token(self.access_token)
+
+    def set_access_token(self, token):
+        """حفظ Access Token (مشفر)"""
+        if token:
+            self.access_token = encrypt_token(token)
+        else:
+            self.access_token = None
 
