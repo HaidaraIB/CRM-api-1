@@ -15,26 +15,24 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 
+# ============================================================================
+# Path Configuration
+# ============================================================================
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
 load_dotenv(BASE_DIR / ".env")
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+# ============================================================================
+# Security Settings
+# ============================================================================
 
-# SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY")
-
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 
-# Get base domain from environment variable
-# This is used to automatically allow company subdomains
+# Domain Configuration
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "")
 
-# Base ALLOWED_HOSTS for production
+# Allowed Hosts
 ALLOWED_HOSTS = [
     "api.loop-crm.app",
     "www.api.loop-crm.app",
@@ -49,25 +47,18 @@ ALLOWED_HOSTS = [
 ]
 
 # In DEBUG mode, allow all hosts (for development only)
-# This is safe because DEBUG mode should never be used in production
 if DEBUG:
-    # Allow all hosts in development to avoid DisallowedHost errors
-    # The middleware will still validate local network IPs for additional security
-    ALLOWED_HOSTS = ['*']
+    ALLOWED_HOSTS = ["*"]
 
-# Note: In DEBUG mode, ALLOWED_HOSTS is set to ['*'] to allow all hosts
-# This prevents DisallowedHost errors when IP changes on physical devices
-# ⚠️ IMPORTANT: DEBUG should NEVER be True in production!
-
-# Automatically allow all subdomains of the base domain in ALLOWED_HOSTS
-# This is required for Django to accept requests from company subdomains
+# Automatically allow all subdomains of the base domain
 if BASE_DOMAIN:
-    # Add base domain
     ALLOWED_HOSTS.append(BASE_DOMAIN)
-    # Add wildcard for all subdomains
     ALLOWED_HOSTS.append(f".{BASE_DOMAIN}")
 
-# CORS settings
+# ============================================================================
+# CORS Configuration
+# ============================================================================
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Vite default port
     "http://localhost:3000",  # React default port (CRM-project)
@@ -90,19 +81,13 @@ CORS_ALLOWED_ORIGINS = [
     "https://www.admin.loop-crm.app",
 ]
 
-# Allow all Netlify and Vercel domains (for production)
-# This includes both subdomain and custom domains on Vercel
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    # Allow localhost with any port (for development)
     r"^http://localhost:\d+$",
     r"^http://127\.0\.0\.1:\d+$",
     r"^http://0\.0\.0\.0:\d+$",
     r"^http://10\.0\.2\.2:\d+$",  # Android emulator with any port
-    # Allow local network IPs (for physical device testing)
     r"^http://192\.168\.\d+\.\d+:\d+$",  # Local network IPs (192.168.x.x)
     r"^http://10\.\d+\.\d+\.\d+:\d+$",  # Private network IPs (10.x.x.x)
-    # Allow subdomains of localhost (for local development with subdomains)
-    # This matches: http://company.localhost:3000, http://memo.com.localhost:3000, etc.
     r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.localhost:\d+$",
     r"^http://[a-zA-Z0-9][a-zA-Z0-9.-]*\.127\.0\.0\.1:\d+$",
     r"^https://.*\.loop-crm\.app$",
@@ -110,32 +95,55 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 ]
 
 # Automatically allow all subdomains of the base domain
-# This allows company subdomains to access the API automatically
-# Format: https://company-domain.example.com
 if BASE_DOMAIN:
-    # Escape dots in domain for regex
     escaped_domain = BASE_DOMAIN.replace(".", r"\.")
-    # Allow any subdomain of the base domain (alphanumeric and hyphens only)
-    # This matches company domains like: company1.example.com, my-company.example.com
     subdomain_regex = (
         rf"^https?://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}$"
     )
     CORS_ALLOWED_ORIGIN_REGEXES.append(subdomain_regex)
 
-    # Also allow the base domain itself (for main app)
     base_domain_regex = rf"^https?://{escaped_domain}$"
     CORS_ALLOWED_ORIGIN_REGEXES.append(base_domain_regex)
 
-    # Allow localhost with base domain (for local development with subdomains)
     localhost_subdomain_regex = (
         rf"^http://[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.{escaped_domain}:\d+$"
     )
     CORS_ALLOWED_ORIGIN_REGEXES.append(localhost_subdomain_regex)
 
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "False").lower() == "true"
 
-# CSRF Trusted Origins - required for CSRF protection in production
-# These are the origins that Django will accept CSRF tokens from
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "x-api-key",
+    "cache-control",
+    "pragma",
+]
+
+CORS_PREFLIGHT_MAX_AGE = 3600
+
+# ============================================================================
+# CSRF Configuration
+# ============================================================================
+
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
@@ -155,49 +163,10 @@ CSRF_TRUSTED_ORIGINS = [
 if BASE_DOMAIN:
     CSRF_TRUSTED_ORIGINS.append(f"https://{BASE_DOMAIN}")
     CSRF_TRUSTED_ORIGINS.append(f"http://{BASE_DOMAIN}")
-    # Add regex pattern for all subdomains
-    # Note: CSRF_TRUSTED_ORIGINS doesn't support regex, so we'll add common patterns
-    # For dynamic subdomains, consider using CSRF_TRUSTED_ORIGINS with wildcard or environment variable
 
-# In development mode, you can allow all origins (for easier debugging)
-# Set CORS_ALLOW_ALL_ORIGINS = True in development if you're having CORS issues
-# In production, this should ALWAYS be False
-CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "False").lower() == "true"
-
-# If CORS_ALLOW_ALL_ORIGINS is True, the specific origins/regexes above will be ignored
-# Only use this in development for debugging CORS issues
-
-CORS_ALLOW_METHODS = [
-    "DELETE",
-    "GET",
-    "OPTIONS",
-    "PATCH",
-    "POST",
-    "PUT",
-]
-
-CORS_ALLOW_HEADERS = [
-    "accept",
-    "accept-encoding",
-    "accept-language",  # Added for language support in 2FA requests
-    "authorization",
-    "content-type",
-    "dnt",
-    "origin",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
-    "x-api-key",  # API Key header for application authentication
-    # Additional headers that might be needed
-    "cache-control",
-    "pragma",
-]
-
-# Allow preflight requests to be cached for 1 hour
-CORS_PREFLIGHT_MAX_AGE = 3600
-
-
-# Application definition
+# ============================================================================
+# Application Definition
+# ============================================================================
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -229,8 +198,8 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
-    "crm_saas_api.middleware.DisableCSRFForAPI",  # Disable CSRF for API endpoints
-    "crm_saas_api.middleware.APIKeyValidationMiddleware",  # Validate API keys
+    "crm_saas_api.middleware.DisableCSRFForAPI",
+    "crm_saas_api.middleware.APIKeyValidationMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -256,9 +225,9 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "crm_saas_api.wsgi.application"
 
-
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+# ============================================================================
+# Database Configuration
+# ============================================================================
 
 DATABASES = {
     "default": {
@@ -267,9 +236,9 @@ DATABASES = {
     }
 }
 
-
-# Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
+# ============================================================================
+# Authentication & Password Validation
+# ============================================================================
 
 AUTH_USER_MODEL = "accounts.User"
 
@@ -288,61 +257,53 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
+# ============================================================================
 # Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
+# ============================================================================
 
 LANGUAGE_CODE = "en-us"
-
 TIME_ZONE = "UTC"
-
 USE_I18N = True
-
 USE_TZ = True
 
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
+# ============================================================================
+# Static & Media Files
+# ============================================================================
 
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
-STATICFILES_DIRS = (
-    [
-        BASE_DIR / "static",
-    ]
-    if (BASE_DIR / "static").exists()
-    else []
-)
-
-# Media files (User uploaded content)
-# https://docs.djangoproject.com/en/5.2/topics/files/
+STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else []
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
-# Backups directory (defaults to <MEDIA_ROOT>/backups)
+# Backups directory
 BACKUP_ROOT = Path(MEDIA_ROOT / "backups")
 BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
+# ============================================================================
+# Default Primary Key Field Type
+# ============================================================================
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Frontend + onboarding settings
+# ============================================================================
+# Frontend & Onboarding Settings
+# ============================================================================
+
 FRONTEND_APP_URL = os.getenv("FRONTEND_APP_URL")
 EMAIL_VERIFICATION_EXPIRY_HOURS = 48
 
-# Django REST Framework settings
+# ============================================================================
+# Django REST Framework Settings
+# ============================================================================
+
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        # SessionAuthentication removed to avoid CSRF issues with API endpoints
-        # Admin panel uses its own authentication
-        # "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
@@ -350,7 +311,10 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 20,
 }
 
+# ============================================================================
 # JWT Settings
+# ============================================================================
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
@@ -367,7 +331,10 @@ SIMPLE_JWT = {
     "TOKEN_TYPE_CLAIM": "token_type",
 }
 
-# drf-spectacular Settings
+# ============================================================================
+# API Documentation (drf-spectacular) Settings
+# ============================================================================
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "LOOP CRM API",
     "DESCRIPTION": "Multi-company CRM system for managing customer relationships",
@@ -384,32 +351,31 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+# ============================================================================
+# Payment Gateway Settings
+# ============================================================================
 
 PAYTABS_DOMAIN = os.getenv("PAYTABS_DOMAIN")
-# PayTabs callback and return URLs point to backend (Django handles them fully)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
-PAYTABS_CALLBACK_URL = f"{API_BASE_URL}/api/payments/paytabs-callback/"
-PAYTABS_RETURN_URL = f"{API_BASE_URL}/api/payments/paytabs-return/"
-# Zain Cash return URL
-ZAINCASH_RETURN_URL = f"{API_BASE_URL}/api/payments/zaincash-return/"
-# Stripe return URL
-STRIPE_RETURN_URL = f"{API_BASE_URL}/api/payments/stripe-return/"
-# Frontend URL for redirects after payment
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
-# ==================== Integrations OAuth Settings ====================
+# Payment Gateway Callback URLs
+PAYTABS_CALLBACK_URL = f"{API_BASE_URL}/api/payments/paytabs-callback/"
+PAYTABS_RETURN_URL = f"{API_BASE_URL}/api/payments/paytabs-return/"
+ZAINCASH_RETURN_URL = f"{API_BASE_URL}/api/payments/zaincash-return/"
+STRIPE_RETURN_URL = f"{API_BASE_URL}/api/payments/stripe-return/"
+
+# ============================================================================
+# Integrations OAuth Settings
+# ============================================================================
+
 # Meta (Facebook/Instagram) OAuth
 META_CLIENT_ID = os.getenv("META_CLIENT_ID", "")
 META_CLIENT_SECRET = os.getenv("META_CLIENT_SECRET", "")
 META_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/meta/"
 
-# TikTok = Lead Gen only (no OAuth). Webhook receives leads and creates Clients.
-# TikTok Lead Gen (Instant Form) webhook → CRM Company
-# Option A: Single company (all TikTok leads go to this company ID)
-TIKTOK_LEADGEN_COMPANY_ID = os.getenv("TIKTOK_LEADGEN_COMPANY_ID", "")
-# Option B: Map TikTok advertiser_id to our company_id (JSON: {"advertiser_id": "company_id", ...})
-# e.g. TIKTOK_LEADGEN_ADVERTISER_MAPPING='{"123456789": "1", "987654321": "2"}'
-TIKTOK_LEADGEN_ADVERTISER_MAPPING = os.getenv("TIKTOK_LEADGEN_ADVERTISER_MAPPING", "{}")
+# Meta Webhook Verification Token
+META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "")
 
 # WhatsApp Business API (uses Meta OAuth)
 WHATSAPP_CLIENT_ID = os.getenv("WHATSAPP_CLIENT_ID", META_CLIENT_ID)
@@ -418,41 +384,35 @@ WHATSAPP_REDIRECT_URI = (
     f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/whatsapp/"
 )
 
-# Meta Webhook Verification Token
-# هذا الـ token يستخدم للتحقق من Webhook عند إعدادته في Meta App
-META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "")
-
-# WhatsApp Webhook: إن وُجد يُستخدم للتحقق، وإلا يُستخدم META_WEBHOOK_VERIFY_TOKEN
+# WhatsApp Webhook Settings
 WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
 
-# اختياري: عناوين IP المسموح لها باستدعاء ويب هوك واتساب (مفصولة بفاصلة)
-# مثال: WHATSAPP_WEBHOOK_ALLOWED_IPS=31.13.24.1,31.13.64.1
-# إذا تركت فارغة لا يتم التحقق من IP
+
 _wa_ips = os.getenv("WHATSAPP_WEBHOOK_ALLOWED_IPS", "").strip()
-WHATSAPP_WEBHOOK_ALLOWED_IPS = [s.strip() for s in _wa_ips.split(",") if s.strip()] if _wa_ips else None
+
+WHATSAPP_WEBHOOK_ALLOWED_IPS = (
+    [s.strip() for s in _wa_ips.split(",") if s.strip()] if _wa_ips else None
+)
+
+# TikTok Lead Gen (no OAuth, webhook only)
+TIKTOK_LEADGEN_COMPANY_ID = os.getenv("TIKTOK_LEADGEN_COMPANY_ID", "")
+TIKTOK_LEADGEN_ADVERTISER_MAPPING = os.getenv("TIKTOK_LEADGEN_ADVERTISER_MAPPING", "{}")
 
 # Integration Encryption Key
-# مفتاح التشفير لـ Access Tokens و Refresh Tokens
-# ⚠️ مهم جداً: يجب إنشاء مفتاح قوي وإضافته في .env
-# يمكن إنشاؤه باستخدام: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 INTEGRATION_ENCRYPTION_KEY = os.getenv("INTEGRATION_ENCRYPTION_KEY", "")
 
-# ==================== API Keys for Application Authentication ====================
-# API Keys to identify and authenticate different applications
-# These keys are sent in the X-API-Key header with every request
-# Generate keys using: python test.py
-# ⚠️ IMPORTANT: Never commit these keys to Git! Store them in .env file only
+# ============================================================================
+# API Keys for Application Authentication
+# ============================================================================
 
-# Mobile App API Key
 API_KEY_MOBILE = os.getenv("API_KEY_MOBILE", "")
-
-# Web App (CRM-project) API Key
 API_KEY_WEB = os.getenv("API_KEY_WEB", "")
-
-# Admin Panel API Key
 API_KEY_ADMIN = os.getenv("API_KEY_ADMIN", "")
 
-# Demo account settings for testing (read from .env)
+# ============================================================================
+# Demo Account Settings (for testing)
+# ============================================================================
+
 DEMO_GOOGLE_ACCOUNT_USERNAME = os.getenv("DEMO_GOOGLE_ACCOUNT_USERNAME", "")
 DEMO_GOOGLE_ACCOUNT_EMAIL = os.getenv("DEMO_GOOGLE_ACCOUNT_EMAIL", "")
 DEMO_GOOGLE_ACCOUNT_2FA_CODE = os.getenv("DEMO_GOOGLE_ACCOUNT_2FA_CODE", "")
@@ -460,81 +420,76 @@ DEMO_APPLE_ACCOUNT_USERNAME = os.getenv("DEMO_APPLE_ACCOUNT_USERNAME", "")
 DEMO_APPLE_ACCOUNT_EMAIL = os.getenv("DEMO_APPLE_ACCOUNT_EMAIL", "")
 DEMO_APPLE_ACCOUNT_2FA_CODE = os.getenv("DEMO_APPLE_ACCOUNT_2FA_CODE", "")
 
-# Note: If no API keys are set, the middleware will skip validation (for development)
-# In production, always set all API keys in .env file
+# ============================================================================
+# Django Q2 Settings (for scheduled tasks)
+# ============================================================================
 
-# ==================== Django Q2 Settings ====================
-# Django Q2 configuration for scheduled tasks (Optional - can use cron instead)
-# If using cron, you can remove django-q2 from INSTALLED_APPS and this config
 Q_CLUSTER = {
-    'name': 'CRM_Queue',
-    'workers': 4,
-    'recycle': 500,
-    'timeout': 60,
-    'retry': 120,
-    'queue_limit': 50,
-    'bulk': 10,
-    'orm': 'default',  # Use Django ORM for task storage
-    'catch_up': False,  # Don't run missed scheduled tasks
-    'sync': False,  # Use async processing
+    "name": "CRM_Queue",
+    "workers": 4,
+    "recycle": 500,
+    "timeout": 60,
+    "retry": 120,
+    "queue_limit": 50,
+    "bulk": 10,
+    "orm": "default",
+    "catch_up": False,
+    "sync": False,
 }
 
-# Note: If using cron instead of django-q2, you can:
-# 1. Remove 'django_q' from INSTALLED_APPS
-# 2. Remove django-q2 from requirements.txt
-# 3. Use: python manage.py run_reassign_task in cron
+# ============================================================================
+# Logging Configuration
+# ============================================================================
 
 # Create logs directory if it doesn't exist
-import os
-logs_dir = BASE_DIR / 'logs'
+logs_dir = BASE_DIR / "logs"
 os.makedirs(logs_dir, exist_ok=True)
 
-# Logging configuration
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {message}',
-            'style': '{',
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {message}",
+            "style": "{",
         },
-        'simple': {
-            'format': '{levelname} {message}',
-            'style': '{',
-        },
-    },
-    'handlers': {
-        'file': {
-            'level': 'INFO',
-            'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'logs' / 'django.log',
-            'formatter': 'verbose',
-        },
-        'console': {
-            'level': 'INFO',
-            'class': 'logging.StreamHandler',
-            'formatter': 'simple',
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
         },
     },
-    'root': {
-        'handlers': ['console', 'file'],
-        'level': 'INFO',
+    "handlers": {
+        "file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": BASE_DIR / "logs" / "django.log",
+            "formatter": "verbose",
+        },
+        "console": {
+            "level": "INFO",
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
     },
-    'loggers': {
-        'django': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
+    "root": {
+        "handlers": ["console", "file"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
         },
-        'subscriptions': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
+        "subscriptions": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
         },
-        'notifications': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
+        "notifications": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
         },
     },
 }

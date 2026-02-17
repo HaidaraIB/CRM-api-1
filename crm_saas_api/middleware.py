@@ -42,6 +42,11 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         '/api/payments/stripe-return/',
         '/api/payments/qicard-return/',
         '/api/payments/qicard-webhook/',
+        # OAuth callbacks: called by external platforms (Facebook, WhatsApp, etc.)
+        # and cannot send X-API-Key header
+        '/api/integrations/accounts/oauth/callback/',
+        # Webhooks: called by external platforms and cannot send X-API-Key header
+        '/api/integrations/webhooks/',
     ]
 
     def process_request(self, request):

@@ -2,7 +2,7 @@ import requests
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import redirect
 from django.utils import timezone
 from datetime import timedelta
@@ -116,18 +116,35 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
-    @action(detail=False, methods=['get', 'post'], url_path='oauth/callback/(?P<platform>[^/]+)')
+    @action(detail=False, methods=['get', 'post'], url_path='oauth/callback/(?P<platform>[^/]+)', permission_classes=[AllowAny])
     def oauth_callback(self, request, platform):
         """
         معالجة OAuth Callback من المنصة
         
         هذا endpoint يتم استدعاؤه من المنصة بعد موافقة المستخدم
+        لا يتطلب authentication لأنه يأتي من منصة خارجية
         """
+        # Facebook يرسل code و state في query parameters (GET request)
+        # التحقق من وجود code في الطلب
+        if 'code' not in request.query_params and 'code' not in request.data:
+            return Response(
+                {
+                    'error': 'Missing authorization code',
+                    'detail': 'This endpoint is called by Facebook after user authorization. Please complete the OAuth flow by clicking "Connect" button in the integrations page.',
+                    'hint': 'The authorization code should be provided by Facebook in the callback URL.'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         serializer = OAuthCallbackSerializer(data=request.query_params or request.data)
         
         if not serializer.is_valid():
             return Response(
-                serializer.errors,
+                {
+                    'error': 'Invalid callback parameters',
+                    'details': serializer.errors,
+                    'hint': 'This endpoint expects code and state parameters from Facebook OAuth callback.'
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -150,7 +167,8 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            account = IntegrationAccount.objects.get(id=account_id, company=request.user.company)
+            # الحصول على account من session data (لا نحتاج request.user)
+            account = IntegrationAccount.objects.get(id=account_id)
         except IntegrationAccount.DoesNotExist:
             return Response(
                 {'error': 'Account not found'},
