@@ -609,13 +609,22 @@ def paytabs_return(request):
     """
     logger = logging.getLogger(__name__)
     
+    # Read request.body FIRST before accessing request.POST (which consumes the stream)
+    request_body_str = None
+    try:
+        if request.body:
+            request_body_str = request.body.decode('utf-8')
+    except Exception as e:
+        logger.warning(f"Could not read request body: {str(e)}")
+        request_body_str = None
+    
     # Log initial request details
     logger.info("=" * 80)
     logger.info("PAYTABS RETURN URL CALLED")
     logger.info(f"Request method: {request.method}")
     logger.info(f"GET params: {dict(request.GET)}")
     logger.info(f"POST data: {dict(request.POST) if hasattr(request, 'POST') else 'N/A'}")
-    logger.info(f"Request body: {request.body.decode('utf-8') if request.body else 'Empty'}")
+    logger.info(f"Request body: {request_body_str if request_body_str else 'Empty'}")
     logger.info("=" * 80)
 
     try:
@@ -665,7 +674,7 @@ def paytabs_return(request):
                 {
                     "GET": dict(request.GET),
                     "POST": dict(request.POST) if hasattr(request, "POST") else {},
-                    "body": request.body.decode("utf-8") if request.body else None,
+                    "body": request_body_str,
                     "payload": payload,
                 },
             )
