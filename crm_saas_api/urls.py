@@ -89,6 +89,8 @@ from subscriptions.views import (
     create_qicard_payment,
     qicard_return,
     qicard_webhook,
+    create_fib_payment,
+    fib_callback,
     check_payment_status,
 )
 from integrations import urls as integrations_urls
@@ -174,6 +176,12 @@ urlpatterns = [
     ),
     path("api/payments/qicard-return/", qicard_return, name="qicard_return"),
     path("api/payments/qicard-webhook/", qicard_webhook, name="qicard_webhook"),
+    path(
+        "api/payments/create-fib-session/",
+        create_fib_payment,
+        name="create_fib_payment",
+    ),
+    path("api/payments/fib-callback/", fib_callback, name="fib_callback"),
     # Status endpoint - use a path that won't conflict with router
     path(
         "api/payment-status/<int:subscription_id>/",

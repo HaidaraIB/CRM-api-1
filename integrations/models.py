@@ -307,3 +307,122 @@ class WhatsAppAccount(models.Model):
         else:
             self.access_token = None
 
+
+class TwilioSettings(models.Model):
+    """
+    إعدادات Twilio لإرسال SMS فقط.
+    نستخدم Twilio حصرياً لخدمة الرسائل القصيرة (SMS).
+    """
+    company = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='twilio_settings',
+        help_text="الشركة المالكة للإعدادات",
+    )
+    account_sid = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="Twilio Account SID",
+    )
+    twilio_number = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="رقم الإرسال (Twilio Number)",
+    )
+    auth_token = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Auth Token (مخزن مشفراً)",
+    )
+    sender_id = models.CharField(
+        max_length=11,
+        blank=True,
+        null=True,
+        help_text="اسم المرسل (Sender ID) - اختياري",
+    )
+    is_enabled = models.BooleanField(
+        default=False,
+        help_text="الربط مفعل",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'twilio_settings'
+        verbose_name = 'Twilio SMS Settings'
+        verbose_name_plural = 'Twilio SMS Settings'
+
+    def __str__(self):
+        return f"{self.company.name} - Twilio SMS"
+
+    def get_auth_token(self):
+        if not self.auth_token:
+            return None
+        return decrypt_token(self.auth_token)
+
+    def set_auth_token(self, token):
+        if token:
+            self.auth_token = encrypt_token(token)
+        else:
+            self.auth_token = None
+
+
+class LeadSMSMessage(models.Model):
+    """
+    رسالة SMS مرسلة إلى عميل محتمل (Lead).
+    تُخزّن جميع الرسائل المرسلة عبر Twilio وتُعرض في تايملاين الليد.
+    """
+    DIRECTION_OUTBOUND = 'outbound'
+    DIRECTION_INBOUND = 'inbound'
+
+    client = models.ForeignKey(
+        'crm.Client',
+        on_delete=models.CASCADE,
+        related_name='sms_messages',
+        help_text="العميل المحتمل (الليد)",
+    )
+    phone_number = models.CharField(
+        max_length=20,
+        help_text="رقم الهاتف الذي أُرسلت إليه الرسالة",
+    )
+    body = models.TextField(
+        help_text="نص الرسالة",
+    )
+    direction = models.CharField(
+        max_length=10,
+        choices=[
+            (DIRECTION_OUTBOUND, 'Outbound'),
+            (DIRECTION_INBOUND, 'Inbound'),
+        ],
+        default=DIRECTION_OUTBOUND,
+    )
+    twilio_sid = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="معرف الرسالة من Twilio",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sent_sms_messages',
+        help_text="المستخدم الذي أرسل الرسالة",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'lead_sms_messages'
+        verbose_name = 'Lead SMS Message'
+        verbose_name_plural = 'Lead SMS Messages'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"SMS to {self.phone_number} @ {self.created_at}"
+

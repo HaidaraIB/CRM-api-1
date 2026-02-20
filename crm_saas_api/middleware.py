@@ -42,6 +42,7 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         '/api/payments/stripe-return/',
         '/api/payments/qicard-return/',
         '/api/payments/qicard-webhook/',
+        '/api/payments/fib-callback/',
         # OAuth callbacks: called by external platforms (Facebook, WhatsApp, etc.)
         # and cannot send X-API-Key header
         '/api/integrations/accounts/oauth/callback/',

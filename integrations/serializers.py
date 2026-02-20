@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, TwilioSettings, LeadSMSMessage
 
 
 class IntegrationAccountSerializer(serializers.ModelSerializer):
@@ -133,4 +133,74 @@ class OAuthCallbackSerializer(serializers.Serializer):
     state = serializers.CharField(required=False)
     error = serializers.CharField(required=False)
     error_description = serializers.CharField(required=False)
+
+
+# --------------- Twilio SMS ---------------
+
+class TwilioSettingsSerializer(serializers.ModelSerializer):
+    """إعدادات Twilio لعرض/تحديث. Auth Token لا يُعاد في الاستجابة؛ عند التحديث إذا وُجد auth_token يُحفظ مشفراً."""
+    auth_token_masked = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = TwilioSettings
+        fields = [
+            'id',
+            'account_sid',
+            'twilio_number',
+            'auth_token',
+            'auth_token_masked',
+            'sender_id',
+            'is_enabled',
+            'created_at',
+            'updated_at',
+        ]
+        extra_kwargs = {
+            'auth_token': {'write_only': True, 'required': False},
+        }
+
+    def get_auth_token_masked(self, obj):
+        if obj.auth_token:
+            return '••••••••••••••••••••••••••••••••••••••••'
+        return None
+
+    def update(self, instance, validated_data):
+        auth = validated_data.pop('auth_token', None)
+        if auth is not None:
+            instance.set_auth_token(auth)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+class LeadSMSMessageSerializer(serializers.ModelSerializer):
+    """رسالة SMS للعميل المحتمل (للتايملاين والاستجابة)."""
+    created_by_username = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = LeadSMSMessage
+        fields = [
+            'id',
+            'client',
+            'phone_number',
+            'body',
+            'direction',
+            'twilio_sid',
+            'created_by',
+            'created_by_username',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'direction', 'twilio_sid']
+
+    def get_created_by_username(self, obj):
+        if obj.created_by_id is None:
+            return ''
+        return getattr(obj.created_by, 'username', None) or ''
+
+
+class SendLeadSMSSerializer(serializers.Serializer):
+    """إرسال SMS إلى رقم مرتبط بالليد."""
+    lead_id = serializers.IntegerField(help_text='معرف العميل المحتمل (الليد)')
+    phone_number = serializers.CharField(max_length=20, help_text='رقم الهاتف المستلم')
+    body = serializers.CharField(allow_blank=False, help_text='نص الرسالة')
 

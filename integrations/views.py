@@ -11,7 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from accounts.permissions import HasActiveSubscription
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount, TwilioSettings, LeadSMSMessage
 from .serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -19,15 +19,46 @@ from .serializers import (
     IntegrationAccountDetailSerializer,
     IntegrationLogSerializer,
     OAuthCallbackSerializer,
+    TwilioSettingsSerializer,
+    LeadSMSMessageSerializer,
+    SendLeadSMSSerializer,
 )
 from .oauth_utils import get_oauth_handler, MetaOAuth
 from .decorators import rate_limit_webhook
 import json
+import re
 import hmac
 import hashlib
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Strip ANSI escape sequences for clean user-facing error messages
+def _strip_ansi(text):
+    if not text or not isinstance(text, str):
+        return text or ""
+    return re.sub(r'\x1b\[[0-9;]*m', '', text).strip()
+
+
+# Map Twilio error codes and message substrings to frontend error_key (for localization)
+def _twilio_error_to_key(e):
+    code = getattr(e, 'code', None)
+    msg = (getattr(e, 'msg', None) or str(e)).lower()
+    if code == 21606 or code == 21608 or ("from" in msg and "not a valid" in msg):
+        return 'sms_error_invalid_from_number'
+    if code == 21211 or "invalid" in msg and ("to" in msg or "recipient" in msg):
+        return 'sms_error_invalid_to_number'
+    if code == 20003 or "authentic" in msg or "credentials" in msg or "unauthorized" in msg:
+        return 'sms_error_auth'
+    if code == 20429 or "too many" in msg or "rate" in msg:
+        return 'sms_error_rate_limit'
+    if code == 21614 or "not a valid mobile" in msg:
+        return 'sms_error_invalid_mobile'
+    if code == 21408 or "permission" in msg or "unverified" in msg:
+        return 'sms_error_permission'
+    if "blacklisted" in msg or "blocked" in msg:
+        return 'sms_error_blocked'
+    return 'sms_error_twilio_rejected'
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1099,4 +1130,150 @@ def meta_webhook(request):
         except Exception as e:
             logger.error(f"Error processing Meta webhook: {str(e)}", exc_info=True)
             return HttpResponse('Internal Server Error', status=500)
+
+
+# --------------- Twilio SMS (نقبل Twilio فقط لخدمة SMS) ---------------
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def twilio_settings_view(request):
+    """
+    GET: إرجاع إعدادات Twilio للشركة (إن وُجدت).
+    PUT: إنشاء أو تحديث إعدادات Twilio. نستخدم Twilio حصرياً لإرسال SMS.
+    """
+    company = request.user.company
+    if request.method == 'GET':
+        try:
+            twilio_settings = TwilioSettings.objects.get(company=company)
+        except TwilioSettings.DoesNotExist:
+            return Response({
+                'account_sid': '',
+                'twilio_number': '',
+                'auth_token_masked': None,
+                'sender_id': '',
+                'is_enabled': False,
+            })
+        serializer = TwilioSettingsSerializer(twilio_settings)
+        return Response(serializer.data)
+
+    if request.method == 'PUT':
+        twilio_settings, _ = TwilioSettings.objects.get_or_create(
+            company=company,
+            defaults={'is_enabled': False},
+        )
+        serializer = TwilioSettingsSerializer(twilio_settings, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save()
+        return Response(TwilioSettingsSerializer(twilio_settings).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def send_lead_sms_view(request):
+    """
+    إرسال رسالة SMS إلى رقم مرتبط بالليد عبر Twilio.
+    يتم حفظ الرسالة في قاعدة البيانات وعرضها في تايملاين الليد.
+    """
+    from crm.models import Client
+    serializer = SendLeadSMSSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {'error_key': 'sms_error_validation', 'error': 'Invalid request. Check the message and phone number.', 'details': serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    data = serializer.validated_data
+    lead_id = data['lead_id']
+    phone_number = data['phone_number']
+    body = data['body']
+
+    company = request.user.company
+    try:
+        client = Client.objects.get(id=lead_id, company=company)
+    except Client.DoesNotExist:
+        return Response(
+            {'error_key': 'sms_error_lead_not_found', 'error': 'Lead not found or access denied.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        twilio_settings = TwilioSettings.objects.get(company=company, is_enabled=True)
+    except TwilioSettings.DoesNotExist:
+        return Response(
+            {'error_key': 'sms_error_not_configured', 'error': 'SMS is not configured or not enabled. Set it up in Integrations.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    account_sid = twilio_settings.account_sid
+    auth_token = twilio_settings.get_auth_token()
+    from_number = twilio_settings.twilio_number
+    if not account_sid or not auth_token or not from_number:
+        return Response(
+            {'error_key': 'sms_error_credentials_incomplete', 'error': 'Account SID, Auth Token, and sender number are required.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from twilio.rest import Client as TwilioClient
+        from twilio.base.exceptions import TwilioRestException
+        twilio_client = TwilioClient(account_sid, auth_token)
+        # Normalize phone: ensure E.164 (e.g. +963...)
+        to = phone_number.strip()
+        if not to.startswith('+'):
+            to = '+' + to.replace(' ', '').replace('-', '')
+        message = twilio_client.messages.create(
+            body=body,
+            from_=from_number,
+            to=to,
+        )
+        twilio_sid = message.sid
+    except TwilioRestException as e:
+        logger.warning("Twilio API error (code=%s): %s", getattr(e, 'code', None), getattr(e, 'msg', str(e)))
+        error_key = _twilio_error_to_key(e)
+        clean_msg = _strip_ansi(getattr(e, 'msg', None) or str(e))
+        if clean_msg and len(clean_msg) > 400:
+            clean_msg = clean_msg.split('\n')[0]
+        return Response(
+            {'error_key': error_key, 'error': clean_msg or 'SMS request was rejected. Please check your settings.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as e:
+        logger.exception("Twilio send SMS failed")
+        clean_msg = _strip_ansi(str(e))
+        if len(clean_msg) > 400:
+            clean_msg = clean_msg.split('\n')[0]
+        return Response(
+            {'error_key': 'sms_error_send_failed', 'error': clean_msg or 'Failed to send SMS. Please try again later.'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    sms_record = LeadSMSMessage.objects.create(
+        client=client,
+        phone_number=phone_number,
+        body=body,
+        direction=LeadSMSMessage.DIRECTION_OUTBOUND,
+        twilio_sid=twilio_sid,
+        created_by=request.user,
+    )
+    return Response(
+        LeadSMSMessageSerializer(sms_record).data,
+        status=status.HTTP_201_CREATED,
+    )
+
+
+class LeadSMSMessageViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    قائمة رسائل SMS للعميل المحتمل. للعرض في التايملاين.
+    GET /api/integrations/sms/?client=:client_id
+    """
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
+    serializer_class = LeadSMSMessageSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = LeadSMSMessage.objects.filter(client__company=user.company).order_by('-created_at')
+        client_id = self.request.query_params.get('client')
+        if client_id:
+            qs = qs.filter(client_id=client_id)
+        return qs
 
