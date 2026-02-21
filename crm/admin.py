@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber, ClientEvent, ClientCall
 
 
 class ClientPhoneNumberInline(admin.TabularInline):
@@ -299,3 +299,63 @@ class ClientTaskAdmin(admin.ModelAdmin):
         ),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
+
+
+@admin.register(ClientEvent)
+class ClientEventAdmin(admin.ModelAdmin):
+    """Admin configuration for ClientEvent model"""
+
+    list_display = [
+        "id",
+        "client",
+        "event_type",
+        "old_value",
+        "new_value",
+        "created_by",
+        "created_at",
+    ]
+    list_filter = ["event_type", "created_at", "created_by"]
+    search_fields = ["client__name", "event_type", "notes"]
+    ordering = ["-created_at"]
+    readonly_fields = ["created_at"]
+    raw_id_fields = ["client", "created_by"]
+
+
+@admin.register(ClientCall)
+class ClientCallAdmin(admin.ModelAdmin):
+    """Admin configuration for ClientCall model"""
+
+    list_display = [
+        "id",
+        "client",
+        "call_method",
+        "call_datetime",
+        "follow_up_date",
+        "created_by",
+        "created_at",
+    ]
+    list_filter = ["call_method", "created_at", "created_by"]
+    search_fields = ["client__name", "notes"]
+    ordering = ["-created_at"]
+    readonly_fields = ["created_at", "updated_at"]
+    raw_id_fields = ["client", "call_method", "created_by"]
+
+
+@admin.register(Campaign)
+class CampaignAdmin(admin.ModelAdmin):
+    """Admin configuration for Campaign model"""
+
+    list_display = [
+        "id",
+        "code",
+        "name",
+        "budget",
+        "is_active",
+        "company",
+        "created_at",
+        "updated_at",
+    ]
+    list_filter = ["is_active", "company", "created_at"]
+    search_fields = ["code", "name", "company__name"]
+    ordering = ["-created_at"]
+    readonly_fields = ["created_at", "updated_at"]

@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount
+from .models import (
+    IntegrationAccount,
+    IntegrationLog,
+    WhatsAppAccount,
+    TwilioSettings,
+    LeadSMSMessage,
+    MessageTemplate,
+)
 
 
 @admin.register(IntegrationAccount)
@@ -80,4 +87,54 @@ class IntegrationLogAdmin(admin.ModelAdmin):
     search_fields = ['account__name', 'message']
     readonly_fields = ['created_at']
     date_hierarchy = 'created_at'
+
+
+@admin.register(TwilioSettings)
+class TwilioSettingsAdmin(admin.ModelAdmin):
+    list_display = [
+        'id',
+        'company',
+        'twilio_number',
+        'is_enabled',
+        'created_at',
+        'updated_at',
+    ]
+    list_filter = ['is_enabled', 'created_at']
+    search_fields = ['company__name', 'account_sid', 'twilio_number']
+    readonly_fields = ['created_at', 'updated_at']
+    raw_id_fields = ['company']
+
+
+@admin.register(LeadSMSMessage)
+class LeadSMSMessageAdmin(admin.ModelAdmin):
+    list_display = [
+        'id',
+        'client',
+        'phone_number',
+        'direction',
+        'created_by',
+        'created_at',
+    ]
+    list_filter = ['direction', 'created_at']
+    search_fields = ['client__name', 'phone_number', 'body']
+    readonly_fields = ['created_at']
+    raw_id_fields = ['client', 'created_by']
+    date_hierarchy = 'created_at'
+
+
+@admin.register(MessageTemplate)
+class MessageTemplateAdmin(admin.ModelAdmin):
+    list_display = [
+        'id',
+        'company',
+        'name',
+        'channel_type',
+        'category',
+        'created_at',
+        'updated_at',
+    ]
+    list_filter = ['channel_type', 'category', 'created_at']
+    search_fields = ['company__name', 'name', 'content']
+    readonly_fields = ['created_at', 'updated_at']
+    raw_id_fields = ['company']
 

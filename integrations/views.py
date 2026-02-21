@@ -11,7 +11,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from accounts.permissions import HasActiveSubscription
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount, TwilioSettings, LeadSMSMessage
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount, TwilioSettings, LeadSMSMessage, MessageTemplate
 from .serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -22,6 +22,7 @@ from .serializers import (
     TwilioSettingsSerializer,
     LeadSMSMessageSerializer,
     SendLeadSMSSerializer,
+    MessageTemplateSerializer,
 )
 from .oauth_utils import get_oauth_handler, MetaOAuth
 from .decorators import rate_limit_webhook
@@ -50,6 +51,8 @@ def _twilio_error_to_key(e):
         return 'sms_error_invalid_to_number'
     if code == 20003 or "authentic" in msg or "credentials" in msg or "unauthorized" in msg:
         return 'sms_error_auth'
+    if code == 90010 or "inactive" in msg:
+        return 'sms_error_account_inactive'
     if code == 20429 or "too many" in msg or "rate" in msg:
         return 'sms_error_rate_limit'
     if code == 21614 or "not a valid mobile" in msg:
@@ -1206,10 +1209,13 @@ def send_lead_sms_view(request):
 
     account_sid = twilio_settings.account_sid
     auth_token = twilio_settings.get_auth_token()
-    from_number = twilio_settings.twilio_number
-    if not account_sid or not auth_token or not from_number:
+    twilio_number = twilio_settings.twilio_number
+    sender_id = (twilio_settings.sender_id or '').strip()
+    # Prefer Sender ID (alphanumeric) when set; otherwise use Twilio number
+    from_value = sender_id if sender_id else (twilio_number or '')
+    if not account_sid or not auth_token or not from_value:
         return Response(
-            {'error_key': 'sms_error_credentials_incomplete', 'error': 'Account SID, Auth Token, and sender number are required.'},
+            {'error_key': 'sms_error_credentials_incomplete', 'error': 'Account SID, Auth Token, and either Sender ID or sender number are required.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1217,13 +1223,15 @@ def send_lead_sms_view(request):
         from twilio.rest import Client as TwilioClient
         from twilio.base.exceptions import TwilioRestException
         twilio_client = TwilioClient(account_sid, auth_token)
-        # Normalize phone: ensure E.164 (e.g. +963...)
-        to = phone_number.strip()
-        if not to.startswith('+'):
-            to = '+' + to.replace(' ', '').replace('-', '')
+        # Normalize phone to E.164 (same as Digital Marketing Manager: 07... -> +964..., then ensure +)
+        to = phone_number.strip().replace(' ', '').replace('-', '')
+        if to.startswith('07') and len(to) >= 10:
+            to = '+964' + to[1:]
+        elif not to.startswith('+'):
+            to = '+' + to
         message = twilio_client.messages.create(
             body=body,
-            from_=from_number,
+            from_=from_value,
             to=to,
         )
         twilio_sid = message.sid
@@ -1276,4 +1284,19 @@ class LeadSMSMessageViewSet(viewsets.ReadOnlyModelViewSet):
         if client_id:
             qs = qs.filter(client_id=client_id)
         return qs
+
+
+class MessageTemplateViewSet(viewsets.ModelViewSet):
+    """
+    قوالب الرسائل لمركز المراسلات (واتساب و SMS).
+    CRUD: GET/POST /api/integrations/templates/ , GET/PUT/PATCH/DELETE /api/integrations/templates/:id/
+    """
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
+    serializer_class = MessageTemplateSerializer
+
+    def get_queryset(self):
+        return MessageTemplate.objects.filter(company=self.request.user.company).order_by('-updated_at')
+
+    def perform_create(self, serializer):
+        serializer.save(company=self.request.user.company)
 

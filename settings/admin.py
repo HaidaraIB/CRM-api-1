@@ -1,5 +1,14 @@
 from django.contrib import admin
-from .models import Channel, LeadStage, LeadStatus, SMTPSettings, SystemBackup, SystemAuditLog
+from .models import (
+    Channel,
+    LeadStage,
+    LeadStatus,
+    SMTPSettings,
+    SystemBackup,
+    SystemAuditLog,
+    CallMethod,
+    SystemSettings,
+)
 
 
 @admin.register(Channel)
@@ -64,5 +73,20 @@ class SystemAuditLogAdmin(admin.ModelAdmin):
     list_filter = ['action', 'created_at']
     search_fields = ['action', 'message', 'metadata']
     readonly_fields = ['action', 'message', 'metadata', 'actor', 'ip_address', 'created_at']
+
+
+@admin.register(CallMethod)
+class CallMethodAdmin(admin.ModelAdmin):
+    list_display = ['name', 'color', 'company', 'is_active', 'created_at', 'updated_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['name', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(SystemSettings)
+class SystemSettingsAdmin(admin.ModelAdmin):
+    list_display = ['id', 'usd_to_iqd_rate', 'backup_schedule', 'updated_at']
+    list_filter = ['backup_schedule']
+    readonly_fields = ['created_at', 'updated_at']
 
 

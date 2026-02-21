@@ -426,3 +426,64 @@ class LeadSMSMessage(models.Model):
     def __str__(self):
         return f"SMS to {self.phone_number} @ {self.created_at}"
 
+
+class MessageTemplate(models.Model):
+    """
+    قوالب رسائل للمراسلات (واتساب و SMS).
+    تُستخدم في مركز المراسلات لرسائل سريعة وقابلة للتخصيص بمتغيرات.
+    """
+    CHANNEL_WHATSAPP_API = 'whatsapp_api'
+    CHANNEL_SMS = 'sms'
+    CHANNEL_CHOICES = [
+        (CHANNEL_WHATSAPP_API, 'WhatsApp API'),
+        (CHANNEL_SMS, 'SMS'),
+    ]
+    CATEGORY_AUTH = 'auth'
+    CATEGORY_MARKETING = 'marketing'
+    CATEGORY_UTILITY = 'utility'
+    CATEGORY_CHOICES = [
+        (CATEGORY_AUTH, 'Auth'),
+        (CATEGORY_MARKETING, 'Marketing'),
+        (CATEGORY_UTILITY, 'Utility'),
+    ]
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='message_templates',
+        help_text="الشركة المالكة للقالب",
+    )
+    name = models.CharField(
+        max_length=255,
+        help_text="اسم القالب (مثل: تذكير بالفاتورة)",
+    )
+    channel_type = models.CharField(
+        max_length=20,
+        choices=CHANNEL_CHOICES,
+        default=CHANNEL_WHATSAPP_API,
+        help_text="نوع القناة (WhatsApp API أو SMS)",
+    )
+    content = models.TextField(
+        help_text="محتوى الرسالة مع متغيرات مثل [اسم_العميل] أو [رقم_الفاتورة]",
+    )
+    category = models.CharField(
+        max_length=20,
+        choices=CATEGORY_CHOICES,
+        default=CATEGORY_UTILITY,
+        help_text="فئة القالب (Auth, Marketing, Utility)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'message_templates'
+        verbose_name = 'Message Template'
+        verbose_name_plural = 'Message Templates'
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['company']),
+        ]
+
+    def __str__(self):
+        return f"{self.company.name} - {self.name}"
+

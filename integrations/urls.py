@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     IntegrationAccountViewSet,
     IntegrationLogViewSet,
+    MessageTemplateViewSet,
     meta_webhook,
     tiktok_leadgen_webhook,
     whatsapp_send_message,
@@ -16,6 +17,7 @@ router = DefaultRouter()
 router.register(r'accounts', IntegrationAccountViewSet, basename='integration-account')
 router.register(r'logs', IntegrationLogViewSet, basename='integration-log')
 router.register(r'sms', LeadSMSMessageViewSet, basename='lead-sms-message')
+router.register(r'templates', MessageTemplateViewSet, basename='message-template')
 
 urlpatterns = [
     path('', include(router.urls)),

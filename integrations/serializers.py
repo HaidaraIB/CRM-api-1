@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, TwilioSettings, LeadSMSMessage
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, TwilioSettings, LeadSMSMessage, MessageTemplate
 
 
 class IntegrationAccountSerializer(serializers.ModelSerializer):
@@ -203,4 +203,27 @@ class SendLeadSMSSerializer(serializers.Serializer):
     lead_id = serializers.IntegerField(help_text='معرف العميل المحتمل (الليد)')
     phone_number = serializers.CharField(max_length=20, help_text='رقم الهاتف المستلم')
     body = serializers.CharField(allow_blank=False, help_text='نص الرسالة')
+
+
+# --------------- Message Templates (WhatsApp / SMS) ---------------
+
+class MessageTemplateSerializer(serializers.ModelSerializer):
+    """قوالب الرسائل لمركز المراسلات."""
+    channel_type_display = serializers.CharField(source='get_channel_type_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+
+    class Meta:
+        model = MessageTemplate
+        fields = [
+            'id',
+            'name',
+            'channel_type',
+            'channel_type_display',
+            'content',
+            'category',
+            'category_display',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 

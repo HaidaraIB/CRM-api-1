@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Role, EmailVerification, LimitedAdmin
+from .models import User, Role, EmailVerification, LimitedAdmin, PasswordReset, TwoFactorAuth
 from companies.models import Company
 
 
@@ -96,6 +96,22 @@ class EmailVerificationAdmin(admin.ModelAdmin):
     list_display = ["user", "code", "token", "is_verified", "expires_at", "created_at"]
     search_fields = ["user__email", "user__username", "code", "token"]
     list_filter = ["is_verified", "expires_at", "created_at"]
+
+
+@admin.register(PasswordReset)
+class PasswordResetAdmin(admin.ModelAdmin):
+    list_display = ["user", "code", "token", "is_used", "expires_at", "used_at", "created_at"]
+    search_fields = ["user__email", "user__username", "code", "token"]
+    list_filter = ["is_used", "expires_at", "created_at"]
+    readonly_fields = ["created_at", "used_at"]
+
+
+@admin.register(TwoFactorAuth)
+class TwoFactorAuthAdmin(admin.ModelAdmin):
+    list_display = ["user", "code", "token", "is_verified", "expires_at", "verified_at", "created_at"]
+    search_fields = ["user__email", "user__username", "code", "token"]
+    list_filter = ["is_verified", "expires_at", "created_at"]
+    readonly_fields = ["created_at", "verified_at"]
 
 
 @admin.register(LimitedAdmin)
