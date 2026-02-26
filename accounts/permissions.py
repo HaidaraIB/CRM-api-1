@@ -64,24 +64,77 @@ class IsAdmin(permissions.BasePermission):
         )
 
 
+class CanManageSupervisors(permissions.BasePermission):
+    """Only company admin can manage supervisors (grant/revoke permissions)."""
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.is_admin()
+            and request.user.company is not None
+        )
+
+
 class IsAdminOrReadOnlyForEmployee(permissions.BasePermission):
     """
     Permission class that allows:
     - Admin: All operations (GET, POST, PUT, DELETE)
     - Employee: Only GET (read-only) operations
+    - Supervisor: only if subclass sets supervisor_permission_name and they have it
+    """
+    supervisor_permission_name = None  # e.g. 'manage_settings'; if set, supervisor with that permission gets full access
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        # Admin can do everything
+        if request.user.is_admin():
+            return True
+
+        # Supervisor with the required permission can do everything
+        perm = getattr(self, 'supervisor_permission_name', None)
+        if perm and request.user.supervisor_has_permission(perm):
+            return True
+
+        # Employee can only do GET requests
+        if request.user.is_employee():
+            return request.method in permissions.SAFE_METHODS
+
+        return False
+
+
+class IsAdminOrSupervisorLeadsOrReadOnlyForEmployee(IsAdminOrReadOnlyForEmployee):
+    """Admin or supervisor with can_manage_leads: full access; employee: read-only."""
+    supervisor_permission_name = "manage_leads"
+
+
+class IsAdminOrSupervisorSettingsOrReadOnlyForEmployee(IsAdminOrReadOnlyForEmployee):
+    """Admin or supervisor with can_manage_settings: full access; employee: read-only."""
+    supervisor_permission_name = "manage_settings"
+
+
+class IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee(permissions.BasePermission):
+    """
+    Logical permission for lead-related settings (channels, stages, statuses, call-methods).
+    - Admin: full access.
+    - Supervisor with can_manage_settings: full access.
+    - Supervisor with can_manage_leads only: read (GET) so Leads/Activities pages can load.
+    - Employee: read-only.
     """
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        
-        # Admin can do everything
         if request.user.is_admin():
             return True
-        
-        # Employee can only do GET requests
+        if request.user.is_supervisor():
+            if request.user.supervisor_has_permission("manage_settings"):
+                return True
+            if request.user.supervisor_has_permission("manage_leads") and request.method in permissions.SAFE_METHODS:
+                return True
+            return False
         if request.user.is_employee():
             return request.method in permissions.SAFE_METHODS
-        
         return False
 
 
@@ -130,6 +183,10 @@ class CanAccessClient(permissions.BasePermission):
         if request.user.is_admin():
             return obj.company == request.user.company
 
+        # Supervisor with Leads permission can access (Activities/Leads section uses client-tasks)
+        if request.user.supervisor_has_permission("manage_leads"):
+            return getattr(obj, "company", None) == request.user.company
+
         return False
 
 
@@ -144,6 +201,9 @@ class CanAccessDeal(permissions.BasePermission):
             return False
 
         if request.user.is_admin():
+            return obj.company == request.user.company
+
+        if request.user.supervisor_has_permission("manage_deals"):
             return obj.company == request.user.company
 
         return False
@@ -162,6 +222,9 @@ class CanAccessTask(permissions.BasePermission):
         if request.user.is_admin():
             return obj.deal.company == request.user.company
 
+        if request.user.supervisor_has_permission("manage_tasks"):
+            return obj.deal.company == request.user.company
+
         return False
 
 
@@ -177,73 +240,62 @@ class CanAccessCompanyData(permissions.BasePermission):
     """
     Generic permission class for objects that have a company field.
     Super Admin can access all, Admin can access their company's data.
+    Subclasses can set supervisor_permission_name to allow supervisors with that permission.
     """
+
+    supervisor_permission_name = None  # e.g. 'manage_products'
 
     def has_permission(self, request, view):
         return request.user and request.user.is_authenticated
 
     def has_object_permission(self, request, view, obj):
-        return request.user and request.user.can_access_company_data(obj.company)
+        if not request.user:
+            return False
+        if request.user.can_access_company_data(obj.company):
+            return True
+        if self.supervisor_permission_name and request.user.supervisor_has_permission(self.supervisor_permission_name):
+            return obj.company == request.user.company
+        return False
 
 
 class CanAccessDeveloper(CanAccessCompanyData):
-    """Permission for Developer objects"""
-
-    pass
+    supervisor_permission_name = "manage_real_estate"
 
 
 class CanAccessProject(CanAccessCompanyData):
-    """Permission for Project objects"""
-
-    pass
+    supervisor_permission_name = "manage_real_estate"
 
 
 class CanAccessUnit(CanAccessCompanyData):
-    """Permission for Unit objects"""
-
-    pass
+    supervisor_permission_name = "manage_real_estate"
 
 
 class CanAccessOwner(CanAccessCompanyData):
-    """Permission for Owner objects"""
-
-    pass
+    supervisor_permission_name = "manage_real_estate"
 
 
 class CanAccessProductCategory(CanAccessCompanyData):
-    """Permission for ProductCategory objects"""
-
-    pass
+    supervisor_permission_name = "manage_products"
 
 
 class CanAccessProduct(CanAccessCompanyData):
-    """Permission for Product objects"""
-
-    pass
+    supervisor_permission_name = "manage_products"
 
 
 class CanAccessSupplier(CanAccessCompanyData):
-    """Permission for Supplier objects"""
-
-    pass
+    supervisor_permission_name = "manage_products"
 
 
 class CanAccessServiceProvider(CanAccessCompanyData):
-    """Permission for ServiceProvider objects"""
-
-    pass
+    supervisor_permission_name = "manage_services"
 
 
 class CanAccessService(CanAccessCompanyData):
-    """Permission for Service objects"""
-
-    pass
+    supervisor_permission_name = "manage_services"
 
 
 class CanAccessServicePackage(CanAccessCompanyData):
-    """Permission for ServicePackage objects"""
-
-    pass
+    supervisor_permission_name = "manage_services"
 
 
 # Limited Admin Permissions for Super Admin Panel

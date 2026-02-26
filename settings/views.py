@@ -9,6 +9,8 @@ from django.db import models
 from accounts.permissions import (
     HasActiveSubscription,
     IsAdminOrReadOnlyForEmployee,
+    IsAdminOrSupervisorSettingsOrReadOnlyForEmployee,
+    IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee,
     CanManageSettings,
 )
 from .models import (
@@ -41,12 +43,11 @@ from .services import create_database_backup, restore_database_backup, delete_ba
 class ChannelViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Channel instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage channels, but employees can read (GET) them
+    Admin/supervisor with can_manage_settings: full access; supervisor with can_manage_leads: read-only (for Activities); employees: read-only.
     """
 
     queryset = Channel.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "type", "priority"]
     ordering_fields = ["created_at", "name", "priority"]
@@ -70,13 +71,11 @@ class ChannelViewSet(viewsets.ModelViewSet):
 
 class LeadStageViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing LeadStage instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage lead stages, but employees can read (GET) them
+    Admin/supervisor with can_manage_settings: full access; supervisor with can_manage_leads: read-only (for Activities); employees: read-only.
     """
 
     queryset = LeadStage.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["order", "name", "created_at"]
@@ -104,13 +103,11 @@ class LeadStageViewSet(viewsets.ModelViewSet):
 
 class LeadStatusViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing LeadStatus instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage lead statuses, but employees can read (GET) them
+    Admin/supervisor with can_manage_settings: full access; supervisor with can_manage_leads: read-only (for Activities); employees: read-only.
     """
 
     queryset = LeadStatus.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description", "category"]
     ordering_fields = ["is_default", "name", "created_at"]
@@ -143,13 +140,11 @@ class LeadStatusViewSet(viewsets.ModelViewSet):
 
 class CallMethodViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing CallMethod instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage call methods, but employees can read (GET) them
+    Admin/supervisor with can_manage_settings: full access; supervisor with can_manage_leads: read-only (for Activities); employees: read-only.
     """
 
     queryset = CallMethod.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at"]

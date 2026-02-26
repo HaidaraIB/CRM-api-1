@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Role, EmailVerification, LimitedAdmin, PasswordReset, TwoFactorAuth
+from .models import User, Role, EmailVerification, LimitedAdmin, SupervisorPermission, PasswordReset, TwoFactorAuth
 from companies.models import Company
 
 
@@ -156,4 +156,38 @@ class LimitedAdminAdmin(admin.ModelAdmin):
         }),
     )
     
+    readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(SupervisorPermission)
+class SupervisorPermissionAdmin(admin.ModelAdmin):
+    list_display = [
+        "user",
+        "is_active",
+        "can_manage_leads",
+        "can_manage_deals",
+        "can_manage_tasks",
+        "can_manage_users",
+        "created_at",
+    ]
+    list_filter = ["is_active", "can_manage_leads", "can_manage_deals", "can_manage_users", "created_at"]
+    search_fields = ["user__username", "user__email", "user__first_name", "user__last_name"]
+    ordering = ["-created_at"]
+    fieldsets = (
+        ("User", {"fields": ("user",)}),
+        ("Status", {"fields": ("is_active",)}),
+        ("Permissions", {
+            "fields": (
+                "can_manage_leads",
+                "can_manage_deals",
+                "can_manage_tasks",
+                "can_view_reports",
+                "can_manage_users",
+                "can_manage_products",
+                "can_manage_services",
+                "can_manage_real_estate",
+                "can_manage_settings",
+            )
+        }),
+    )
     readonly_fields = ["created_at", "updated_at"]

@@ -6,7 +6,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from .models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin
+from .models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin, SupervisorPermission
 from .serializers import (
     UserSerializer,
     UserListSerializer,
@@ -21,8 +21,10 @@ from .serializers import (
     VerifyTwoFactorAuthSerializer,
     LimitedAdminSerializer,
     CreateLimitedAdminSerializer,
+    SupervisorSerializer,
+    CreateSupervisorSerializer,
 )
-from .permissions import CanAccessUser, CanManageLimitedAdmins, HasActiveSubscription, IsSuperAdmin
+from .permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
 from companies.models import Company
 from django.conf import settings
 from .utils import (
@@ -69,6 +71,13 @@ class UserViewSet(viewsets.ModelViewSet):
         if user.is_admin() and user.company:
             return queryset.filter(company=user.company)
 
+        # Supervisor with can_manage_users: full company users; can_manage_leads: list only (for Activities filter)
+        if user.is_supervisor() and user.company:
+            if user.supervisor_has_permission("manage_users"):
+                return queryset.filter(company=user.company)
+            if user.supervisor_has_permission("manage_leads"):
+                return queryset.filter(company=user.company)
+
         # Employee can only access their own profile
         return queryset.filter(id=user.id)
 
@@ -101,6 +110,10 @@ class UserViewSet(viewsets.ModelViewSet):
                 # هنا سنستبدله إذا كان المستخدم الجديد admin
                 user.company.owner = user
                 user.company.save(update_fields=["owner"])
+        # When creating a supervisor, ensure they have a SupervisorPermission record (admin can then edit in Supervisors tab)
+        if user.role == Role.SUPERVISOR.value:
+            if not SupervisorPermission.objects.filter(user=user).exists():
+                SupervisorPermission.objects.create(user=user, is_active=True)
 
     def perform_update(self, serializer):
         """Update user and handle company owner changes"""
@@ -135,6 +148,8 @@ class UserViewSet(viewsets.ModelViewSet):
             # إذا لم يعد المستخدم admin أو تمت إزالة company، إزالة owner من company
             old_company.owner = None
             old_company.save(update_fields=["owner"])
+        if new_role == Role.SUPERVISOR.value and not SupervisorPermission.objects.filter(user=user).exists():
+            SupervisorPermission.objects.create(user=user, is_active=True)
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -1046,4 +1061,50 @@ class LimitedAdminViewSet(viewsets.ModelViewSet):
         limited_admin.save(update_fields=['is_active'])
         
         serializer = self.get_serializer(limited_admin)
+        return Response(serializer.data)
+
+
+class SupervisorViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing supervisors (company-scoped).
+    Only company admin can list/create/update/delete/toggle supervisors in their company.
+    """
+    serializer_class = SupervisorSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanManageSupervisors]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['user__username', 'user__email', 'user__first_name', 'user__last_name']
+    ordering_fields = ['created_at', 'updated_at', 'user__username']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.company:
+            return SupervisorPermission.objects.none()
+        return SupervisorPermission.objects.filter(user__company=user.company).select_related('user')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CreateSupervisorSerializer
+        return SupervisorSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        company = request.user.company
+        if not company:
+            return Response(
+                {"error": "You must belong to a company to create supervisors."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer.save(company=company)
+        output_serializer = SupervisorSerializer(serializer.instance)
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=True, methods=['post'])
+    def toggle_active(self, request, pk=None):
+        sp = self.get_object()
+        sp.is_active = not sp.is_active
+        sp.save(update_fields=['is_active'])
+        serializer = self.get_serializer(sp)
         return Response(serializer.data)

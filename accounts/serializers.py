@@ -3,9 +3,37 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from drf_spectacular.utils import extend_schema_field
-from .models import User, Role, TwoFactorAuth, LimitedAdmin
+from .models import User, Role, TwoFactorAuth, LimitedAdmin, SupervisorPermission
 from companies.models import Company
 from subscriptions.models import Plan, Subscription
+
+# Inventory permission keys; only one is allowed per company based on specialization
+INVENTORY_PERM_KEYS = ('can_manage_products', 'can_manage_services', 'can_manage_real_estate')
+
+
+def filter_inventory_permissions_for_company(perms_dict, company):
+    """
+    Ensure only the inventory permission matching the company's specialization is allowed.
+    real_estate -> can_manage_real_estate only; products -> can_manage_products only; services -> can_manage_services only.
+    """
+    if not company or not getattr(company, 'specialization', None):
+        for k in INVENTORY_PERM_KEYS:
+            perms_dict[k] = False
+        return perms_dict
+    spec = company.specialization
+    if spec == 'real_estate':
+        perms_dict['can_manage_products'] = False
+        perms_dict['can_manage_services'] = False
+    elif spec == 'products':
+        perms_dict['can_manage_real_estate'] = False
+        perms_dict['can_manage_services'] = False
+    elif spec == 'services':
+        perms_dict['can_manage_real_estate'] = False
+        perms_dict['can_manage_products'] = False
+    else:
+        for k in INVENTORY_PERM_KEYS:
+            perms_dict[k] = False
+    return perms_dict
 from datetime import timedelta
 from django.utils import timezone
 
@@ -24,6 +52,7 @@ class UserSerializer(serializers.ModelSerializer):
     )  # Allow writing company via company_id field
     password = serializers.CharField(write_only=True, required=False)
     limited_admin = serializers.SerializerMethodField()
+    supervisor_permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -51,6 +80,7 @@ class UserSerializer(serializers.ModelSerializer):
             "fcm_token",  # Include FCM token (read-only for security)
             "language",  # User preferred language
             "limited_admin",
+            "supervisor_permissions",
         ]
         read_only_fields = ["id", "date_joined", "last_login", "email_verified", "fcm_token"]
         extra_kwargs = {
@@ -153,6 +183,30 @@ class UserSerializer(serializers.ModelSerializer):
                 }
             }
         except LimitedAdmin.DoesNotExist:
+            return None
+
+    def get_supervisor_permissions(self, obj):
+        """Return supervisor permissions if user is a supervisor"""
+        if obj.role != Role.SUPERVISOR.value:
+            return None
+        try:
+            sp = SupervisorPermission.objects.get(user=obj)
+            return {
+                "id": sp.id,
+                "is_active": sp.is_active,
+                "permissions": {
+                    "can_manage_leads": sp.can_manage_leads,
+                    "can_manage_deals": sp.can_manage_deals,
+                    "can_manage_tasks": sp.can_manage_tasks,
+                    "can_view_reports": sp.can_view_reports,
+                    "can_manage_users": sp.can_manage_users,
+                    "can_manage_products": sp.can_manage_products,
+                    "can_manage_services": sp.can_manage_services,
+                    "can_manage_real_estate": sp.can_manage_real_estate,
+                    "can_manage_settings": sp.can_manage_settings,
+                },
+            }
+        except SupervisorPermission.DoesNotExist:
             return None
 
 
@@ -272,7 +326,31 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
                 }
             }
-        
+
+        # Add supervisor permissions if user is a supervisor
+        if self.user.role == Role.SUPERVISOR.value:
+            try:
+                sp = SupervisorPermission.objects.get(user=self.user)
+                user_data["supervisor_permissions"] = {
+                    "id": sp.id,
+                    "is_active": sp.is_active,
+                    "permissions": {
+                        "can_manage_leads": sp.can_manage_leads,
+                        "can_manage_deals": sp.can_manage_deals,
+                        "can_manage_tasks": sp.can_manage_tasks,
+                        "can_view_reports": sp.can_view_reports,
+                        "can_manage_users": sp.can_manage_users,
+                        "can_manage_products": sp.can_manage_products,
+                        "can_manage_services": sp.can_manage_services,
+                        "can_manage_real_estate": sp.can_manage_real_estate,
+                        "can_manage_settings": sp.can_manage_settings,
+                    },
+                }
+            except SupervisorPermission.DoesNotExist:
+                user_data["supervisor_permissions"] = None
+        else:
+            user_data["supervisor_permissions"] = None
+
         data["user"] = user_data
 
         return data
@@ -801,3 +879,120 @@ class CreateLimitedAdminSerializer(serializers.Serializer):
         )
         
         return limited_admin
+
+
+class SupervisorSerializer(serializers.ModelSerializer):
+    """Serializer for SupervisorPermission model (read/update)."""
+    user = serializers.SerializerMethodField(read_only=True)
+    user_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(role=Role.SUPERVISOR.value),
+        source='user',
+        write_only=True,
+        required=False
+    )
+
+    class Meta:
+        model = SupervisorPermission
+        fields = [
+            'id',
+            'user',
+            'user_id',
+            'is_active',
+            'created_at',
+            'updated_at',
+            'can_manage_leads',
+            'can_manage_deals',
+            'can_manage_tasks',
+            'can_view_reports',
+            'can_manage_users',
+            'can_manage_products',
+            'can_manage_services',
+            'can_manage_real_estate',
+            'can_manage_settings',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_user(self, obj):
+        if not obj.user:
+            return None
+        return {
+            'id': obj.user.id,
+            'username': obj.user.username,
+            'email': obj.user.email,
+            'first_name': obj.user.first_name,
+            'last_name': obj.user.last_name,
+        }
+
+    def update(self, instance, validated_data):
+        company = getattr(instance.user, 'company', None)
+        if company:
+            perms = {k: validated_data.get(k, getattr(instance, k, False)) for k in INVENTORY_PERM_KEYS}
+            filter_inventory_permissions_for_company(perms, company)
+            for k in INVENTORY_PERM_KEYS:
+                validated_data[k] = perms[k]
+        return super().update(instance, validated_data)
+
+
+class CreateSupervisorSerializer(serializers.Serializer):
+    """Create a new user with role=supervisor and SupervisorPermission (company-scoped)."""
+    username = serializers.CharField(required=True)
+    email = serializers.EmailField(required=True)
+    password = serializers.CharField(required=True, write_only=True)
+    first_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=True)
+    is_active = serializers.BooleanField(default=True)
+    can_manage_leads = serializers.BooleanField(default=False)
+    can_manage_deals = serializers.BooleanField(default=False)
+    can_manage_tasks = serializers.BooleanField(default=False)
+    can_view_reports = serializers.BooleanField(default=False)
+    can_manage_users = serializers.BooleanField(default=False)
+    can_manage_products = serializers.BooleanField(default=False)
+    can_manage_services = serializers.BooleanField(default=False)
+    can_manage_real_estate = serializers.BooleanField(default=False)
+    can_manage_settings = serializers.BooleanField(default=False)
+
+    def validate_username(self, value):
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("Username already exists.")
+        return value
+
+    def validate_email(self, value):
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("Email already exists.")
+        return value
+
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except ValidationError as e:
+            raise serializers.ValidationError(list(e.messages))
+        return value
+
+    def create(self, validated_data):
+        company = validated_data.pop('company')
+        password = validated_data.pop('password')
+        is_active = validated_data.pop('is_active', True)
+        perms = {
+            'can_manage_leads': validated_data.pop('can_manage_leads', False),
+            'can_manage_deals': validated_data.pop('can_manage_deals', False),
+            'can_manage_tasks': validated_data.pop('can_manage_tasks', False),
+            'can_view_reports': validated_data.pop('can_view_reports', False),
+            'can_manage_users': validated_data.pop('can_manage_users', False),
+            'can_manage_products': validated_data.pop('can_manage_products', False),
+            'can_manage_services': validated_data.pop('can_manage_services', False),
+            'can_manage_real_estate': validated_data.pop('can_manage_real_estate', False),
+            'can_manage_settings': validated_data.pop('can_manage_settings', False),
+        }
+        filter_inventory_permissions_for_company(perms, company)
+        user = User.objects.create_user(
+            password=password,
+            role=Role.SUPERVISOR.value,
+            company=company,
+            **validated_data
+        )
+        sp = SupervisorPermission.objects.create(
+            user=user,
+            is_active=is_active,
+            **perms
+        )
+        return sp

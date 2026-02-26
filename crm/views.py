@@ -2,7 +2,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee
+from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee, IsAdminOrSupervisorLeadsOrReadOnlyForEmployee
 from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientEvent
 from accounts.models import User
 from .serializers import (
@@ -40,6 +40,9 @@ class ClientViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
 
         if user.is_admin():
+            return queryset.filter(company=user.company)
+
+        if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
             return queryset.filter(company=user.company)
 
         if user.is_employee():
@@ -229,6 +232,9 @@ class DealViewSet(viewsets.ModelViewSet):
         if user.is_admin():
             return queryset.filter(company=user.company)
 
+        if user.is_supervisor() and user.supervisor_has_permission("manage_deals"):
+            return queryset.filter(company=user.company)
+
         if user.is_employee():
             return queryset.filter(employee=user)
 
@@ -260,6 +266,9 @@ class TaskViewSet(viewsets.ModelViewSet):
         if user.is_admin():
             return queryset.filter(deal__company=user.company)
 
+        if user.is_supervisor() and user.supervisor_has_permission("manage_tasks"):
+            return queryset.filter(deal__company=user.company)
+
         if user.is_employee():
             return queryset.filter(deal__employee=user)
 
@@ -275,11 +284,11 @@ class CampaignViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Campaign instances.
     Provides CRUD operations: Create, Read, Update, Delete
-    Only Admin can manage campaigns, but employees can read (GET) them
+    Admin and supervisor (with can_manage_leads) can manage; employees can read (GET) only.
     """
 
     queryset = Campaign.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorLeadsOrReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "code"]
     ordering_fields = ["created_at", "name", "budget"]
@@ -290,6 +299,9 @@ class CampaignViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
 
         if user.is_admin():
+            return queryset.filter(company=user.company)
+
+        if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
             return queryset.filter(company=user.company)
 
         if user.is_employee():
@@ -365,6 +377,9 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
         if user.is_employee():
             return queryset.filter(client__assigned_to=user)
 
+        if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            return queryset.filter(client__company=user.company)
+
         return queryset.none()
 
     def perform_create(self, serializer):
@@ -398,6 +413,9 @@ class ClientCallViewSet(viewsets.ModelViewSet):
 
         if user.is_employee():
             return queryset.filter(client__assigned_to=user)
+
+        if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            return queryset.filter(client__company=user.company)
 
         return queryset.none()
 

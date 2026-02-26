@@ -33,6 +33,7 @@ from accounts.views import check_registration_availability
 from accounts.views import (
     UserViewSet,
     LimitedAdminViewSet,
+    SupervisorViewSet,
     CustomTokenObtainPairView,
     register_company,
     verify_email,
@@ -146,6 +147,7 @@ router.register(r"payment-gateways", PaymentGatewayViewSet, basename="paymentgat
 
 router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
+router.register(r"supervisors", SupervisorViewSet, basename="supervisor")
 
 urlpatterns = [
     path("", home, name="home"),

@@ -10,6 +10,7 @@ import secrets
 
 class Role(Enum):
     ADMIN = "admin"
+    SUPERVISOR = "supervisor"
     EMPLOYEE = "employee"
 
     @classmethod
@@ -41,6 +42,9 @@ class User(AbstractUser):
     def is_employee(self):
         return self.role == Role.EMPLOYEE.value
 
+    def is_supervisor(self):
+        return self.role == Role.SUPERVISOR.value
+
     def has_role(self, role):
         return self.role == role
 
@@ -49,10 +53,25 @@ class User(AbstractUser):
             return True
         if self.is_admin() and self.company == user.company:
             return True
+        if self.is_supervisor() and self.company == user.company:
+            try:
+                return self.supervisor_permissions.can_manage_users
+            except Exception:
+                return False
         return False
 
     def can_access_company_data(self, company):
         return self.company == company
+
+    def supervisor_has_permission(self, permission_name: str) -> bool:
+        """Return True if user is an active supervisor with the given permission."""
+        if not self.is_supervisor():
+            return False
+        try:
+            sp = self.supervisor_permissions
+            return sp.is_active and sp.has_permission(permission_name)
+        except Exception:
+            return False
 
     class Meta:
         db_table = "users"
@@ -266,4 +285,56 @@ class LimitedAdmin(models.Model):
             'manage_limited_admins': self.can_manage_limited_admins,
         }
         
+        return permission_map.get(permission_name, False)
+
+
+class SupervisorPermission(models.Model):
+    """
+    Supervisor permissions within a company (CRM).
+    Only users with role=supervisor have this profile; company admin grants/revokes permissions.
+    """
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="supervisor_permissions",
+        limit_choices_to={'role': Role.SUPERVISOR.value}
+    )
+    is_active = models.BooleanField(default=True, help_text="Whether this supervisor can access the CRM with granted permissions")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # CRM permissions (same pattern as Limited Admin)
+    can_manage_leads = models.BooleanField(default=False)
+    can_manage_deals = models.BooleanField(default=False)
+    can_manage_tasks = models.BooleanField(default=False)
+    can_view_reports = models.BooleanField(default=False)
+    can_manage_users = models.BooleanField(default=False)
+    can_manage_products = models.BooleanField(default=False)
+    can_manage_services = models.BooleanField(default=False)
+    can_manage_real_estate = models.BooleanField(default=False)
+    can_manage_settings = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "supervisor_permissions"
+        ordering = ["-created_at"]
+        verbose_name = "Supervisor Permission"
+        verbose_name_plural = "Supervisor Permissions"
+
+    def __str__(self):
+        return f"Supervisor: {self.user.username}"
+
+    def has_permission(self, permission_name: str) -> bool:
+        if not self.is_active:
+            return False
+        permission_map = {
+            "manage_leads": self.can_manage_leads,
+            "manage_deals": self.can_manage_deals,
+            "manage_tasks": self.can_manage_tasks,
+            "view_reports": self.can_view_reports,
+            "manage_users": self.can_manage_users,
+            "manage_products": self.can_manage_products,
+            "manage_services": self.can_manage_services,
+            "manage_real_estate": self.can_manage_real_estate,
+            "manage_settings": self.can_manage_settings,
+        }
         return permission_map.get(permission_name, False)
