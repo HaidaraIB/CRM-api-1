@@ -36,6 +36,8 @@ from accounts.views import (
     SupervisorViewSet,
     CustomTokenObtainPairView,
     register_company,
+    impersonate,
+    impersonate_exchange,
     verify_email,
     resend_verification,
     forgot_password,
@@ -200,6 +202,12 @@ urlpatterns = [
         "api/auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"
     ),
     path("api/auth/register/", register_company, name="register_company"),
+    path("api/auth/impersonate/", impersonate, name="impersonate"),
+    path(
+        "api/auth/impersonate-exchange/",
+        impersonate_exchange,
+        name="impersonate_exchange",
+    ),
     path(
         "api/auth/check-availability/",
         check_registration_availability,

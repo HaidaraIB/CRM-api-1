@@ -356,6 +356,125 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return data
 
 
+def build_user_auth_payload(user, request=None):
+    """
+    Build user dict for login/impersonate responses.
+    Matches the structure returned by CustomTokenObtainPairSerializer.
+    """
+    profile_photo = None
+    if user.profile_photo:
+        profile_photo = (
+            request.build_absolute_uri(user.profile_photo.url)
+            if request
+            else user.profile_photo.url
+        )
+    user_data = {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "phone": user.phone or "",
+        "profile_photo": profile_photo,
+        "role": user.role,
+        "company": user.company.id if user.company else None,
+        "company_name": user.company.name if user.company else None,
+        "company_specialization": user.company.specialization if user.company else None,
+        "is_active": user.is_active,
+        "email_verified": user.email_verified,
+        "is_superuser": user.is_superuser,
+    }
+    try:
+        limited_admin = LimitedAdmin.objects.select_related("user").get(user=user)
+        user_data["limited_admin"] = {
+            "id": limited_admin.id,
+            "is_active": limited_admin.is_active,
+            "permissions": {
+                "can_view_dashboard": limited_admin.can_view_dashboard,
+                "can_manage_tenants": limited_admin.can_manage_tenants,
+                "can_manage_subscriptions": limited_admin.can_manage_subscriptions,
+                "can_manage_payment_gateways": limited_admin.can_manage_payment_gateways,
+                "can_view_reports": limited_admin.can_view_reports,
+                "can_manage_communication": limited_admin.can_manage_communication,
+                "can_manage_settings": limited_admin.can_manage_settings,
+                "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
+            },
+        }
+    except LimitedAdmin.DoesNotExist:
+        pass
+    if user.role == Role.SUPERVISOR.value:
+        try:
+            sp = SupervisorPermission.objects.get(user=user)
+            user_data["supervisor_permissions"] = {
+                "id": sp.id,
+                "is_active": sp.is_active,
+                "permissions": {
+                    "can_manage_leads": sp.can_manage_leads,
+                    "can_manage_deals": sp.can_manage_deals,
+                    "can_manage_tasks": sp.can_manage_tasks,
+                    "can_view_reports": sp.can_view_reports,
+                    "can_manage_users": sp.can_manage_users,
+                    "can_manage_products": sp.can_manage_products,
+                    "can_manage_services": sp.can_manage_services,
+                    "can_manage_real_estate": sp.can_manage_real_estate,
+                    "can_manage_settings": sp.can_manage_settings,
+                },
+            }
+        except SupervisorPermission.DoesNotExist:
+            user_data["supervisor_permissions"] = None
+    else:
+        user_data["supervisor_permissions"] = None
+    return user_data
+
+
+class ImpersonateSerializer(serializers.Serializer):
+    """
+    Serializer for super admin impersonation.
+    Accepts either user_id (company owner) or company_id to impersonate that company's owner.
+    """
+
+    user_id = serializers.IntegerField(required=False, allow_null=True)
+    company_id = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        user_id = attrs.get("user_id")
+        company_id = attrs.get("company_id")
+        if not user_id and not company_id:
+            raise serializers.ValidationError(
+                "Provide either user_id or company_id."
+            )
+        if user_id and company_id:
+            raise serializers.ValidationError(
+                "Provide only one of user_id or company_id."
+            )
+        if company_id:
+            try:
+                company = Company.objects.select_related("owner").get(pk=company_id)
+            except Company.DoesNotExist:
+                raise serializers.ValidationError("Company not found.")
+            if not company.owner_id:
+                raise serializers.ValidationError(
+                    "Company has no owner assigned."
+                )
+            attrs["target_user"] = company.owner
+            attrs["company"] = company
+            return attrs
+        # user_id path
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("User not found.")
+        if user.is_superuser:
+            raise serializers.ValidationError("Cannot impersonate a super admin.")
+        if not Company.objects.filter(owner=user).exists():
+            raise serializers.ValidationError(
+                "User is not a company owner. Only company owners can be impersonated."
+            )
+        attrs["target_user"] = user
+        attrs["company"] = Company.objects.filter(owner=user).first()
+        return attrs
+
+
 class ChangePasswordSerializer(serializers.Serializer):
     """Serializer for changing user password"""
     current_password = serializers.CharField(write_only=True, required=True)

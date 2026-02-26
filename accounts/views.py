@@ -23,10 +23,14 @@ from .serializers import (
     CreateLimitedAdminSerializer,
     SupervisorSerializer,
     CreateSupervisorSerializer,
+    ImpersonateSerializer,
+    build_user_auth_payload,
 )
 from .permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
 from companies.models import Company
 from django.conf import settings
+from django.core.cache import cache
+import secrets
 from .utils import (
     send_email_verification,
     send_password_reset_email,
@@ -299,6 +303,104 @@ def register_company(request):
         return Response(response_data, status=status.HTTP_201_CREATED)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _get_client_ip(request):
+    xff = request.META.get("HTTP_X_FORWARDED_FOR")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR") or None
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsSuperAdmin])
+def impersonate(request):
+    """
+    Super admin only: obtain JWT tokens as a company owner (impersonation).
+    POST /api/auth/impersonate/
+    Body: { "user_id": <id> } or { "company_id": <id> }
+    Response: { "access", "refresh", "user", "impersonated_by", "impersonation_code" (optional) }
+    impersonation_code is a short-lived one-time code to exchange for tokens in the CRM app (GET /api/auth/impersonate-exchange/?code=...).
+    """
+    serializer = ImpersonateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    target_user = serializer.validated_data["target_user"]
+    company = serializer.validated_data.get("company")
+    refresh = RefreshToken.for_user(target_user)
+    user_payload = build_user_auth_payload(target_user, request)
+
+    response_data = {
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+        "user": user_payload,
+        "impersonated_by": {
+            "id": request.user.id,
+            "username": request.user.username,
+            "email": request.user.email,
+        },
+    }
+
+    # Audit log
+    try:
+        from settings.services import log_system_action
+        log_system_action(
+            action="impersonation_start",
+            user=request.user,
+            message=f"Super admin {request.user.email} impersonated {target_user.email} ({target_user.username})",
+            metadata={
+                "target_user_id": target_user.id,
+                "target_username": target_user.username,
+                "target_email": target_user.email,
+                "company_id": company.id if company else None,
+                "company_name": company.name if company else None,
+            },
+            ip_address=_get_client_ip(request),
+        )
+    except Exception as e:
+        logger.warning("Failed to write impersonation audit log: %s", e)
+
+    # One-time code for CRM app handoff (120s TTL)
+    impersonation_code = secrets.token_urlsafe(32)
+    cache_key = f"impersonate:{impersonation_code}"
+    cache.set(
+        cache_key,
+        {
+            "access": response_data["access"],
+            "refresh": response_data["refresh"],
+            "user": user_payload,
+        },
+        timeout=120,
+    )
+    response_data["impersonation_code"] = impersonation_code
+
+    return Response(response_data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def impersonate_exchange(request):
+    """
+    Exchange a one-time impersonation code for tokens (used by CRM app after redirect).
+    GET /api/auth/impersonate-exchange/?code=<impersonation_code>
+    Returns: { "access", "refresh", "user" }. Code is invalidated after use.
+    """
+    code = request.query_params.get("code", "").strip()
+    if not code:
+        return Response(
+            {"error": "Missing code parameter."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    cache_key = f"impersonate:{code}"
+    data = cache.get(cache_key)
+    if not data:
+        return Response(
+            {"error": "Invalid or expired code."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    cache.delete(cache_key)
+    return Response(data, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
