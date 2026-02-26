@@ -38,6 +38,7 @@ from accounts.views import (
     register_company,
     impersonate,
     impersonate_exchange,
+    impersonate_exchange_status,
     verify_email,
     resend_verification,
     forgot_password,
@@ -203,6 +204,12 @@ urlpatterns = [
     ),
     path("api/auth/register/", register_company, name="register_company"),
     path("api/auth/impersonate/", impersonate, name="impersonate"),
+    # Diagnostic: confirms impersonate-exchange routes are deployed (GET returns {"status":"ok"})
+    path(
+        "api/auth/impersonate-exchange/status/",
+        impersonate_exchange_status,
+        name="impersonate_exchange_status",
+    ),
     # Support both with and without trailing slash (some proxies/clients strip it)
     path(
         "api/auth/impersonate-exchange/",

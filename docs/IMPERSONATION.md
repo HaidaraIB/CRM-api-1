@@ -48,8 +48,27 @@
 
 ## استكشاف الأخطاء (Production 404)
 
-إذا ظهر "Not Found: /api/auth/impersonate-exchange/" أو "Invalid or expired code" على الـ VPS:
+إذا ظهر في السجلات **"Not Found: /api/auth/impersonate-exchange/"** أو واجهة "Invalid or expired code" على الـ VPS:
 
-1. **تحديث النشر:** التأكد من أن آخر نسخة من الكود (التي تحتوي على `impersonate_exchange` ومسارها) منشورة على السيرفر.
-2. **إعادة تشغيل الخدمة:** بعد رفع الكود إعادة تشغيل gunicorn/uwsgi (أو خدمة Django) لتحميل الـ URLs الجديدة.
-3. **الرابط يدوياً:** التأكد من أن طلب المتصفح أو تطبيق CRM يصل إلى `https://<your-api-domain>/api/auth/impersonate-exchange/?code=...` (مع أو بدون شرطة مائلة نهائية).
+### 1. التحقق من النشر (Diagnostic endpoint)
+
+من المتصفح أو `curl` على السيرفر نفسه:
+
+```bash
+curl -s "https://<YOUR_API_DOMAIN>/api/auth/impersonate-exchange/status/"
+```
+
+- إذا حصلت على **200** و `{"status":"ok","endpoint":"impersonate-exchange"}` فالمسارات منشورة، والمشكلة غالباً كود منتهي أو Cache (راجع البند 3).
+- إذا حصلت على **404** فالمسارات غير منشورة: انسخ آخر نسخة من المشروع إلى الـ VPS وأعد تشغيل الخدمة (البند 2).
+
+### 2. التأكد من نشر الكود وإعادة التشغيل
+
+1. رفع آخر نسخة من الكود (التي تحتوي على `impersonate_exchange` و `impersonate_exchange_status` ومساراتها في `crm_saas_api/urls.py`).
+2. إعادة تشغيل خدمة Django (مثلاً: `sudo systemctl restart gunicorn` أو إعادة تشغيل العملية التي تشغّل المشروع).
+3. إعادة المحاولة و/أو استدعاء `/api/auth/impersonate-exchange/status/` مرة أخرى.
+
+### 3. إذا كان الـ status يعمل لكن التظاهر يفشل
+
+- تأكد أن طلب التظاهر يصل إلى `https://<your-api-domain>/api/auth/impersonate-exchange/?code=...`.
+- الكود صالح لمدة **120 ثانية** فقط؛ إذا فتحت الرابط بعد تأخير طويل سيظهر "Invalid or expired code." — أعد التظاهر من لوحة الإدارة.
+- على الـ VPS، إذا كان Cache (مثلاً Redis أو Memcached) مختلفاً عن بيئة التطوير أو غير مضبوط، قد لا يُحفظ الكود: تأكد من إعدادات `CACHES` في الإنتاج.

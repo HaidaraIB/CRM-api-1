@@ -380,12 +380,20 @@ def impersonate(request):
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
+def impersonate_exchange_status(request):
+    """Diagnostic: GET /api/auth/impersonate-exchange/status/ returns 200 if this app revision is deployed."""
+    return Response({"status": "ok", "endpoint": "impersonate-exchange"}, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
 def impersonate_exchange(request):
     """
     Exchange a one-time impersonation code for tokens (used by CRM app after redirect).
     GET /api/auth/impersonate-exchange/?code=<impersonation_code>
     Returns: { "access", "refresh", "user" }. Code is invalidated after use.
     """
+    logger.info("impersonate_exchange view called for path=%s", request.path)
     code = request.query_params.get("code", "").strip()
     if not code:
         return Response(
@@ -395,6 +403,7 @@ def impersonate_exchange(request):
     cache_key = f"impersonate:{code}"
     data = cache.get(cache_key)
     if not data:
+        logger.warning("impersonate_exchange: code not found or expired (key=%s)", cache_key[:20] + "...")
         return Response(
             {"error": "Invalid or expired code."},
             status=status.HTTP_404_NOT_FOUND,
