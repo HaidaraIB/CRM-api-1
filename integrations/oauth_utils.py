@@ -54,19 +54,16 @@ class MetaOAuth(OAuthBase):
         """
         إنشاء رابط التفويض لـ Meta
         
-        Scopes المطلوبة:
-        - pages_show_list: للحصول على قائمة الصفحات
-        - pages_read_engagement: لقراءة التفاعلات
-        - pages_manage_posts: لإدارة المنشورات
-        - instagram_basic: للوصول إلى Instagram
+        Scopes المستخدمة (يجب أن تكون مضافة في Facebook App وموافق عليها):
+        - pages_show_list: قائمة الصفحات
+        - business_management: إدارة Business
+        - leads_retrieval: جلب الليدز من Lead Forms
         """
         if scopes is None:
             scopes = [
                 'pages_show_list',
-                'pages_read_engagement',
-                'pages_manage_posts',
-                'instagram_basic',
                 'business_management',
+                'leads_retrieval',
             ]
         
         params = {
