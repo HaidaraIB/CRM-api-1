@@ -16,7 +16,7 @@ Including another URLconf
 """
 
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, re_path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
@@ -203,10 +203,16 @@ urlpatterns = [
     ),
     path("api/auth/register/", register_company, name="register_company"),
     path("api/auth/impersonate/", impersonate, name="impersonate"),
+    # Support both with and without trailing slash (some proxies/clients strip it)
     path(
         "api/auth/impersonate-exchange/",
         impersonate_exchange,
         name="impersonate_exchange",
+    ),
+    re_path(
+        r"^api/auth/impersonate-exchange$",
+        impersonate_exchange,
+        name="impersonate_exchange_no_slash",
     ),
     path(
         "api/auth/check-availability/",
