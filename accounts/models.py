@@ -338,3 +338,21 @@ class SupervisorPermission(models.Model):
             "manage_settings": self.can_manage_settings,
         }
         return permission_map.get(permission_name, False)
+
+
+class ImpersonationSession(models.Model):
+    """
+    One-time code for super-admin impersonation handoff to CRM app.
+    Stored in DB so all workers/processes can read it (unlike per-process cache).
+    """
+    code = models.CharField(max_length=64, unique=True, db_index=True)
+    payload = models.JSONField(help_text="Dict: access, refresh, user")
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "accounts_impersonation_session"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"ImpersonationSession {self.code[:12]}..."

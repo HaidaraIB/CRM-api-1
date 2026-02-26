@@ -71,4 +71,4 @@ curl -s "https://<YOUR_API_DOMAIN>/api/auth/impersonate-exchange/status/"
 
 - تأكد أن طلب التظاهر يصل إلى `https://<your-api-domain>/api/auth/impersonate-exchange/?code=...`.
 - الكود صالح لمدة **120 ثانية** فقط؛ إذا فتحت الرابط بعد تأخير طويل سيظهر "Invalid or expired code." — أعد التظاهر من لوحة الإدارة.
-- على الـ VPS، إذا كان Cache (مثلاً Redis أو Memcached) مختلفاً عن بيئة التطوير أو غير مضبوط، قد لا يُحفظ الكود: تأكد من إعدادات `CACHES` في الإنتاج.
+- **تعدّد الـ workers:** إذا كان السيرفر يشغّل أكثر من process (مثلاً عدة workers لـ gunicorn)، الـ cache الافتراضي (LocMem) يكون خاصاً بكل process. لذلك تم تخزين كود التظاهر في **قاعدة البيانات** (جدول `accounts_impersonation_session`) حتى يشاركه كل الـ workers. تأكد من تشغيل migration على الإنتاج: `python manage.py migrate accounts`.

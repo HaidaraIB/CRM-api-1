@@ -6,7 +6,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from .models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin, SupervisorPermission
+from .models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin, SupervisorPermission, ImpersonationSession
 from .serializers import (
     UserSerializer,
     UserListSerializer,
@@ -30,6 +30,8 @@ from .permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervi
 from companies.models import Company
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
+from datetime import timedelta
 import secrets
 from .utils import (
     send_email_verification,
@@ -361,18 +363,21 @@ def impersonate(request):
     except Exception as e:
         logger.warning("Failed to write impersonation audit log: %s", e)
 
-    # One-time code for CRM app handoff (120s TTL)
+    # One-time code for CRM app handoff (120s TTL). Use DB so all workers see it (cache is often per-process).
     impersonation_code = secrets.token_urlsafe(32)
-    cache_key = f"impersonate:{impersonation_code}"
-    cache.set(
-        cache_key,
-        {
-            "access": response_data["access"],
-            "refresh": response_data["refresh"],
-            "user": user_payload,
-        },
-        timeout=120,
+    payload = {
+        "access": response_data["access"],
+        "refresh": response_data["refresh"],
+        "user": user_payload,
+    }
+    expires_at = timezone.now() + timedelta(seconds=120)
+    ImpersonationSession.objects.create(
+        code=impersonation_code,
+        payload=payload,
+        expires_at=expires_at,
     )
+    # Also set in cache for single-worker / same-process hits
+    cache.set(f"impersonate:{impersonation_code}", payload, timeout=120)
     response_data["impersonation_code"] = impersonation_code
 
     return Response(response_data, status=status.HTTP_200_OK)
@@ -400,15 +405,25 @@ def impersonate_exchange(request):
             {"error": "Missing code parameter."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    cache_key = f"impersonate:{code}"
-    data = cache.get(cache_key)
+    # Prefer DB (shared across workers); fallback to cache (same process)
+    data = None
+    now = timezone.now()
+    session = ImpersonationSession.objects.filter(code=code).first()
+    if session and session.expires_at > now:
+        data = session.payload
+        session.delete()
     if not data:
-        logger.warning("impersonate_exchange: code not found or expired (key=%s)", cache_key[:20] + "...")
+        data = cache.get(f"impersonate:{code}")
+        if data:
+            cache.delete(f"impersonate:{code}")
+    if not data:
+        logger.warning("impersonate_exchange: code not found or expired (code=%s...)", code[:12] if len(code) > 12 else code)
+        # Clean up expired DB entries
+        ImpersonationSession.objects.filter(expires_at__lte=now).delete()
         return Response(
             {"error": "Invalid or expired code."},
             status=status.HTTP_404_NOT_FOUND,
         )
-    cache.delete(cache_key)
     return Response(data, status=status.HTTP_200_OK)
 
 
