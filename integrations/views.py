@@ -7,6 +7,7 @@ from django.shortcuts import redirect
 from django.utils import timezone
 from datetime import timedelta
 from django.conf import settings
+from django.core.cache import cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
@@ -140,6 +141,9 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         try:
             oauth_handler = get_oauth_handler(account.platform)
             state = oauth_handler.generate_state()
+            # Store state -> account_id in cache so callback works after redirect from Facebook
+            # (session may be lost in popup or cross-origin redirect)
+            cache.set(f'oauth_state_{state}', account.id, timeout=600)  # 10 min
             request.session[f'oauth_state_{account.id}'] = state
             request.session[f'oauth_account_id_{state}'] = account.id
             auth_url = oauth_handler.get_authorization_url(state)
@@ -192,8 +196,10 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # التحقق من state
-        account_id = request.session.get(f'oauth_account_id_{state}')
+        # التحقق من state (من الكاش أولاً لأن الجلسة قد تضيع بعد التوجيه من Facebook)
+        account_id = cache.get(f'oauth_state_{state}')
+        if not account_id:
+            account_id = request.session.get(f'oauth_account_id_{state}')
         if not account_id:
             return Response(
                 {'error': 'Invalid state'},
@@ -201,7 +207,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            # الحصول على account من session data (لا نحتاج request.user)
+            # الحصول على account
             account = IntegrationAccount.objects.get(id=account_id)
         except IntegrationAccount.DoesNotExist:
             return Response(
@@ -286,6 +292,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 message='Account connected successfully',
             )
             
+            cache.delete(f'oauth_state_{state}')
             request.session.pop(f'oauth_state_{account.id}', None)
             request.session.pop(f'oauth_account_id_{state}', None)
             # إعادة التوجيه إلى صفحة النجاح في Frontend

@@ -288,6 +288,16 @@ BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ============================================================================
+# Cache (for OAuth state etc. - survives redirects from external sites)
+# ============================================================================
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "oauth-state-cache",
+    }
+}
+
+# ============================================================================
 # Frontend & Onboarding Settings
 # ============================================================================
 
