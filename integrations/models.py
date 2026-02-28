@@ -223,6 +223,23 @@ class IntegrationLog(models.Model):
         return f"{self.account} - {self.action} - {self.status}"
 
 
+class OAuthState(models.Model):
+    """
+    تخزين state لـ OAuth callback حتى يعمل مع عدة workers (مشترك عبر قاعدة البيانات).
+    يُحذف بعد الاستخدام أو بعد انتهاء الصلاحية.
+    """
+    state = models.CharField(max_length=64, unique=True, db_index=True)
+    account_id = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'integration_oauth_states'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"state={self.state[:8]}... account={self.account_id}"
+
+
 class WhatsAppAccount(models.Model):
     """
     جدول حسابات واتساب (Embedded Signup Flow).

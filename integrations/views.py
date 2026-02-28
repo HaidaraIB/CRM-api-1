@@ -12,7 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from accounts.permissions import HasActiveSubscription
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount, TwilioSettings, LeadSMSMessage, MessageTemplate
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount, OAuthState, TwilioSettings, LeadSMSMessage, MessageTemplate
 from .serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -141,9 +141,9 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         try:
             oauth_handler = get_oauth_handler(account.platform)
             state = oauth_handler.generate_state()
-            # Store state -> account_id in cache so callback works after redirect from Facebook
-            # (session may be lost in popup or cross-origin redirect)
-            cache.set(f'oauth_state_{state}', account.id, timeout=600)  # 10 min
+            # Store state in DB so callback works across workers (api.loop-crm.app multi-worker)
+            OAuthState.objects.create(state=state, account_id=account.id)
+            cache.set(f'oauth_state_{state}', account.id, timeout=600)
             request.session[f'oauth_state_{account.id}'] = state
             request.session[f'oauth_account_id_{state}'] = account.id
             auth_url = oauth_handler.get_authorization_url(state)
@@ -196,8 +196,13 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # التحقق من state (من الكاش أولاً لأن الجلسة قد تضيع بعد التوجيه من Facebook)
-        account_id = cache.get(f'oauth_state_{state}')
+        # التحقق من state: من DB أولاً (يعمل مع عدة workers)، ثم الكاش ثم الجلسة
+        account_id = None
+        oauth_state_row = OAuthState.objects.filter(state=state).first()
+        if oauth_state_row:
+            account_id = oauth_state_row.account_id
+        if not account_id:
+            account_id = cache.get(f'oauth_state_{state}')
         if not account_id:
             account_id = request.session.get(f'oauth_account_id_{state}')
         if not account_id:
@@ -218,15 +223,19 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         try:
             oauth_handler = get_oauth_handler(account.platform)
             token_data = oauth_handler.exchange_code_for_token(code)
-            user_info = oauth_handler.get_user_info(token_data['access_token'])
+            try:
+                user_info = oauth_handler.get_user_info(token_data['access_token'])
+            except Exception as get_me_err:
+                logger.warning("get_user_info (/me) failed: %s. Using fallback.", get_me_err)
+                user_info = {'id': f'meta_fallback_{account.id}_{state[:8]}', 'name': account.name or 'Meta User'}
             account.set_access_token(token_data['access_token'])
             if 'refresh_token' in token_data:
                 account.set_refresh_token(token_data['refresh_token'])
             expires_in = token_data.get('expires_in', 0)
             if expires_in:
                 account.token_expires_at = timezone.now() + timedelta(seconds=expires_in)
-            account.external_account_id = user_info.get('id') or user_info.get('open_id')
-            account.external_account_name = user_info.get('name') or user_info.get('display_name')
+            account.external_account_id = user_info.get('id') or user_info.get('open_id') or str(account.id)
+            account.external_account_name = user_info.get('name') or user_info.get('display_name') or (account.name or 'Meta User')
             account.status = 'connected'
             account.error_message = None
             account.metadata = {
@@ -292,14 +301,16 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 message='Account connected successfully',
             )
             
+            OAuthState.objects.filter(state=state).delete()
             cache.delete(f'oauth_state_{state}')
             request.session.pop(f'oauth_state_{account.id}', None)
             request.session.pop(f'oauth_account_id_{state}', None)
-            # إعادة التوجيه إلى صفحة النجاح في Frontend
-            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
-            return redirect(f"{frontend_url}/integrations?connected=true&account_id={account.id}")
+            # إعادة التوجيه إلى صفحة النجاح في Frontend (صفحة مخصصة للـ popup تعرض "Connection succeeded" وتطلب إغلاق النافذة)
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+            return redirect(f"{frontend_url}/oauth-callback?connected=true&account_id={account.id}")
             
         except Exception as e:
+            from urllib.parse import quote
             account.status = 'error'
             account.error_message = str(e)
             account.save()
@@ -312,10 +323,10 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 error_details=str(e),
             )
             
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            # Redirect to frontend OAuth callback page with error so popup shows "Connection failed"
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+            err_msg = quote(str(e)[:200], safe='')
+            return redirect(f"{frontend_url}/oauth-callback?connected=false&error={err_msg}")
     
     @action(detail=True, methods=['post'])
     def disconnect(self, request, pk=None):
@@ -403,6 +414,52 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             'company_id': company.id,
         })
     
+    @action(detail=True, methods=['post'], url_path='sync-pages')
+    def sync_pages(self, request, pk=None):
+        """
+        جلب قائمة صفحات فيسبوك للحساب (Meta) وحفظها في metadata.
+        يُستخدم عندما لا توجد صفحات محفوظة عند النقر على Select Lead Form.
+        POST /api/integrations/accounts/{id}/sync-pages/
+        """
+        account = self.get_object()
+        if account.platform != 'meta':
+            return Response(
+                {'error': 'This endpoint is only available for Meta accounts'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if account.status != 'connected':
+            return Response(
+                {'error': 'Account is not connected'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        access_token = account.get_access_token()
+        if not access_token:
+            return Response(
+                {'error': 'No access token available'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            oauth_handler = get_oauth_handler('meta')
+            if not hasattr(oauth_handler, 'get_pages'):
+                return Response(
+                    {'error': 'Pages not supported for this platform'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            pages = oauth_handler.get_pages(access_token)
+            if not account.metadata:
+                account.metadata = {}
+            account.metadata['pages'] = pages
+            for page in pages:
+                page['access_token'] = page.get('access_token', '')
+            account.save()
+            return Response({'pages': pages})
+        except Exception as e:
+            logger.exception("sync_pages failed for account %s", account.id)
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
     @action(detail=True, methods=['get'])
     def lead_forms(self, request, pk=None):
         """
@@ -443,17 +500,42 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                     break
             
             if not page_access_token:
-                # محاولة الحصول على Page Access Token من API
                 access_token = account.get_access_token()
                 if not access_token:
                     return Response(
                         {'error': 'No access token available'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-                page_access_token = meta_oauth.get_page_access_token(
-                    page_id,
-                    access_token
-                )
+                # جلب الصفحات من /me/accounts (قد يعيد access_token) أفضل من GET /{page_id} الذي قد يعيد 400
+                try:
+                    fresh_pages = meta_oauth.get_pages(access_token)
+                    for p in fresh_pages:
+                        if str(p.get('id')) == str(page_id) and p.get('access_token'):
+                            page_access_token = p.get('access_token')
+                            break
+                    if page_access_token and account.metadata.get('pages'):
+                        for i, p in enumerate(account.metadata['pages']):
+                            if str(p.get('id')) == str(page_id):
+                                account.metadata['pages'][i]['access_token'] = page_access_token
+                                account.save()
+                                break
+                except Exception:
+                    pass
+                if not page_access_token:
+                    try:
+                        page_access_token = meta_oauth.get_page_access_token(page_id, access_token)
+                    except Exception as e:
+                        logger.warning("get_page_access_token failed: %s", e)
+                    if not page_access_token:
+                        return Response(
+                            {
+                                'error': (
+                                    'Could not get Page access token. The Meta app needs the "pages_read_engagement" permission. '
+                                    'Please disconnect this Meta account and connect it again so the new permission is granted.'
+                                ),
+                            },
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
             
             # جلب Lead Forms
             lead_forms = meta_oauth.get_lead_forms(page_id, page_access_token)
@@ -465,8 +547,20 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             
         except Exception as e:
             logger.error(f"Error fetching lead forms: {str(e)}", exc_info=True)
+            err_msg = str(e)
+            if 'pages_manage_ads' in err_msg:
+                err_msg = (
+                    'Lead Forms require the "pages_manage_ads" permission. '
+                    'Please disconnect this Meta account and connect it again to grant the new permission. '
+                    'Details: '
+                ) + err_msg
+            elif '403' in err_msg or 'Forbidden' in err_msg:
+                err_msg = (
+                    'Access to Lead Forms was denied (403). The app needs "leads_retrieval" and possibly '
+                    '"Leads Access" in Meta for Developers. Disconnect and reconnect the Meta account. Details: '
+                ) + err_msg
             return Response(
-                {'error': str(e)},
+                {'error': err_msg},
                 status=status.HTTP_400_BAD_REQUEST
             )
     

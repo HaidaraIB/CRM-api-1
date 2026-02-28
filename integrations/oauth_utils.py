@@ -1,6 +1,7 @@
 """
 أدوات OAuth للتكامل مع المنصات المختلفة
 """
+import hmac
 import requests
 from django.conf import settings
 from django.utils import timezone
@@ -49,19 +50,33 @@ class MetaOAuth(OAuthBase):
         self.auth_url = 'https://www.facebook.com/v18.0/dialog/oauth'
         self.token_url = 'https://graph.facebook.com/v18.0/oauth/access_token'
         self.graph_api_url = 'https://graph.facebook.com/v18.0'
-    
+
+    def _appsecret_proof(self, access_token):
+        """مطلوب عند استدعاء Graph API من السيرفر."""
+        if not access_token or not self.client_secret:
+            return None
+        return hmac.new(
+            self.client_secret.encode('utf-8'),
+            access_token.encode('utf-8'),
+            hashlib.sha256,
+        ).hexdigest()
+
     def get_authorization_url(self, state, scopes=None):
         """
         إنشاء رابط التفويض لـ Meta
         
         Scopes المستخدمة (يجب أن تكون مضافة في Facebook App وموافق عليها):
         - pages_show_list: قائمة الصفحات
+        - pages_read_engagement: قراءة تفاعل الصفحة (مطلوب لـ Page Access Token)
+        - pages_manage_ads: إدارة إعلانات الصفحة (مطلوب لـ Lead Forms / leadgen_forms)
         - business_management: إدارة Business
         - leads_retrieval: جلب الليدز من Lead Forms
         """
         if scopes is None:
             scopes = [
                 'pages_show_list',
+                'pages_read_engagement',
+                'pages_manage_ads',
                 'business_management',
                 'leads_retrieval',
             ]
@@ -116,52 +131,113 @@ class MetaOAuth(OAuthBase):
         }
     
     def get_user_info(self, access_token):
-        """الحصول على معلومات المستخدم"""
+        """الحصول على معلومات المستخدم من /me (بدون fields لتفادي 400 من بعض التطبيقات)"""
         url = f"{self.graph_api_url}/me"
-        params = {
-            'access_token': access_token,
-            'fields': 'id,name,email',
-        }
-        
+        params = {'access_token': access_token}
+        proof = self._appsecret_proof(access_token)
+        if proof:
+            params['appsecret_proof'] = proof
         response = requests.get(url, params=params)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        return {'id': data.get('id'), 'name': data.get('name') or ''}
     
     def get_pages(self, access_token):
-        """الحصول على قائمة الصفحات المرتبطة بالحساب"""
+        """الحصول على قائمة الصفحات. نجرّب /me/accounts مع access_token أولاً ثم بدون."""
+        proof = self._appsecret_proof(access_token) or ''
         url = f"{self.graph_api_url}/me/accounts"
-        params = {
-            'access_token': access_token,
-            'fields': 'id,name,access_token,category',
-        }
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json().get('data', [])
+        # محاولة 1: مع access_token (يتطلب pages_read_engagement) لاستخدامه في Lead Forms
+        for fields in ('id,name,access_token', 'id,name'):
+            params = {'access_token': access_token, 'fields': fields}
+            if proof:
+                params['appsecret_proof'] = proof
+            response = requests.get(url, params=params)
+            if response.ok:
+                data = response.json().get('data', [])
+                for page in data:
+                    page.setdefault('access_token', '')
+                return data
+            if fields == 'id,name':
+                try:
+                    err = response.json().get('error', {})
+                    msg = err.get('message', response.text)
+                    code = err.get('code', '')
+                    raise requests.exceptions.HTTPError(
+                        f"Facebook API error ({code}): {msg}",
+                        response=response
+                    )
+                except (ValueError, KeyError):
+                    response.raise_for_status()
+        # محاولة 2: /me?fields=accounts{id,name} كبديل
+        try:
+            params1 = {'access_token': access_token, 'fields': 'accounts{id,name}'}
+            if proof:
+                params1['appsecret_proof'] = proof
+            r1 = requests.get(f"{self.graph_api_url}/me", params=params1)
+            r1.raise_for_status()
+            data = r1.json().get('accounts', {}).get('data', [])
+            if data:
+                for page in data:
+                    page.setdefault('access_token', '')
+                return data
+        except requests.exceptions.HTTPError:
+            pass
+        return []
     
     def get_page_access_token(self, page_id, user_access_token):
-        """الحصول على Page Access Token"""
+        """الحصول على Page Access Token. نجرّب بدون appsecret_proof أولاً (بعض الطلبات تقبله فقط بدون proof)."""
         url = f"{self.graph_api_url}/{page_id}"
-        params = {
-            'access_token': user_access_token,
-            'fields': 'access_token',
-        }
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json().get('access_token')
+        params = {'access_token': user_access_token, 'fields': 'access_token'}
+        for use_proof in (False, True):
+            if use_proof:
+                proof = self._appsecret_proof(user_access_token)
+                if proof:
+                    params['appsecret_proof'] = proof
+            elif 'appsecret_proof' in params:
+                params.pop('appsecret_proof', None)
+            response = requests.get(url, params=params)
+            if response.ok:
+                return response.json().get('access_token')
+            if use_proof:
+                try:
+                    err = response.json().get('error', {})
+                    raise requests.exceptions.HTTPError(
+                        f"Facebook API error: {err.get('message', response.text)}",
+                        response=response
+                    )
+                except (ValueError, KeyError):
+                    response.raise_for_status()
+        return None
     
     def get_lead_forms(self, page_id, page_access_token):
-        """الحصول على قائمة Lead Forms الخاصة بصفحة معينة"""
+        """الحصول على قائمة Lead Forms. نجرّب بدون appsecret_proof أولاً (قد يعيد 403 معه)."""
         url = f"{self.graph_api_url}/{page_id}/leadgen_forms"
         params = {
             'access_token': page_access_token,
             'fields': 'id,name,status,leads_count,created_time',
         }
-        
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        return response.json().get('data', [])
+        last_error = None
+        for use_proof in (False, True):
+            if use_proof:
+                proof = self._appsecret_proof(page_access_token)
+                if proof:
+                    params['appsecret_proof'] = proof
+            elif 'appsecret_proof' in params:
+                params.pop('appsecret_proof', None)
+            response = requests.get(url, params=params)
+            if response.ok:
+                return response.json().get('data', [])
+            try:
+                err = response.json().get('error', {})
+                last_error = err.get('message', response.text)
+                if err.get('code'):
+                    last_error = f"({err['code']}) {last_error}"
+            except (ValueError, KeyError):
+                last_error = response.text or str(response.reason)
+        raise requests.exceptions.HTTPError(
+            f"Facebook API: {last_error}",
+            response=response
+        )
     
     def get_lead_data(self, leadgen_id, page_access_token):
         """الحصول على بيانات ليد معين من Meta"""
@@ -170,7 +246,9 @@ class MetaOAuth(OAuthBase):
             'access_token': page_access_token,
             'fields': 'id,created_time,field_data',
         }
-        
+        proof = self._appsecret_proof(page_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
         response = requests.get(url, params=params)
         response.raise_for_status()
         return response.json()
