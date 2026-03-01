@@ -330,23 +330,116 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def disconnect(self, request, pk=None):
-        """قطع الاتصال مع الحساب"""
+        """قطع الاتصال مع الحساب. لـ Meta: إلغاء صلاحيات التطبيق من فيسبوك ثم مسح التوكن محلياً."""
         account = self.get_object()
-        
+
+        if account.platform == 'meta' and account.external_account_id:
+            access_token = account.get_access_token()
+            if access_token:
+                try:
+                    meta_oauth = MetaOAuth()
+                    meta_oauth.revoke_permissions(account.external_account_id, access_token)
+                    logger.info("Meta permissions revoked for account %s (user %s)", account.id, account.external_account_id)
+                except Exception as e:
+                    logger.warning("Meta revoke_permissions failed (token may already be invalid): %s", e)
+
         account.set_access_token(None)
         account.set_refresh_token(None)
         account.token_expires_at = None
         account.status = 'disconnected'
+        account.error_message = None
         account.save()
-        
+
         IntegrationLog.objects.create(
             account=account,
             action='disconnect',
             status='success',
             message='Account disconnected',
         )
-        
+
         return Response({'message': 'Account disconnected successfully'})
+
+    @action(detail=True, methods=['post'], url_path='test-connection')
+    def test_connection(self, request, pk=None):
+        """
+        اختبار اتصال الحساب بالمنصة (Meta: التحقق من صلاحية التوكن، وتحديث الصفحات إن لزم).
+        POST /api/integrations/accounts/{id}/test-connection/
+        """
+        account = self.get_object()
+
+        if account.platform != 'meta':
+            return Response(
+                {'error': 'Test connection is only available for Meta accounts'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if account.status != 'connected':
+            return Response(
+                {'valid': False, 'message': 'Account is not connected. Please connect first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        access_token = account.get_access_token()
+        if not access_token:
+            account.status = 'disconnected'
+            account.save()
+            return Response(
+                {'valid': False, 'message': 'No access token. Please connect again.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            meta_oauth = MetaOAuth()
+            debug_data = meta_oauth.debug_token(access_token)
+        except Exception as e:
+            logger.warning("test_connection debug_token failed: %s", e)
+            account.status = 'expired'
+            account.error_message = str(e)[:500]
+            account.save()
+            return Response(
+                {'valid': False, 'message': f'Connection check failed: {e}'},
+                status=status.HTTP_200_OK
+            )
+
+        is_valid = debug_data.get('is_valid') is True
+        if not is_valid:
+            account.status = 'expired'
+            account.error_message = debug_data.get('error', {}).get('message', 'Token is no longer valid')
+            account.save()
+            return Response({
+                'valid': False,
+                'message': 'Token is no longer valid. Please disconnect and connect again.',
+            }, status=status.HTTP_200_OK)
+
+        # Token valid: optionally refresh pages list
+        try:
+            pages = meta_oauth.get_pages(access_token)
+            if pages and account.metadata is not None:
+                if not isinstance(account.metadata, dict):
+                    account.metadata = {}
+                account.metadata['pages'] = pages
+                account.save(update_fields=['metadata'])
+        except Exception as e:
+            logger.warning("test_connection get_pages failed: %s", e)
+
+        return Response({
+            'valid': True,
+            'message': 'Connection is valid.',
+            'expires_at': debug_data.get('expires_at'),
+        }, status=status.HTTP_200_OK)
+
+    def perform_destroy(self, instance):
+        """عند حذف الحساب: لـ Meta إلغاء صلاحيات التطبيق من فيسبوك أولاً ثم الحذف."""
+        if instance.platform == 'meta' and instance.external_account_id:
+            token = instance.get_access_token()
+            if token:
+                try:
+                    meta_oauth = MetaOAuth()
+                    meta_oauth.revoke_permissions(instance.external_account_id, token)
+                    logger.info("Meta permissions revoked before delete for account %s", instance.id)
+                except Exception as e:
+                    logger.warning("Meta revoke_permissions before delete failed: %s", e)
+        super().perform_destroy(instance)
     
     @action(detail=True, methods=['post'])
     def sync(self, request, pk=None):
@@ -548,7 +641,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error(f"Error fetching lead forms: {str(e)}", exc_info=True)
             err_msg = str(e)
-            if 'pages_manage_ads' in err_msg:
+            if 'Cannot call API for app' in err_msg or 'on behalf of user' in err_msg:
+                err_msg = (
+                    'Your Facebook app is in Development mode. Add your Facebook account as a Tester or Developer: '
+                    'Meta for Developers → Your App → App roles → Add Test users / Developers. Then try again.'
+                )
+            elif 'pages_manage_ads' in err_msg:
                 err_msg = (
                     'Lead Forms require the "pages_manage_ads" permission. '
                     'Please disconnect this Meta account and connect it again to grant the new permission. '

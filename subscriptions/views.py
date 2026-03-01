@@ -1799,12 +1799,6 @@ def check_payment_status(request, subscription_id):
             "payment_exists": payment is not None,
         }
 
-        logger.info(
-            f"Payment status check for subscription {subscription_id}: subscription.is_active={subscription.is_active}, "
-            f"is_truly_active={is_truly_active}, days_until_expiry={days_until_expiry}, "
-            f"payment_status={payment_status_value}, paytabs_status={paytabs_status}, payment exists={payment is not None}"
-        )
-        logger.info(f"Returning response: {response_data}")
 
         return Response(response_data, status=status.HTTP_200_OK)
     except Payment.DoesNotExist:

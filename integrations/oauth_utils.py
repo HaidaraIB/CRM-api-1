@@ -253,6 +253,60 @@ class MetaOAuth(OAuthBase):
         response.raise_for_status()
         return response.json()
 
+    def get_app_access_token(self):
+        """App access token for server-side API calls (e.g. debug_token)."""
+        url = f"{self.graph_api_url}/oauth/access_token"
+        params = {
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'grant_type': 'client_credentials',
+        }
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        return data.get('access_token', '')
+
+    def debug_token(self, user_access_token):
+        """
+        Check if the user access token is still valid.
+        Returns dict with is_valid, expires_at, user_id, scopes, etc.
+        """
+        app_token = self.get_app_access_token()
+        if not app_token:
+            return {'is_valid': False, 'error': 'Could not get app access token'}
+        url = f"{self.graph_api_url}/debug_token"
+        params = {
+            'input_token': user_access_token,
+            'access_token': app_token,
+        }
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json().get('data', {})
+        return data
+
+    def revoke_permissions(self, user_id, user_access_token):
+        """
+        Revoke app permissions for the user (disconnect app from user's Facebook).
+        DELETE /{user-id}/permissions
+        """
+        url = f"{self.graph_api_url}/{user_id}/permissions"
+        params = {'access_token': user_access_token}
+        proof = self._appsecret_proof(user_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        response = requests.delete(url, params=params)
+        if response.status_code == 200:
+            return True
+        try:
+            err = response.json().get('error', {})
+            raise requests.exceptions.HTTPError(
+                f"Facebook API: {err.get('message', response.text)}",
+                response=response,
+            )
+        except (ValueError, KeyError):
+            response.raise_for_status()
+        return False
+
 
 # TikTok: لا نستخدم OAuth (Login Kit) هنا. TikTok في هذا المشروع = Lead Gen فقط (ويب هوك استقبال الليدز).
 # انظر integrations/views.py → tiktok_leadgen_webhook و READMEs/TIKTOK_LEADGEN_TIKTOK_FOR_BUSINESS_GUIDE.md
