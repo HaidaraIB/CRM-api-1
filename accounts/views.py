@@ -1086,24 +1086,62 @@ def update_fcm_token(request):
     """
     Update FCM token and language for the authenticated user
     """
+    user = request.user
+    ip = (
+        (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+        or request.META.get("REMOTE_ADDR")
+        or ""
+    )
+    user_agent = (request.META.get("HTTP_USER_AGENT") or "")[:200]
+
     fcm_token = request.data.get("fcm_token", "").strip()
     language = request.data.get("language", "").strip()
 
     if not fcm_token:
+        # Keep a WARNING here so it shows in django_important.log (filter keeps "invalid"+"key")
+        logger.warning(
+            "FCM update endpoint called with invalid key: fcm_token missing/empty "
+            f"user_id={getattr(user, 'id', None)} username={getattr(user, 'username', None)} "
+            f"ip={ip} ua={user_agent}"
+        )
         return Response(
             {"error": "fcm_token is required"}, status=status.HTTP_400_BAD_REQUEST
         )
 
-    user = request.user
+    token_len = len(fcm_token)
+    token_prefix = fcm_token[:12]
+    logger.info(
+        "FCM update endpoint hit "
+        f"user_id={getattr(user, 'id', None)} username={getattr(user, 'username', None)} "
+        f"ip={ip} ua={user_agent} token_len={token_len} token_prefix={token_prefix}"
+    )
+
     user.fcm_token = fcm_token
 
     # Update language if provided
     if language in ["ar", "en"]:
         user.language = language
 
-    user.save(update_fields=["fcm_token", "language"])
+    try:
+        user.save(update_fields=["fcm_token", "language"])
+    except Exception as e:
+        # This will show in django_important.log (ERROR level).
+        logger.exception(
+            "FCM token update failed "
+            f"user_id={getattr(user, 'id', None)} username={getattr(user, 'username', None)} "
+            f"ip={ip} token_len={token_len} err={e}"
+        )
+        return Response(
+            {"error": "Failed to update fcm_token"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
-    logger.info(f"FCM token and language updated for user {user.username}")
+    logger.info(
+        "FCM token updated successfully "
+        f"user_id={getattr(user, 'id', None)} username={getattr(user, 'username', None)} "
+        f"ip={ip} token_len={token_len} token_prefix={token_prefix} "
+        f"language={(language if language else '-')}"
+    )
 
     return Response(
         {"message": "FCM token updated successfully"}, status=status.HTTP_200_OK
