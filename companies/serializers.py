@@ -28,6 +28,8 @@ class CompanySerializer(serializers.ModelSerializer):
 class CompanyListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
     owner_username = serializers.CharField(source="owner.username", read_only=True)
+    owner_email = serializers.CharField(source="owner.email", read_only=True)
+    owner_phone = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
@@ -38,6 +40,11 @@ class CompanyListSerializer(serializers.ModelSerializer):
             "specialization",
             "owner",
             "owner_username",
+            "owner_email",
+            "owner_phone",
             "created_at",
         ]
+
+    def get_owner_phone(self, obj):
+        return getattr(obj.owner, "phone", None) or ""
 

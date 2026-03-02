@@ -158,9 +158,32 @@ def send_broadcast_email(broadcast, language="ar"):
         return {"success": False, "error": str(e)}
 
 
+def _get_eligible_recipient_users_queryset(broadcast_target):
+    """
+    Get eligible recipient users by target (before FCM token filter).
+    """
+    users = User.objects.none()
+    if broadcast_target == "all":
+        users = User.objects.filter(role=Role.ADMIN.value, is_active=True)
+    elif broadcast_target.startswith("plan_"):
+        try:
+            plan_id = int(broadcast_target.replace("plan_", ""))
+            subscriptions = Subscription.objects.filter(plan_id=plan_id, is_active=True)
+            company_ids = subscriptions.values_list("company_id", flat=True)
+            companies = Company.objects.filter(id__in=company_ids)
+            users = User.objects.filter(
+                company__in=companies,
+                role=Role.ADMIN.value,
+                is_active=True
+            )
+        except (ValueError, TypeError):
+            return User.objects.none()
+    return users
+
+
 def get_recipient_users(broadcast_target):
     """
-    Get list of recipient users based on broadcast target
+    Get list of recipient users based on broadcast target (only users with FCM token).
     
     Args:
         broadcast_target: Can be "all" or a plan ID (e.g., "plan_1", "plan_2")
@@ -168,34 +191,8 @@ def get_recipient_users(broadcast_target):
     Returns:
         QuerySet of User objects
     """
-    users = User.objects.none()  # Empty queryset by default
-    
-    if broadcast_target == "all":
-        # Get all admin users from all companies
-        users = User.objects.filter(role=Role.ADMIN.value, is_active=True)
-    elif broadcast_target.startswith("plan_"):
-        # Extract plan ID from target (e.g., "plan_1" -> 1)
-        try:
-            plan_id = int(broadcast_target.replace("plan_", ""))
-            
-            # Get all companies subscribed to this plan
-            subscriptions = Subscription.objects.filter(plan_id=plan_id, is_active=True)
-            company_ids = subscriptions.values_list("company_id", flat=True)
-            companies = Company.objects.filter(id__in=company_ids)
-            
-            # Get admin users from these companies
-            users = User.objects.filter(
-                company__in=companies,
-                role=Role.ADMIN.value,
-                is_active=True
-            )
-        except (ValueError, TypeError):
-            # Invalid plan ID, return empty queryset
-            return User.objects.none()
-    
-    # Filter users with FCM tokens (only users who can receive push notifications)
+    users = _get_eligible_recipient_users_queryset(broadcast_target)
     users = users.exclude(fcm_token__isnull=True).exclude(fcm_token='')
-    
     return users
 
 
@@ -210,17 +207,24 @@ def send_broadcast_push_notification(broadcast):
         # Initialize Firebase if not already initialized
         NotificationService.initialize()
         
-        # Get recipient users
+        # Get eligible users and those with FCM token
+        eligible = _get_eligible_recipient_users_queryset(broadcast.target)
+        eligible_count = eligible.count()
         users = get_recipient_users(broadcast.target)
         users_list = list(users)
+        skipped_no_token = max(0, eligible_count - len(users_list))
         
         if not users_list:
             logger.warning(
-                f"No recipients with FCM tokens found for broadcast target: {broadcast.target}"
+                f"No recipients with FCM tokens found for broadcast target: {broadcast.target} "
+                f"(eligible: {eligible_count}, skipped_no_token: {skipped_no_token})"
             )
             return {
                 "success": False,
-                "error": f"No recipients with push notification tokens found for target: {broadcast.target}",
+                "error": f"No recipients with push notification tokens found for target: {broadcast.target}. "
+                         f"{skipped_no_token} user(s) have no FCM token (ask them to open the app on their device).",
+                "eligible_count": eligible_count,
+                "skipped_no_token": skipped_no_token,
             }
         
         # Send notification to each user
@@ -259,12 +263,16 @@ def send_broadcast_push_notification(broadcast):
                 "success": True,
                 "recipients_count": success_count,
                 "failed_count": failed_count,
+                "skipped_no_token": skipped_no_token,
+                "eligible_count": eligible_count,
             }
         else:
             return {
                 "success": False,
                 "error": "Failed to send push notifications to all recipients",
                 "failed_count": failed_count,
+                "skipped_no_token": skipped_no_token,
+                "eligible_count": eligible_count,
             }
     
     except Exception as e:
