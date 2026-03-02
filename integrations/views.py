@@ -1092,36 +1092,57 @@ def meta_webhook(request):
     GET: للتحقق من Webhook (Meta Challenge)
     POST: لاستقبال الليدز الجديدة
     """
+    # Log every Meta webhook call (use this to confirm Meta is hitting our URL)
+    logger.info("META_WEBHOOK_CALLED method=%s", request.method)
+
     if request.method == 'GET':
         # Meta Webhook Verification
         mode = request.GET.get('hub.mode')
         token = request.GET.get('hub.verify_token')
         challenge = request.GET.get('hub.challenge')
-        
         verify_token = getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')
-        
+
+        logger.info("META_WEBHOOK GET verification: hub.mode=%s, token_match=%s", mode, (token == verify_token))
+
         if mode == 'subscribe' and token == verify_token:
-            logger.info("Meta webhook verified successfully")
+            logger.info("META_WEBHOOK verified successfully (challenge returned)")
             return HttpResponse(challenge, content_type='text/plain')
         else:
-            logger.warning(f"Meta webhook verification failed: mode={mode}, token_match={token == verify_token}")
+            logger.warning("META_WEBHOOK verification failed: mode=%s, token_match=%s", mode, (token == verify_token))
             return HttpResponse('Forbidden', status=403)
-    
+
     # POST: استقبال الليدز
     if request.method == 'POST':
-        # التحقق من التوقيع
         if not verify_meta_webhook_signature(request):
-            logger.warning("Meta webhook signature verification failed")
+            logger.warning("META_WEBHOOK POST signature verification failed")
             return HttpResponse('Unauthorized', status=401)
-        
+
+        logger.info("META_WEBHOOK POST signature valid, parsing payload")
+
         try:
             payload = json.loads(request.body)
-            logger.info(f"Meta webhook received: {json.dumps(payload, indent=2)}")
+            entry = payload.get('entry', [])
+            n_entries = len(entry)
+            n_changes = sum(len(e.get('changes', [])) for e in entry)
+            logger.info(
+                "META_WEBHOOK POST payload: object_id=%s, entries=%s, total_changes=%s",
+                payload.get('object'),
+                n_entries,
+                n_changes,
+            )
+            if entry and entry[0].get('changes'):
+                for i, ch in enumerate(entry[0]['changes']):
+                    logger.info(
+                        "META_WEBHOOK change[%s]: field=%s value_keys=%s",
+                        i,
+                        ch.get('field'),
+                        list(ch.get('value', {}).keys()) if isinstance(ch.get('value'), dict) else None,
+                    )
             
             # Meta يرسل البيانات في entry[0].changes[0].value
             entry = payload.get('entry', [])
             if not entry:
-                logger.warning("No entry in Meta webhook payload")
+                logger.warning("META_WEBHOOK POST no entry in payload, returning 200")
                 return JsonResponse({'status': 'ok'}, status=200)
             
             for entry_item in entry:
@@ -1132,7 +1153,14 @@ def meta_webhook(request):
                         leadgen_id = value.get('leadgen_id')
                         form_id = value.get('form_id')
                         page_id = value.get('page_id')
-                        
+
+                        logger.info(
+                            "META_WEBHOOK processing leadgen: leadgen_id=%s form_id=%s page_id=%s",
+                            leadgen_id,
+                            form_id,
+                            page_id,
+                        )
+
                         if not leadgen_id or not form_id or not page_id:
                             logger.warning(f"Missing required fields in webhook: leadgen_id={leadgen_id}, form_id={form_id}, page_id={page_id}")
                             continue
@@ -1323,14 +1351,15 @@ def meta_webhook(request):
                                     error_details=str(e),
                                 )
                             continue
-            
+
+            logger.info("META_WEBHOOK POST completed, returning 200")
             return JsonResponse({'status': 'ok'}, status=200)
-            
+
         except json.JSONDecodeError:
-            logger.error("Invalid JSON in Meta webhook payload")
+            logger.error("META_WEBHOOK POST invalid JSON in payload")
             return HttpResponse('Bad Request', status=400)
         except Exception as e:
-            logger.error(f"Error processing Meta webhook: {str(e)}", exc_info=True)
+            logger.error("META_WEBHOOK POST error: %s", str(e), exc_info=True)
             return HttpResponse('Internal Server Error', status=500)
 
 
