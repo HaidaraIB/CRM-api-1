@@ -468,12 +468,28 @@ LOGGING = {
             "style": "{",
         },
     },
+    "filters": {
+        "skip_noise": {
+            "()": "crm_saas_api.logging_filters.SkipNoiseFilter",
+        },
+        "important_only": {
+            "()": "crm_saas_api.logging_filters.ImportantOnlyFilter",
+        },
+    },
     "handlers": {
         "file": {
             "level": "INFO",
             "class": "logging.FileHandler",
             "filename": BASE_DIR / "logs" / "django.log",
             "formatter": "verbose",
+            "filters": ["skip_noise"],
+        },
+        "file_important": {
+            "level": "WARNING",
+            "class": "logging.FileHandler",
+            "filename": BASE_DIR / "logs" / "django_important.log",
+            "formatter": "verbose",
+            "filters": ["important_only"],
         },
         "console": {
             "level": "INFO",
@@ -482,22 +498,27 @@ LOGGING = {
         },
     },
     "root": {
-        "handlers": ["console", "file"],
+        "handlers": ["console", "file", "file_important"],
         "level": "INFO",
     },
     "loggers": {
         "django": {
-            "handlers": ["console", "file"],
+            "handlers": ["console", "file", "file_important"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
             "level": "INFO",
             "propagate": False,
         },
         "subscriptions": {
-            "handlers": ["console", "file"],
+            "handlers": ["console", "file", "file_important"],
             "level": "INFO",
             "propagate": False,
         },
         "notifications": {
-            "handlers": ["console", "file"],
+            "handlers": ["console", "file", "file_important"],
             "level": "INFO",
             "propagate": False,
         },
