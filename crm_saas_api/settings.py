@@ -50,6 +50,16 @@ ALLOWED_HOSTS = [
 if DEBUG:
     ALLOWED_HOSTS = ["*"]
 
+# Impersonate exchange: allowed redirect_uri for 302 flow (avoids CORS when proxy strips headers)
+IMPERSONATE_REDIRECT_ALLOWED_ORIGINS = [
+    "https://dashboard.loop-crm.app/impersonate",
+    "http://dashboard.loop-crm.app/impersonate",
+    "https://www.dashboard.loop-crm.app/impersonate",
+    "http://www.dashboard.loop-crm.app/impersonate",
+    "http://localhost:5173/impersonate",
+    "http://127.0.0.1:5173/impersonate",
+]
+
 # Automatically allow all subdomains of the base domain
 if BASE_DOMAIN:
     ALLOWED_HOSTS.append(BASE_DOMAIN)

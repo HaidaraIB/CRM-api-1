@@ -437,6 +437,24 @@ def impersonate_exchange(request):
             {"error": "Invalid or expired code."},
             status=status.HTTP_404_NOT_FOUND,
         )
+
+    redirect_uri = request.query_params.get("redirect_uri", "").strip()
+    allowed_origins = getattr(settings, "IMPERSONATE_REDIRECT_ALLOWED_ORIGINS", [])
+    if redirect_uri and allowed_origins:
+        redirect_uri_normalized = redirect_uri.rstrip("/") or redirect_uri
+        allowed_normalized = [o.rstrip("/") for o in allowed_origins]
+        if any(redirect_uri_normalized == a or redirect_uri_normalized.startswith(a + "?") for a in allowed_normalized):
+            import base64
+            import json
+            from django.http import HttpResponseRedirect
+            from urllib.parse import quote
+            payload = json.dumps(data)
+            token_b64 = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+            fragment = f"tokens={quote(token_b64)}"
+            target = f"{redirect_uri}#{fragment}" if "#" not in redirect_uri else redirect_uri
+            logger.info("impersonate_exchange: redirect to redirect_uri (no CORS)")
+            return HttpResponseRedirect(target)
+
     logger.info("impersonate_exchange: success, returning 200")
     return Response(data, status=status.HTTP_200_OK)
 
