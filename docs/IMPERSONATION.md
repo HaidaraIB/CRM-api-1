@@ -46,6 +46,25 @@
 - **Admin Panel:** تعيين `VITE_CRM_APP_URL` إلى عنوان تطبيق CRM (مثلاً `https://crm.example.com`) لفتح التطبيق في نافذة جديدة بعد التظاهر.
 - **CRM (production):** التأكد من أن `VITE_API_URL` يشير إلى جذر الـ API (مثلاً `https://api.example.com/api`). إن كان يشير إلى الدومين فقط (`https://api.example.com`) فسيتم إلحاق `/api` تلقائياً لطلب `impersonate-exchange`.
 
+## جمع السجلات للتشخيص
+
+إذا انتهى المستخدم في صفحة تسجيل الدخول بعد الضغط على "الدخول كمالك الشركة":
+
+1. **سجلات المتصفح (Frontend):**
+   - افتح التبويب الذي فتحته (رابط `/impersonate?code=...`).
+   - اضغط F12 (أو انقر يميناً → فحص) وانتقل إلى تبويب **Console**.
+   - في حقل التصفية اكتب: `Impersonate`
+   - أعد المحاولة (من لوحة الإدارة: اضغط "الدخول كمالك الشركة" لشركة ما).
+   - انسخ كل الأسطر التي تبدأ بـ `[Impersonate]` والصقها عند الإبلاغ عن المشكلة.
+
+2. **سجلات السيرفر (Backend):**
+   - ابحث في لوج Django عن: `impersonate_exchange`
+   - انسخ الأسطر التي تحتوي على: `impersonate_exchange:` (path, code_len, code valid/invalid, success/expired).
+
+من هذه السجلات يمكن معرفة: هل الرابط يفتح فعلاً بصفحة التظاهر، وما عنوان طلب الاستبدال، وما status الرد، وهل الـ backend يعتبر الكود صالحاً أم منتهياً.
+
+---
+
 ## استكشاف الأخطاء (Production 404)
 
 إذا ظهر في السجلات **"Not Found: /api/auth/impersonate-exchange/"** أو واجهة "Invalid or expired code" على الـ VPS:

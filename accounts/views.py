@@ -398,9 +398,15 @@ def impersonate_exchange(request):
     GET /api/auth/impersonate-exchange/?code=<impersonation_code>
     Returns: { "access", "refresh", "user" }. Code is invalidated after use.
     """
-    logger.info("impersonate_exchange view called for path=%s", request.path)
     code = request.query_params.get("code", "").strip()
+    logger.info(
+        "impersonate_exchange: path=%s code_len=%s code_prefix=%s",
+        request.path,
+        len(code) if code else 0,
+        (code[:16] + "...") if code and len(code) > 16 else (code or "(empty)"),
+    )
     if not code:
+        logger.warning("impersonate_exchange: missing code parameter")
         return Response(
             {"error": "Missing code parameter."},
             status=status.HTTP_400_BAD_REQUEST,
@@ -412,18 +418,26 @@ def impersonate_exchange(request):
     if session and session.expires_at > now:
         data = session.payload
         session.delete()
+        logger.info("impersonate_exchange: code valid, session from DB, returning tokens")
     if not data:
         data = cache.get(f"impersonate:{code}")
         if data:
             cache.delete(f"impersonate:{code}")
+            logger.info("impersonate_exchange: code valid, session from cache, returning tokens")
     if not data:
-        logger.warning("impersonate_exchange: code not found or expired (code=%s...)", code[:12] if len(code) > 12 else code)
+        logger.warning(
+            "impersonate_exchange: code not found or expired code_prefix=%s session_exists=%s expires_at=%s",
+            code[:16] if len(code) > 16 else code,
+            session is not None,
+            getattr(session, "expires_at", None),
+        )
         # Clean up expired DB entries
         ImpersonationSession.objects.filter(expires_at__lte=now).delete()
         return Response(
             {"error": "Invalid or expired code."},
             status=status.HTTP_404_NOT_FOUND,
         )
+    logger.info("impersonate_exchange: success, returning 200")
     return Response(data, status=status.HTTP_200_OK)
 
 

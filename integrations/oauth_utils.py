@@ -1,6 +1,7 @@
 """
 أدوات OAuth للتكامل مع المنصات المختلفة
 """
+import logging
 import hmac
 import requests
 from django.conf import settings
@@ -10,6 +11,148 @@ import secrets
 import hashlib
 import base64
 from urllib.parse import urlencode, parse_qs, urlparse
+
+logger = logging.getLogger(__name__)
+
+# Graph API base for standalone Meta helpers (e.g. subscribed_apps)
+META_GRAPH_API_BASE = "https://graph.facebook.com/v18.0"
+META_SUBSCRIBED_APPS_TIMEOUT = 15
+
+
+def subscribe_page_to_leadgen(account, page_id):
+    """
+    Subscribe a Facebook Page to the app for leadgen webhooks.
+    Uses the Page Access Token from account.metadata["pages"].
+    Idempotent: safe to call multiple times (already subscribed returns success).
+
+    Returns:
+        dict: {"success": bool, "error_code": optional int, "error_message": optional str}
+    """
+    result = {"success": False}
+    page_id = str(page_id).strip()
+    if not page_id:
+        result["error_message"] = "page_id is required"
+        logger.warning("subscribe_page_to_leadgen: empty page_id for account id=%s", getattr(account, "id", None))
+        return result
+
+    metadata = getattr(account, "metadata", None) or {}
+    if not isinstance(metadata, dict):
+        result["error_message"] = "account.metadata is not a dict"
+        logger.warning("subscribe_page_to_leadgen: invalid metadata for account id=%s", getattr(account, "id", None))
+        return result
+
+    pages = metadata.get("pages") or []
+    if not isinstance(pages, list):
+        result["error_message"] = "account.metadata['pages'] is not a list"
+        logger.warning("subscribe_page_to_leadgen: pages is not a list for account id=%s", getattr(account, "id", None))
+        return result
+
+    page_access_token = None
+    for p in pages:
+        if not isinstance(p, dict):
+            continue
+        if str(p.get("id")) == page_id:
+            page_access_token = (p.get("access_token") or "").strip()
+            break
+
+    if not page_access_token:
+        result["error_message"] = "Page not found in metadata or missing access_token"
+        logger.warning(
+            "subscribe_page_to_leadgen: no token for page_id=%s account id=%s",
+            page_id,
+            getattr(account, "id", None),
+        )
+        return result
+
+    url = f"{META_GRAPH_API_BASE}/{page_id}/subscribed_apps"
+    payload = {"subscribed_fields": "leadgen", "access_token": page_access_token}
+
+    try:
+        resp = requests.post(url, data=payload, timeout=META_SUBSCRIBED_APPS_TIMEOUT)
+    except requests.exceptions.Timeout:
+        result["error_message"] = "Request to Graph API timed out"
+        logger.error(
+            "subscribe_page_to_leadgen: timeout page_id=%s account id=%s",
+            page_id,
+            getattr(account, "id", None),
+        )
+        return result
+    except requests.exceptions.RequestException as e:
+        result["error_message"] = str(e)
+        logger.exception(
+            "subscribe_page_to_leadgen: request failed page_id=%s account id=%s",
+            page_id,
+            getattr(account, "id", None),
+        )
+        return result
+
+    try:
+        data = resp.json()
+    except ValueError:
+        result["error_message"] = f"Invalid JSON response (status={resp.status_code})"
+        logger.error(
+            "subscribe_page_to_leadgen: non-JSON response page_id=%s status=%s body=%s",
+            page_id,
+            resp.status_code,
+            (resp.text or "")[:500],
+        )
+        return result
+
+    if resp.ok:
+        success_flag = data.get("success") is True
+        result["success"] = success_flag
+        if success_flag:
+            logger.info(
+                "subscribe_page_to_leadgen: subscribed page_id=%s account id=%s",
+                page_id,
+                getattr(account, "id", None),
+            )
+        else:
+            result["error_message"] = "Graph API returned success=false"
+            logger.warning(
+                "subscribe_page_to_leadgen: API success=false page_id=%s account id=%s",
+                page_id,
+                getattr(account, "id", None),
+            )
+        return result
+
+    err = data.get("error") or {}
+    code = err.get("code")
+    message = err.get("message", resp.text or "Unknown error")
+    result["error_code"] = code
+    result["error_message"] = message
+
+    # Log Graph API error codes clearly
+    if code == 190:
+        logger.warning(
+            "subscribe_page_to_leadgen: expired or invalid token (190) page_id=%s account id=%s message=%s",
+            page_id,
+            getattr(account, "id", None),
+            message,
+        )
+    elif code == 200:
+        logger.warning(
+            "subscribe_page_to_leadgen: permissions error (200) page_id=%s account id=%s message=%s",
+            page_id,
+            getattr(account, "id", None),
+            message,
+        )
+    elif code == 102:
+        logger.warning(
+            "subscribe_page_to_leadgen: session invalid (102) page_id=%s account id=%s message=%s",
+            page_id,
+            getattr(account, "id", None),
+            message,
+        )
+    else:
+        logger.warning(
+            "subscribe_page_to_leadgen: Graph API error code=%s page_id=%s account id=%s message=%s",
+            code,
+            page_id,
+            getattr(account, "id", None),
+            message,
+        )
+    return result
 
 
 class OAuthBase:
