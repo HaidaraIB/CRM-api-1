@@ -58,12 +58,17 @@ def subscribe_page_to_leadgen(account, page_id):
     if not page_access_token:
         result["error_message"] = "Page not found in metadata or missing access_token"
         logger.warning(
-            "subscribe_page_to_leadgen: no token for page_id=%s account id=%s",
+            "META_SUBSCRIBE_FAILURE no token page_id=%s account_id=%s",
             page_id,
             getattr(account, "id", None),
         )
         return result
 
+    logger.info(
+        "META_SUBSCRIBE_ATTEMPT account_id=%s page_id=%s",
+        getattr(account, "id", None),
+        page_id,
+    )
     url = f"{META_GRAPH_API_BASE}/{page_id}/subscribed_apps"
     payload = {"subscribed_fields": "leadgen", "access_token": page_access_token}
 
@@ -71,18 +76,19 @@ def subscribe_page_to_leadgen(account, page_id):
         resp = requests.post(url, data=payload, timeout=META_SUBSCRIBED_APPS_TIMEOUT)
     except requests.exceptions.Timeout:
         result["error_message"] = "Request to Graph API timed out"
-        logger.error(
-            "subscribe_page_to_leadgen: timeout page_id=%s account id=%s",
-            page_id,
+        logger.warning(
+            "META_SUBSCRIBE_FAILURE timeout account_id=%s page_id=%s",
             getattr(account, "id", None),
+            page_id,
         )
         return result
     except requests.exceptions.RequestException as e:
         result["error_message"] = str(e)
-        logger.exception(
-            "subscribe_page_to_leadgen: request failed page_id=%s account id=%s",
-            page_id,
+        logger.warning(
+            "META_SUBSCRIBE_FAILURE request_error account_id=%s page_id=%s error=%s",
             getattr(account, "id", None),
+            page_id,
+            str(e),
         )
         return result
 
@@ -90,11 +96,11 @@ def subscribe_page_to_leadgen(account, page_id):
         data = resp.json()
     except ValueError:
         result["error_message"] = f"Invalid JSON response (status={resp.status_code})"
-        logger.error(
-            "subscribe_page_to_leadgen: non-JSON response page_id=%s status=%s body=%s",
+        logger.warning(
+            "META_SUBSCRIBE_FAILURE non_json account_id=%s page_id=%s status=%s",
+            getattr(account, "id", None),
             page_id,
             resp.status_code,
-            (resp.text or "")[:500],
         )
         return result
 
@@ -103,16 +109,16 @@ def subscribe_page_to_leadgen(account, page_id):
         result["success"] = success_flag
         if success_flag:
             logger.info(
-                "subscribe_page_to_leadgen: subscribed page_id=%s account id=%s",
-                page_id,
+                "META_SUBSCRIBE_SUCCESS account_id=%s page_id=%s",
                 getattr(account, "id", None),
+                page_id,
             )
         else:
             result["error_message"] = "Graph API returned success=false"
             logger.warning(
-                "subscribe_page_to_leadgen: API success=false page_id=%s account id=%s",
-                page_id,
+                "META_SUBSCRIBE_FAILURE API success=false account_id=%s page_id=%s",
                 getattr(account, "id", None),
+                page_id,
             )
         return result
 
@@ -123,36 +129,100 @@ def subscribe_page_to_leadgen(account, page_id):
     result["error_message"] = message
 
     # Log Graph API error codes clearly
-    if code == 190:
-        logger.warning(
-            "subscribe_page_to_leadgen: expired or invalid token (190) page_id=%s account id=%s message=%s",
-            page_id,
-            getattr(account, "id", None),
-            message,
-        )
-    elif code == 200:
-        logger.warning(
-            "subscribe_page_to_leadgen: permissions error (200) page_id=%s account id=%s message=%s",
-            page_id,
-            getattr(account, "id", None),
-            message,
-        )
-    elif code == 102:
-        logger.warning(
-            "subscribe_page_to_leadgen: session invalid (102) page_id=%s account id=%s message=%s",
-            page_id,
-            getattr(account, "id", None),
-            message,
-        )
-    else:
-        logger.warning(
-            "subscribe_page_to_leadgen: Graph API error code=%s page_id=%s account id=%s message=%s",
-            code,
-            page_id,
-            getattr(account, "id", None),
-            message,
-        )
+    logger.warning(
+        "META_SUBSCRIBE_FAILURE account_id=%s page_id=%s error_code=%s message=%s",
+        getattr(account, "id", None),
+        page_id,
+        code,
+        message,
+    )
     return result
+
+
+def check_page_subscription(account, page_id):
+    """
+    Check if the Facebook Page has our app installed and subscribed to leadgen.
+    Calls GET /{page-id}/subscribed_apps.
+
+    Returns:
+        dict: {
+            "installed": bool,
+            "leadgen_subscribed": bool,
+            "raw": Graph API response (data list or error),
+            "error": optional str (if request failed),
+        }
+    """
+    out = {"installed": False, "leadgen_subscribed": False, "raw": None}
+    page_id = str(page_id).strip()
+    if not page_id:
+        out["error"] = "page_id is required"
+        logger.warning("check_page_subscription: empty page_id account_id=%s", getattr(account, "id", None))
+        return out
+
+    metadata = getattr(account, "metadata", None) or {}
+    if not isinstance(metadata, dict):
+        out["error"] = "account.metadata is not a dict"
+        return out
+    pages = metadata.get("pages") or []
+    if not isinstance(pages, list):
+        out["error"] = "account.metadata['pages'] is not a list"
+        return out
+
+    page_access_token = None
+    for p in pages:
+        if not isinstance(p, dict):
+            continue
+        if str(p.get("id")) == page_id:
+            page_access_token = (p.get("access_token") or "").strip()
+            break
+    if not page_access_token:
+        out["error"] = "Page not found in metadata or missing access_token"
+        logger.warning("check_page_subscription: no token page_id=%s account_id=%s", page_id, getattr(account, "id", None))
+        return out
+
+    app_id = str(getattr(settings, "META_CLIENT_ID", "") or "").strip()
+    url = f"{META_GRAPH_API_BASE}/{page_id}/subscribed_apps"
+    params = {"access_token": page_access_token}
+
+    try:
+        resp = requests.get(url, params=params, timeout=META_SUBSCRIBED_APPS_TIMEOUT)
+    except requests.exceptions.Timeout:
+        out["error"] = "Request timed out"
+        logger.warning("check_page_subscription: timeout page_id=%s account_id=%s", page_id, getattr(account, "id", None))
+        return out
+    except requests.exceptions.RequestException as e:
+        out["error"] = str(e)
+        logger.warning("check_page_subscription: request failed page_id=%s account_id=%s error=%s", page_id, getattr(account, "id", None), str(e))
+        return out
+
+    try:
+        data = resp.json()
+    except ValueError:
+        out["error"] = f"Invalid JSON (status={resp.status_code})"
+        out["raw"] = {"status_code": resp.status_code, "text": (resp.text or "")[:500]}
+        logger.warning("check_page_subscription: non-JSON page_id=%s status=%s", page_id, resp.status_code)
+        return out
+
+    out["raw"] = data
+    if not resp.ok:
+        err = data.get("error") or {}
+        out["error"] = err.get("message", resp.text or "Unknown error")
+        logger.warning("check_page_subscription: API error page_id=%s code=%s", page_id, err.get("code"))
+        return out
+
+    items = data.get("data") or []
+    if not isinstance(items, list):
+        return out
+    for app in items:
+        if not isinstance(app, dict):
+            continue
+        if str(app.get("id")) == app_id:
+            out["installed"] = True
+            fields = app.get("subscribed_fields") or []
+            if isinstance(fields, list) and "leadgen" in fields:
+                out["leadgen_subscribed"] = True
+            break
+    return out
 
 
 class OAuthBase:
@@ -207,21 +277,23 @@ class MetaOAuth(OAuthBase):
     def get_authorization_url(self, state, scopes=None):
         """
         إنشاء رابط التفويض لـ Meta
-        
-        Scopes المستخدمة (يجب أن تكون مضافة في Facebook App وموافق عليها):
-        - pages_show_list: قائمة الصفحات
-        - pages_read_engagement: قراءة تفاعل الصفحة (مطلوب لـ Page Access Token)
-        - pages_manage_ads: إدارة إعلانات الصفحة (مطلوب لـ Lead Forms / leadgen_forms)
-        - business_management: إدارة Business
-        - leads_retrieval: جلب الليدز من Lead Forms
+
+        Scopes المطلوبة لـ Lead Ads webhook (Meta for Developers):
+        - pages_manage_metadata: مطلوب لـ POST/GET subscribed_apps (تثبيت التطبيق على الصفحة). [App Review]
+        - leads_retrieval: جلب بيانات الليدز من Lead Forms. [App Review]
+        - pages_read_engagement: قراءة تفاعل الصفحة + Page Access Token. [App Review]
+        - pages_show_list: قائمة الصفحات في /me/accounts. [Standard]
+        - ads_management: مطلوب لـ leadgen webhook حسب وثائق Meta. [App Review]
         """
         if scopes is None:
             scopes = [
-                'pages_show_list',
-                'pages_read_engagement',
+                'pages_manage_metadata',
                 'pages_manage_ads',
                 'business_management',
                 'leads_retrieval',
+                'pages_read_engagement',
+                'pages_show_list',
+                'ads_management',
             ]
         
         params = {
