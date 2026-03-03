@@ -25,7 +25,7 @@ from .serializers import (
     SendLeadSMSSerializer,
     MessageTemplateSerializer,
 )
-from .oauth_utils import get_oauth_handler, MetaOAuth, subscribe_page_to_leadgen, check_page_subscription
+from .oauth_utils import get_oauth_handler, MetaOAuth
 from .decorators import rate_limit_webhook
 import json
 import re
@@ -717,47 +717,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         account.metadata['selected_page_id'] = page_id
         account.metadata['selected_form_id'] = form_id
         account.save()
-
-        # Subscribe page to app for leadgen webhooks (idempotent; do not break user flow on failure)
-        try:
-            check = check_page_subscription(account, page_id)
-            if check.get('leadgen_subscribed'):
-                account.metadata['page_subscription_status'] = 'subscribed'
-                account.metadata.pop('page_subscription_error', None)
-                account.save()
-                logger.info(
-                    "META_SUBSCRIBE_ALREADY_ACTIVE account_id=%s page_id=%s",
-                    account.id,
-                    page_id,
-                )
-            else:
-                sub_result = subscribe_page_to_leadgen(account, page_id)
-                if sub_result.get('success'):
-                    account.metadata['page_subscription_status'] = 'subscribed'
-                    account.metadata.pop('page_subscription_error', None)
-                else:
-                    account.metadata['page_subscription_status'] = 'failed'
-                    account.metadata['page_subscription_error'] = sub_result.get('error_message') or 'Unknown error'
-                    logger.warning(
-                        "META leadgen subscription failed after select_lead_form account_id=%s page_id=%s error_code=%s error_message=%s",
-                        account.id,
-                        page_id,
-                        sub_result.get('error_code'),
-                        sub_result.get('error_message'),
-                    )
-                account.save()
-        except Exception as e:
-            account.metadata['page_subscription_status'] = 'failed'
-            account.metadata['page_subscription_error'] = str(e)
-            account.save()
-            logger.warning(
-                "META leadgen subscription exception in select_lead_form account_id=%s page_id=%s error=%s",
-                account.id,
-                page_id,
-                str(e),
-                exc_info=True,
-            )
-
+        
         IntegrationLog.objects.create(
             account=account,
             action='select_lead_form',
@@ -769,7 +729,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'campaign_id': campaign_id,
             },
         )
-
+        
         return Response({
             'message': 'Lead form selected successfully',
             'page_id': page_id,
@@ -1259,32 +1219,7 @@ def meta_webhook(request):
                                 # لا يمكننا إنشاء IntegrationLog بدون account
                                 # لكن يمكننا تسجيل الخطأ في Django logs
                                 continue
-
-                            # Auto-recovery: if page was never subscribed, attempt subscribe now
-                            if account.metadata.get('page_subscription_status') != 'subscribed':
-                                logger.info(
-                                    "META_WEBHOOK page_subscription_status not subscribed, attempting auto-recovery subscribe_page_to_leadgen account_id=%s page_id=%s",
-                                    account.id,
-                                    page_id,
-                                )
-                                sub_result = subscribe_page_to_leadgen(account, page_id)
-                                if sub_result.get('success'):
-                                    account.metadata['page_subscription_status'] = 'subscribed'
-                                    account.metadata.pop('page_subscription_error', None)
-                                    account.save()
-                                    logger.info(
-                                        "META_WEBHOOK auto-recovery subscribe_page_to_leadgen success account_id=%s page_id=%s",
-                                        account.id,
-                                        page_id,
-                                    )
-                                else:
-                                    logger.warning(
-                                        "META_WEBHOOK auto-recovery subscribe_page_to_leadgen failed account_id=%s page_id=%s error=%s",
-                                        account.id,
-                                        page_id,
-                                        sub_result.get('error_message'),
-                                    )
-
+                            
                             # جلب بيانات الليد من Meta API
                             meta_oauth = MetaOAuth()
                             
