@@ -417,13 +417,19 @@ def impersonate_exchange(request):
         if data:
             cache.delete(f"impersonate:{code}")
     if not data:
-        logger.warning("impersonate_exchange: code not found or expired (code=%s...)", code[:12] if len(code) > 12 else code)
+        logger.warning(
+            "impersonate_exchange: code not found or expired (code=%s..., session_found=%s)",
+            code[:12] if len(code) > 12 else code,
+            bool(session),
+        )
         # Clean up expired DB entries
         ImpersonationSession.objects.filter(expires_at__lte=now).delete()
-        return Response(
-            {"error": "Invalid or expired code."},
-            status=status.HTTP_404_NOT_FOUND,
-        )
+        error_payload = {"error": "Invalid or expired code."}
+        if settings.DEBUG and session:
+            error_payload["hint"] = "Code was found but expired (expires_at <= now)."
+        elif settings.DEBUG:
+            error_payload["hint"] = "Code not in DB. Ensure dashboard and admin panel use the same API URL."
+        return Response(error_payload, status=status.HTTP_404_NOT_FOUND)
     return Response(data, status=status.HTTP_200_OK)
 
 
