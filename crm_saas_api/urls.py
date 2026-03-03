@@ -47,6 +47,7 @@ from accounts.views import (
     verify_two_factor_auth,
     update_fcm_token,
     update_language,
+    fcm_diagnostics_full,
 )
 from companies.views import CompanyViewSet
 from crm.views import (
@@ -196,6 +197,11 @@ urlpatterns = [
     # Custom user endpoints - must be before router.urls to avoid conflicts
     path("api/users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
     path("api/users/update-language/", update_language, name="update_language"),
+    path(
+        "api/users/fcm-diagnostics-full/",
+        fcm_diagnostics_full,
+        name="fcm_diagnostics_full",
+    ),
     # Router URLs (includes /api/payments/ which would conflict if placed before custom endpoints)
     path("api/", include(router.urls)),
     # JWT Authentication endpoints

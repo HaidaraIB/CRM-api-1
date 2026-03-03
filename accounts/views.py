@@ -1150,6 +1150,59 @@ def update_fcm_token(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+def fcm_diagnostics_full(request):
+    """
+    Receive full FCM diagnostic report (all steps) from the app.
+    Logs each step to django.log with [FCM_DIAG_FULL] for easy grep.
+    """
+    user = request.user
+    ip = (
+        (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
+        or request.META.get("REMOTE_ADDR")
+        or ""
+    )
+    body = getattr(request, "data", None) or {}
+    platform = body.get("platform") or "unknown"
+    app_version = body.get("app_version") or ""
+    steps = body.get("steps") or []
+
+    logger.info(
+        "[FCM_DIAG_FULL] START user_id=%s username=%s ip=%s platform=%s app_version=%s steps_count=%s",
+        getattr(user, "id", None),
+        getattr(user, "username", None),
+        ip,
+        platform,
+        app_version,
+        len(steps),
+    )
+    for i, step in enumerate(steps):
+        step_id = step.get("step_id") or str(i)
+        step_name = step.get("step_name") or "unknown"
+        success = step.get("success")
+        message = (step.get("message") or "")[:500]
+        detail = (step.get("detail") or "")[:500]
+        logger.info(
+            "[FCM_DIAG_FULL] STEP %s | id=%s name=%s success=%s message=%s detail=%s",
+            i + 1,
+            step_id,
+            step_name,
+            success,
+            message,
+            detail,
+        )
+    logger.info(
+        "[FCM_DIAG_FULL] END user_id=%s username=%s",
+        getattr(user, "id", None),
+        getattr(user, "username", None),
+    )
+    return Response(
+        {"message": "FCM full diagnostics received", "steps_count": len(steps)},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def update_language(request):
     """
     Update language preference for the authenticated user
