@@ -328,10 +328,17 @@ class WhatsAppOAuth(OAuthBase):
         self.meta_oauth = MetaOAuth()
     
     def get_authorization_url(self, state):
-        """استخدام Meta OAuth لـ WhatsApp"""
+        """
+        استخدام Meta OAuth لـ WhatsApp.
+        الصلاحيات المطلوبة:
+        - business_management: للوصول إلى /me/businesses و owned_whatsapp_business_accounts
+        - whatsapp_business_management, whatsapp_business_messaging: تحتاج إضافة منتج WhatsApp في تطبيق Meta
+        """
         return self.meta_oauth.get_authorization_url(
             state,
             scopes=[
+                'public_profile',
+                'business_management',
                 'whatsapp_business_management',
                 'whatsapp_business_messaging',
             ]
