@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
-from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount
+from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount, LeadWhatsAppMessage
 from .decorators import rate_limit_webhook
 from crm.models import Client, ClientPhoneNumber, ClientEvent
 from crm.signals import get_least_busy_employee
@@ -235,6 +235,15 @@ def process_whatsapp_message(message, phone_number_id):
         # تحديث last_contacted_at
         client.last_contacted_at = timezone.now()
         client.save(update_fields=['last_contacted_at'])
+        
+        # تخزين الرسالة في LeadWhatsAppMessage للتايملاين ومركز المراسلات
+        LeadWhatsAppMessage.objects.create(
+            client=client,
+            phone_number=from_number,
+            body=text_body,
+            direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+            whatsapp_message_id=message_id,
+        )
         
         # تسجيل الرسالة في ClientEvent (اختياري)
         ClientEvent.objects.create(

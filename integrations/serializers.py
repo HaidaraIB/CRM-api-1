@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, TwilioSettings, LeadSMSMessage, MessageTemplate
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, TwilioSettings, LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate
 
 
 class IntegrationAccountSerializer(serializers.ModelSerializer):
@@ -203,6 +203,31 @@ class SendLeadSMSSerializer(serializers.Serializer):
     lead_id = serializers.IntegerField(help_text='معرف العميل المحتمل (الليد)')
     phone_number = serializers.CharField(max_length=20, help_text='رقم الهاتف المستلم')
     body = serializers.CharField(allow_blank=False, help_text='نص الرسالة')
+
+
+class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
+    """رسالة واتساب للعميل (للتايملاين ومركز المراسلات)."""
+    created_by_username = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = LeadWhatsAppMessage
+        fields = [
+            'id',
+            'client',
+            'phone_number',
+            'body',
+            'direction',
+            'whatsapp_message_id',
+            'created_by',
+            'created_by_username',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'direction', 'whatsapp_message_id']
+
+    def get_created_by_username(self, obj):
+        if obj.created_by_id is None:
+            return ''
+        return getattr(obj.created_by, 'username', None) or ''
 
 
 # --------------- Message Templates (WhatsApp / SMS) ---------------

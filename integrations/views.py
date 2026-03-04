@@ -12,7 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from accounts.permissions import HasActiveSubscription
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount, OAuthState, TwilioSettings, LeadSMSMessage, MessageTemplate
+from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, WhatsAppAccount, OAuthState, TwilioSettings, LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate
 from .serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -23,6 +23,7 @@ from .serializers import (
     TwilioSettingsSerializer,
     LeadSMSMessageSerializer,
     SendLeadSMSSerializer,
+    LeadWhatsAppMessageSerializer,
     MessageTemplateSerializer,
 )
 from .oauth_utils import get_oauth_handler, MetaOAuth
@@ -768,12 +769,13 @@ def whatsapp_send_message(request):
     """
     إرسال رسالة واتساب من رقم الشركة المتصل.
     POST /api/integrations/whatsapp/send/
-    Body: { "phone_number_id": "optional", "to": "971501234567", "message": "نص الرسالة" }
+    Body: { "phone_number_id": "optional", "to": "971501234567", "message": "نص الرسالة", "client_id": "optional" }
     """
     company = request.user.company
     phone_number_id = request.data.get('phone_number_id')
     to = request.data.get('to')
     message = request.data.get('message') or request.data.get('text')
+    client_id = request.data.get('client_id')
     if not to or not message:
         return Response(
             {'error': 'to and message are required'},
@@ -822,6 +824,21 @@ def whatsapp_send_message(request):
                 message=f'Message sent to {to}',
                 response_data=data,
             )
+        # تخزين الرسالة في LeadWhatsAppMessage للتايملاين ومركز المراسلات (عند وجود client_id)
+        wam_id = (data.get('messages') or [{}])[0].get('id') if isinstance(data.get('messages'), list) else None
+        if client_id:
+            try:
+                client = company.clients.get(id=client_id)
+                LeadWhatsAppMessage.objects.create(
+                    client=client,
+                    phone_number=to,
+                    body=(message or '')[:65535],
+                    direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+                    whatsapp_message_id=wam_id,
+                    created_by=request.user,
+                )
+            except Exception:
+                pass
         return Response(data, status=status.HTTP_200_OK)
     except requests.RequestException as e:
         err_body = {'error': str(e)}
@@ -1512,6 +1529,52 @@ class LeadSMSMessageViewSet(viewsets.ReadOnlyModelViewSet):
         if client_id:
             qs = qs.filter(client_id=client_id)
         return qs
+
+
+class LeadWhatsAppMessageViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    قائمة رسائل واتساب للعميل. للعرض في التايملاين ومركز المراسلات.
+    GET /api/integrations/whatsapp/messages/?client=:client_id
+    """
+    permission_classes = [IsAuthenticated, HasActiveSubscription]
+    serializer_class = LeadWhatsAppMessageSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = LeadWhatsAppMessage.objects.filter(client__company=user.company).order_by('-created_at')
+        client_id = self.request.query_params.get('client')
+        if client_id:
+            qs = qs.filter(client_id=client_id)
+        return qs
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_conversations_list(request):
+    """
+    قائمة العملاء الذين لديهم محادثات واتساب (لشريط المحادثات في مركز المراسلات).
+    GET /api/integrations/whatsapp/conversations/
+    """
+    from django.db.models import Max
+    from crm.models import Client
+    company = request.user.company
+    # عملاء لديهم على الأقل رسالة واتساب، مرتبون بآخر رسالة
+    sub = LeadWhatsAppMessage.objects.filter(client__company=company).values('client_id').annotate(
+        last_at=Max('created_at')
+    ).order_by('-last_at')
+    client_ids = [s['client_id'] for s in sub[:100]]
+    order = {cid: i for i, cid in enumerate(client_ids)}
+    clients = list(Client.objects.filter(id__in=client_ids).select_related('company'))
+    clients.sort(key=lambda c: order.get(c.id, 999))
+    return Response([
+        {
+            'id': c.id,
+            'name': c.name,
+            'phone_number': c.phone_number or '',
+            'company_name': getattr(c, 'company_name', None) or c.name,
+        }
+        for c in clients
+    ])
 
 
 class MessageTemplateViewSet(viewsets.ModelViewSet):

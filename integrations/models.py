@@ -444,6 +444,64 @@ class LeadSMSMessage(models.Model):
         return f"SMS to {self.phone_number} @ {self.created_at}"
 
 
+class LeadWhatsAppMessage(models.Model):
+    """
+    رسالة واتساب مرتبطة بعميل (Lead).
+    تُخزّن الرسائل الواردة والصادرة عبر WhatsApp Business API وتُعرض في تايملاين الليد ومركز المراسلات.
+    """
+    DIRECTION_OUTBOUND = 'outbound'
+    DIRECTION_INBOUND = 'inbound'
+
+    client = models.ForeignKey(
+        'crm.Client',
+        on_delete=models.CASCADE,
+        related_name='whatsapp_messages',
+        help_text="العميل المحتمل (الليد)",
+    )
+    phone_number = models.CharField(
+        max_length=20,
+        help_text="رقم الهاتف في المحادثة",
+    )
+    body = models.TextField(
+        help_text="نص الرسالة",
+    )
+    direction = models.CharField(
+        max_length=10,
+        choices=[
+            (DIRECTION_OUTBOUND, 'Outbound'),
+            (DIRECTION_INBOUND, 'Inbound'),
+        ],
+        default=DIRECTION_OUTBOUND,
+    )
+    whatsapp_message_id = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        help_text="معرف الرسالة من WhatsApp Cloud API",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sent_whatsapp_messages',
+        help_text="المستخدم الذي أرسل الرسالة (للصادرة)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'lead_whatsapp_messages'
+        verbose_name = 'Lead WhatsApp Message'
+        verbose_name_plural = 'Lead WhatsApp Messages'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"WhatsApp to {self.phone_number} @ {self.created_at}"
+
+
 class MessageTemplate(models.Model):
     """
     قوالب رسائل للمراسلات (واتساب و SMS).

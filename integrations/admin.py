@@ -5,6 +5,7 @@ from .models import (
     WhatsAppAccount,
     TwilioSettings,
     LeadSMSMessage,
+    LeadWhatsAppMessage,
     MessageTemplate,
 )
 
@@ -107,6 +108,23 @@ class TwilioSettingsAdmin(admin.ModelAdmin):
 
 @admin.register(LeadSMSMessage)
 class LeadSMSMessageAdmin(admin.ModelAdmin):
+    list_display = [
+        'id',
+        'client',
+        'phone_number',
+        'direction',
+        'created_by',
+        'created_at',
+    ]
+    list_filter = ['direction', 'created_at']
+    search_fields = ['client__name', 'phone_number', 'body']
+    readonly_fields = ['created_at']
+    raw_id_fields = ['client', 'created_by']
+    date_hierarchy = 'created_at'
+
+
+@admin.register(LeadWhatsAppMessage)
+class LeadWhatsAppMessageAdmin(admin.ModelAdmin):
     list_display = [
         'id',
         'client',
