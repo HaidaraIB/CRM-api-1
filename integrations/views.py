@@ -794,13 +794,13 @@ def whatsapp_send_message(request):
     wa_account = qs.first()
     if not wa_account:
         return Response(
-            {'error': 'No connected WhatsApp number for this company'},
+            {'error_key': 'no_connected_whatsapp_number', 'error': 'No connected WhatsApp number for this company'},
             status=status.HTTP_404_NOT_FOUND
         )
     access_token = wa_account.get_access_token()
     if not access_token:
         return Response(
-            {'error': 'WhatsApp account has no access token'},
+            {'error_key': 'whatsapp_no_access_token', 'error': 'WhatsApp account has no access token'},
             status=status.HTTP_400_BAD_REQUEST
         )
     url = f"https://graph.facebook.com/v18.0/{wa_account.phone_number_id}/messages"
@@ -1577,6 +1577,33 @@ def whatsapp_conversations_list(request):
     ])
 
 
+def _content_to_meta_body(content):
+    """Convert our placeholders [Customer Name], [Company], etc. to Meta {{1}}, {{2}}, ..."""
+    if not content:
+        return '', []
+    # Order of placeholders for Meta (one {{n}} per placeholder)
+    patterns = [
+        (r'\[\s*Customer Name\s*\]|\[\s*اسم_العميل\s*\]|\[\s*اسم العميل\s*\]', '{{1}}'),
+        (r'\[\s*Company\s*\]|\[\s*الشركة\s*\]|\[\s*شركة\s*\]', '{{2}}'),
+        (r'\[\s*Amount\s*\]|\[\s*المبلغ\s*\]', '{{3}}'),
+        (r'\[\s*Invoice Number\s*\]|\[\s*رقم_الفاتورة\s*\]|\[\s*رقم الفاتورة\s*\]', '{{4}}'),
+    ]
+    text = content
+    examples = []  # list of lists for body_text: [ ["Customer"], ["Company"], ... ]
+    for i, (pattern, repl) in enumerate(patterns):
+        if re.search(pattern, text, re.IGNORECASE):
+            text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+            if i == 0:
+                examples.append(['Customer'])
+            elif i == 1:
+                examples.append(['Company'])
+            elif i == 2:
+                examples.append(['100'])
+            else:
+                examples.append(['INV-001'])
+    return text, examples
+
+
 class MessageTemplateViewSet(viewsets.ModelViewSet):
     """
     قوالب الرسائل لمركز المراسلات (واتساب و SMS).
@@ -1590,4 +1617,124 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(company=self.request.user.company)
+
+    @action(detail=True, methods=['post'], url_path='submit-to-whatsapp')
+    def submit_to_whatsapp(self, request, pk=None):
+        """
+        إرسال قالب واتساب إلى Meta للمراجعة حتى يظهر في حساب واتساب.
+        POST /api/integrations/templates/:id/submit-to-whatsapp/
+        Body (optional): { "language": "en_US" }
+        """
+        template = self.get_object()
+        if (template.channel_type or '').lower() not in ('whatsapp', 'whatsapp_api'):
+            return Response(
+                {'error': 'Only WhatsApp templates can be submitted to Meta.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        company = request.user.company
+        wa = WhatsAppAccount.objects.filter(company=company, status='connected').first()
+        if not wa:
+            return Response(
+                {'error_key': 'no_connected_whatsapp_account', 'error': 'No connected WhatsApp account for this company.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        token = wa.get_access_token()
+        if not token:
+            return Response(
+                {'error_key': 'whatsapp_no_access_token', 'error': 'WhatsApp account has no access token.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Meta template name: lowercase, alphanumeric + underscore
+        meta_name = re.sub(r'[^a-z0-9_]', '_', (template.name or '').lower())[:512]
+        if not meta_name:
+            meta_name = f'template_{template.id}'
+        language = (request.data.get('language') or 'en_US').strip() or 'en_US'
+        category_map = {
+            'auth': 'AUTHENTICATION',
+            'marketing': 'MARKETING',
+            'utility': 'UTILITY',
+        }
+        category = category_map.get((template.category or '').lower(), 'UTILITY')
+        body_text, example_values = _content_to_meta_body(template.content or '')
+        if not body_text or not body_text.strip():
+            return Response(
+                {'error_key': 'template_content_empty', 'error': 'Template content is empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        components = [{'type': 'BODY', 'text': body_text[:1024]}]
+        if example_values:
+            components[0]['example'] = {'body_text': example_values}
+        payload = {
+            'name': meta_name,
+            'language': language,
+            'category': category,
+            'components': components,
+        }
+        url = f'https://graph.facebook.com/v18.0/{wa.waba_id}/message_templates'
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=30)
+            data = resp.json() if resp.content else {}
+            if resp.status_code not in (200, 201):
+                return Response(
+                    data or {'error': resp.text},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            meta_id = (data.get('id') or '').strip() or None
+            meta_status = (data.get('status') or 'PENDING').upper()
+            template.meta_template_id = meta_id
+            template.meta_status = meta_status
+            template.save(update_fields=['meta_template_id', 'meta_status'])
+            return Response({
+                'meta_template_id': meta_id,
+                'status': meta_status,
+                'message': 'Template submitted to WhatsApp for review.',
+            }, status=status.HTTP_200_OK)
+        except requests.RequestException as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+
+# ==================== WhatsApp Messaging Limits (Tier) ====================
+# حد الرسائل الجماعية (٢٥٠ يومياً ثم يزيد حسب الجودة إلى ١٠٠٠ وغيرها)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_limits(request):
+    """
+    جلب حد الرسائل (التير) وجودة الحساب من Meta.
+    GET /api/integrations/whatsapp/limits/
+    Returns: { messaging_limit_tier, quality_rating, ... }
+    """
+    company = request.user.company
+    wa = WhatsAppAccount.objects.filter(company=company, status='connected').first()
+    if not wa:
+        return Response(
+            {'error_key': 'no_connected_whatsapp_account', 'error': 'No connected WhatsApp account for this company.'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    token = wa.get_access_token()
+    if not token:
+        return Response(
+            {'error_key': 'whatsapp_no_access_token', 'error': 'WhatsApp account has no access token.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    url = f'https://graph.facebook.com/v18.0/{wa.phone_number_id}?fields=messaging_limit_tier,quality_rating'
+    headers = {'Authorization': f'Bearer {token}'}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json() if resp.content else {}
+        if resp.status_code != 200:
+            return Response(
+                data.get('error', data) or {'error': resp.text},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(data, status=status.HTTP_200_OK)
+    except requests.RequestException as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
 

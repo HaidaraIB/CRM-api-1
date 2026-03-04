@@ -547,6 +547,19 @@ class MessageTemplate(models.Model):
         default=CATEGORY_UTILITY,
         help_text="فئة القالب (Auth, Marketing, Utility)",
     )
+    # ربط القالب مع Meta (واتساب) بعد الإرسال للمراجعة
+    meta_template_id = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        help_text="معرف القالب في Meta بعد الإرسال",
+    )
+    meta_status = models.CharField(
+        max_length=32,
+        blank=True,
+        null=True,
+        help_text="حالة القالب في Meta: PENDING, APPROVED, REJECTED",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

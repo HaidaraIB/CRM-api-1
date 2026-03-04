@@ -247,8 +247,10 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
             'content',
             'category',
             'category_display',
+            'meta_template_id',
+            'meta_status',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'meta_template_id', 'meta_status', 'created_at', 'updated_at']
 
