@@ -1648,7 +1648,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         meta_name = re.sub(r'[^a-z0-9_]', '_', (template.name or '').lower())[:512]
         if not meta_name:
             meta_name = f'template_{template.id}'
-        language = (request.data.get('language') or 'en_US').strip() or 'en_US'
+        language = (getattr(template, 'language', None) or request.data.get('language') or 'en_US').strip() or 'en_US'
         category_map = {
             'auth': 'AUTHENTICATION',
             'marketing': 'MARKETING',
@@ -1661,9 +1661,40 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 {'error_key': 'template_content_empty', 'error': 'Template content is empty.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        components = [{'type': 'BODY', 'text': body_text[:1024]}]
+        components = []
+        # HEADER (optional): TEXT only for simplicity; media requires upload
+        header_type = (getattr(template, 'header_type', None) or '').strip().lower()
+        header_text = (getattr(template, 'header_text', None) or '').strip()
+        if header_type == 'text' and header_text:
+            components.append({'type': 'HEADER', 'format': 'TEXT', 'text': header_text[:60]})
+        # BODY
+        body_comp = {'type': 'BODY', 'text': body_text[:1024]}
         if example_values:
-            components[0]['example'] = {'body_text': example_values}
+            body_comp['example'] = {'body_text': example_values}
+        components.append(body_comp)
+        # FOOTER (optional)
+        footer = (getattr(template, 'footer', None) or '').strip()
+        if footer:
+            components.append({'type': 'FOOTER', 'text': footer[:60]})
+        # BUTTONS (optional): phone -> CALL, url -> URL, reply -> QUICK_REPLY
+        buttons_data = getattr(template, 'buttons', None) or []
+        if isinstance(buttons_data, list) and buttons_data:
+            meta_buttons = []
+            for b in buttons_data[:10]:  # Meta allows up to 10 buttons
+                if not isinstance(b, dict):
+                    continue
+                btn_type = (b.get('type') or '').lower()
+                text = (b.get('buttonText') or b.get('button_text') or '')[:25].strip() or 'Button'
+                if btn_type == 'phone':
+                    phone = (b.get('phone') or '').strip() or '+1234567890'
+                    meta_buttons.append({'type': 'CALL', 'text': text, 'phone_number': phone[:20]})
+                elif btn_type == 'url':
+                    url = (b.get('url') or '').strip() or 'https://example.com'
+                    meta_buttons.append({'type': 'URL', 'text': text, 'url': url[:2000]})
+                elif btn_type == 'reply':
+                    meta_buttons.append({'type': 'QUICK_REPLY', 'text': text})
+            if meta_buttons:
+                components.append({'type': 'BUTTONS', 'buttons': meta_buttons})
         payload = {
             'name': meta_name,
             'language': language,
@@ -1689,6 +1720,57 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 'meta_template_id': meta_id,
                 'status': meta_status,
                 'message': 'Template submitted to WhatsApp for review.',
+            }, status=status.HTTP_200_OK)
+        except requests.RequestException as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+    @action(detail=False, methods=['post'], url_path='sync-whatsapp')
+    def sync_whatsapp(self, request):
+        """
+        مزامنة حالات قوالب واتساب من Meta (PENDING, APPROVED, REJECTED, ...).
+        POST /api/integrations/templates/sync-whatsapp/
+        """
+        company = request.user.company
+        wa = WhatsAppAccount.objects.filter(company=company, status='connected').first()
+        if not wa:
+            return Response(
+                {'error_key': 'no_connected_whatsapp_account', 'error': 'No connected WhatsApp account for this company.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        token = wa.get_access_token()
+        if not token:
+            return Response(
+                {'error_key': 'whatsapp_no_access_token', 'error': 'WhatsApp account has no access token.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        url = f'https://graph.facebook.com/v18.0/{wa.waba_id}/message_templates?fields=id,name,status'
+        headers = {'Authorization': f'Bearer {token}'}
+        try:
+            resp = requests.get(url, headers=headers, timeout=30)
+            data = resp.json() if resp.content else {}
+            if resp.status_code != 200:
+                return Response(
+                    data.get('error', data) or {'error': resp.text},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            meta_list = data.get('data') or []
+            meta_by_id = {str(t.get('id')).strip(): (t.get('status') or 'PENDING').upper() for t in meta_list if t.get('id')}
+            updated = 0
+            for tpl in MessageTemplate.objects.filter(company=company, meta_template_id__isnull=False).exclude(meta_template_id=''):
+                mid = str(tpl.meta_template_id).strip()
+                if mid in meta_by_id:
+                    new_status = meta_by_id[mid]
+                    if (tpl.meta_status or '') != new_status:
+                        tpl.meta_status = new_status
+                        tpl.save(update_fields=['meta_status'])
+                        updated += 1
+            return Response({
+                'message': 'Templates synced.',
+                'updated': updated,
+                'total_meta': len(meta_list),
             }, status=status.HTTP_200_OK)
         except requests.RequestException as e:
             return Response(

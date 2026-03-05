@@ -547,6 +547,34 @@ class MessageTemplate(models.Model):
         default=CATEGORY_UTILITY,
         help_text="فئة القالب (Auth, Marketing, Utility)",
     )
+    # حقول إضافية لقوالب واتساب (الواجهة الأمامية)
+    language = models.CharField(
+        max_length=20,
+        blank=True,
+        default='en_US',
+        help_text="لغة القالب لواتساب (مثل en_US, ar)",
+    )
+    header_type = models.CharField(
+        max_length=20,
+        blank=True,
+        default='none',
+        help_text="نوع الرأس: none, text, image, video, document",
+    )
+    header_text = models.TextField(
+        blank=True,
+        default='',
+        help_text="نص الرأس عند اختيار header_type=text",
+    )
+    footer = models.TextField(
+        blank=True,
+        default='',
+        help_text="نص التذييل",
+    )
+    buttons = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="قائمة أزرار: [{type: phone|url|reply, button_text, phone?, url?}]",
+    )
     # ربط القالب مع Meta (واتساب) بعد الإرسال للمراجعة
     meta_template_id = models.CharField(
         max_length=128,

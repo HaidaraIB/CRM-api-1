@@ -232,6 +232,18 @@ class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
 
 # --------------- Message Templates (WhatsApp / SMS) ---------------
 
+def _template_name_english_only(value):
+    """Allow only English letters, numbers, spaces, hyphens, underscores (required by WhatsApp/Meta)."""
+    import re
+    if not value or not isinstance(value, str):
+        return
+    if not re.match(r'^[a-zA-Z0-9_\s\-]+$', value.strip()):
+        from rest_framework.exceptions import ValidationError
+        raise ValidationError(
+            'Template name must contain only English letters, numbers, spaces, hyphens and underscores.'
+        )
+
+
 class MessageTemplateSerializer(serializers.ModelSerializer):
     """قوالب الرسائل لمركز المراسلات."""
     channel_type_display = serializers.CharField(source='get_channel_type_display', read_only=True)
@@ -247,10 +259,21 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
             'content',
             'category',
             'category_display',
+            'language',
+            'header_type',
+            'header_text',
+            'footer',
+            'buttons',
             'meta_template_id',
             'meta_status',
             'created_at',
             'updated_at',
         ]
         read_only_fields = ['id', 'meta_template_id', 'meta_status', 'created_at', 'updated_at']
+
+    def validate_name(self, value):
+        if not value:
+            return value
+        _template_name_english_only(value)
+        return value.strip()
 
