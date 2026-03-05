@@ -38,39 +38,37 @@ def get_smtp_connection():
     )
 
 
+def get_broadcast_targets_list(broadcast):
+    """Return list of target strings for a broadcast."""
+    targets = getattr(broadcast, "targets", None)
+    if targets and len(targets) > 0:
+        return list(targets)
+    return ["all"]
+
+
 def get_recipient_emails(broadcast_target):
     """
-    Get list of recipient email addresses based on broadcast target
+    Get list of recipient email addresses based on broadcast target.
 
     Args:
-        broadcast_target: Can be "all" or a plan ID (e.g., "plan_1", "plan_2")
+        broadcast_target: One of:
+            - "all": admins of all companies
+            - "plan_{id}": admins of companies on that plan
+            - "role_admin" / "role_supervisor" / "role_employee": all active users with that role
+            - "company_{id}": all active users in that company
     """
-    emails = []
-    companies = Company.objects.none()  # Empty queryset by default
+    users = _get_eligible_recipient_users_queryset(broadcast_target)
+    emails = [u.email for u in users if u.email]
+    return list(set(emails))
 
-    if broadcast_target == "all":
-        # Get all companies with active subscriptions
-        companies = Company.objects.all()
-    elif broadcast_target.startswith("plan_"):
-        # Extract plan ID from target (e.g., "plan_1" -> 1)
-        try:
-            plan_id = int(broadcast_target.replace("plan_", ""))
 
-            # Get all companies subscribed to this plan
-            subscriptions = Subscription.objects.filter(plan_id=plan_id, is_active=True)
-            company_ids = subscriptions.values_list("company_id", flat=True)
-            companies = Company.objects.filter(id__in=company_ids)
-        except (ValueError, TypeError):
-            # Invalid plan ID, return empty list
-            return []
-
-    for company in companies:
-        admin_users = User.objects.filter(company=company, role=Role.ADMIN.value)
-        for user in admin_users:
-            if user.email:
-                emails.append(user.email)
-
-    return list(set(emails))  # Remove duplicates
+def get_recipient_emails_for_broadcast(broadcast):
+    """Union of recipient emails for all of the broadcast's targets."""
+    targets = get_broadcast_targets_list(broadcast)
+    all_emails = []
+    for t in targets:
+        all_emails.extend(get_recipient_emails(t))
+    return list(set(all_emails))
 
 
 def send_broadcast_email(broadcast, language="ar"):
@@ -91,16 +89,17 @@ def send_broadcast_email(broadcast, language="ar"):
                 "error": "SMTP is not active. Please configure and enable SMTP settings.",
             }
 
-        # Get recipient emails
-        recipient_emails = get_recipient_emails(broadcast.target)
+        # Get recipient emails (supports multiple targets)
+        recipient_emails = get_recipient_emails_for_broadcast(broadcast)
+        targets_list = get_broadcast_targets_list(broadcast)
 
         if not recipient_emails:
             logger.warning(
-                f"No recipients found for broadcast target: {broadcast.target}"
+                f"No recipients found for broadcast targets: {targets_list}"
             )
             return {
                 "success": False,
-                "error": f"No recipients found for target: {broadcast.target}",
+                "error": f"No recipients found for target(s): {', '.join(targets_list)}",
             }
 
         # Get SMTP connection
@@ -161,9 +160,12 @@ def send_broadcast_email(broadcast, language="ar"):
 def _get_eligible_recipient_users_queryset(broadcast_target):
     """
     Get eligible recipient users by target (before FCM token filter).
+
+    Supports: "all", "plan_{id}", "role_admin", "role_supervisor", "role_employee", "company_{id}".
     """
     users = User.objects.none()
     if broadcast_target == "all":
+        # Admins of all companies (legacy: same as role_admin for companies with subscriptions)
         users = User.objects.filter(role=Role.ADMIN.value, is_active=True)
     elif broadcast_target.startswith("plan_"):
         try:
@@ -174,8 +176,20 @@ def _get_eligible_recipient_users_queryset(broadcast_target):
             users = User.objects.filter(
                 company__in=companies,
                 role=Role.ADMIN.value,
-                is_active=True
+                is_active=True,
             )
+        except (ValueError, TypeError):
+            return User.objects.none()
+    elif broadcast_target == "role_admin":
+        users = User.objects.filter(role=Role.ADMIN.value, is_active=True)
+    elif broadcast_target == "role_supervisor":
+        users = User.objects.filter(role=Role.SUPERVISOR.value, is_active=True)
+    elif broadcast_target == "role_employee":
+        users = User.objects.filter(role=Role.EMPLOYEE.value, is_active=True)
+    elif broadcast_target.startswith("company_"):
+        try:
+            company_id = int(broadcast_target.replace("company_", ""))
+            users = User.objects.filter(company_id=company_id, is_active=True)
         except (ValueError, TypeError):
             return User.objects.none()
     return users
@@ -196,6 +210,33 @@ def get_recipient_users(broadcast_target):
     return users
 
 
+def get_recipient_users_for_broadcast(broadcast):
+    """Union of recipient users (with FCM token) for all of the broadcast's targets. Returns list of User, deduplicated."""
+    targets = get_broadcast_targets_list(broadcast)
+    seen_ids = set()
+    result = []
+    for t in targets:
+        for user in get_recipient_users(t):
+            if user.id not in seen_ids:
+                seen_ids.add(user.id)
+                result.append(user)
+    return result
+
+
+def _get_eligible_count_for_broadcast(broadcast):
+    """Total eligible users (before FCM filter) across all targets, deduplicated by user id."""
+    targets = get_broadcast_targets_list(broadcast)
+    seen_ids = set()
+    count = 0
+    for t in targets:
+        qs = _get_eligible_recipient_users_queryset(t)
+        for u in qs.values_list("id", flat=True):
+            if u not in seen_ids:
+                seen_ids.add(u)
+                count += 1
+    return count
+
+
 def send_broadcast_push_notification(broadcast):
     """
     Send broadcast push notification to recipients based on target
@@ -207,21 +248,20 @@ def send_broadcast_push_notification(broadcast):
         # Initialize Firebase if not already initialized
         NotificationService.initialize()
         
-        # Get eligible users and those with FCM token
-        eligible = _get_eligible_recipient_users_queryset(broadcast.target)
-        eligible_count = eligible.count()
-        users = get_recipient_users(broadcast.target)
-        users_list = list(users)
+        # Get eligible users and those with FCM token (supports multiple targets)
+        targets_list = get_broadcast_targets_list(broadcast)
+        eligible_count = _get_eligible_count_for_broadcast(broadcast)
+        users_list = get_recipient_users_for_broadcast(broadcast)
         skipped_no_token = max(0, eligible_count - len(users_list))
         
         if not users_list:
             logger.warning(
-                f"No recipients with FCM tokens found for broadcast target: {broadcast.target} "
+                f"No recipients with FCM tokens found for broadcast targets: {targets_list} "
                 f"(eligible: {eligible_count}, skipped_no_token: {skipped_no_token})"
             )
             return {
                 "success": False,
-                "error": f"No recipients with push notification tokens found for target: {broadcast.target}. "
+                "error": f"No recipients with push notification tokens found for target(s): {', '.join(targets_list)}. "
                          f"{skipped_no_token} user(s) have no FCM token (ask them to open the app on their device).",
                 "eligible_count": eligible_count,
                 "skipped_no_token": skipped_no_token,

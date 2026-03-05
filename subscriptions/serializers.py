@@ -225,14 +225,49 @@ class InvoiceListSerializer(serializers.ModelSerializer):
         ]
 
 
+def _validate_broadcast_target(value):
+    """Validate broadcast target format and that referenced plan/company exists."""
+    from subscriptions.models import Plan
+    from companies.models import Company
+    if value == "all":
+        return
+    if value in ("role_admin", "role_supervisor", "role_employee"):
+        return
+    if value.startswith("plan_"):
+        try:
+            plan_id = int(value.replace("plan_", ""))
+            if not Plan.objects.filter(id=plan_id).exists():
+                raise serializers.ValidationError(f"Plan with id {plan_id} does not exist.")
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Invalid plan target format. Use plan_<id>.")
+        return
+    if value.startswith("company_"):
+        try:
+            company_id = int(value.replace("company_", ""))
+            if not Company.objects.filter(id=company_id).exists():
+                raise serializers.ValidationError(f"Company with id {company_id} does not exist.")
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Invalid company target format. Use company_<id>.")
+        return
+    raise serializers.ValidationError(
+        "Target must be: all, plan_<id>, company_<id>, role_admin, role_supervisor, or role_employee."
+    )
+
+
 class BroadcastSerializer(serializers.ModelSerializer):
+    targets = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=True,
+    )
+
     class Meta:
         model = Broadcast
         fields = [
             "id",
             "subject",
             "content",
-            "target",
+            "targets",
             "broadcast_type",
             "status",
             "scheduled_at",
@@ -242,19 +277,54 @@ class BroadcastSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "sent_at", "created_at", "updated_at"]
 
+    def validate_targets(self, value):
+        if not value:
+            return []
+        for t in value:
+            if not t:
+                continue
+            _validate_broadcast_target(t)
+        return value
+
+    def create(self, validated_data):
+        targets = validated_data.get("targets") or []
+        if not targets:
+            validated_data["targets"] = ["all"]
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        targets = validated_data.get("targets")
+        if targets is not None and len(targets) == 0:
+            validated_data["targets"] = ["all"]
+        return super().update(instance, validated_data)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        targets = getattr(instance, "targets", None)
+        data["targets"] = list(targets) if targets and len(targets) > 0 else ["all"]
+        return data
+
 
 class BroadcastListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
+    targets = serializers.SerializerMethodField()
 
     class Meta:
         model = Broadcast
         fields = [
             "id",
             "subject",
-            "target",
+            "targets",
+            "broadcast_type",
             "status",
+            "scheduled_at",
+            "sent_at",
             "created_at",
         ]
+
+    def get_targets(self, obj):
+        targets = getattr(obj, "targets", None)
+        return list(targets) if targets and len(targets) > 0 else ["all"]
 
 
 class PaymentGatewaySerializer(serializers.ModelSerializer):

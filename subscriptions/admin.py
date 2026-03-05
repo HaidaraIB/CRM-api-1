@@ -185,7 +185,8 @@ class BroadcastAdmin(admin.ModelAdmin):
 
     list_display = [
         "subject",
-        "target",
+        "targets",
+        "broadcast_type",
         "status",
         "scheduled_at",
         "sent_at",
@@ -193,7 +194,7 @@ class BroadcastAdmin(admin.ModelAdmin):
     ]
     list_filter = [
         "status",
-        "target",
+        "broadcast_type",
         "created_at",
     ]
     search_fields = [

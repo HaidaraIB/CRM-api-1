@@ -193,7 +193,7 @@ class Invoice(models.Model):
 class Broadcast(models.Model):
     subject = models.CharField(max_length=255)
     content = models.TextField()
-    target = models.CharField(max_length=50, default="all")
+    targets = models.JSONField(default=list, blank=True)  # list of target strings e.g. ["role_admin", "plan_1"]
     broadcast_type = models.CharField(
         max_length=10,
         choices=BroadcastType.choices(),

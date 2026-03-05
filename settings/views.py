@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import Path
 
 from rest_framework import viewsets, filters, status
@@ -236,16 +237,24 @@ class SystemBackupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["get"])
     def download(self, request, pk=None):
         backup = self.get_object()
-        if not backup.file:
+        if not backup.file or not backup.file.name:
             return Response(
                 {"detail": "Backup file not found on disk."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        file_path = backup.file.path
+        try:
+            with backup.file.open("rb") as f:
+                content = f.read()
+        except (OSError, FileNotFoundError):
+            return Response(
+                {"detail": "Backup file not found on disk."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        filename = Path(backup.file.name).name
         response = FileResponse(
-            open(file_path, "rb"),
+            BytesIO(content),
             as_attachment=True,
-            filename=Path(file_path).name,
+            filename=filename,
         )
         return response
 

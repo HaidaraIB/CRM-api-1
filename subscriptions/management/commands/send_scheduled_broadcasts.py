@@ -14,8 +14,8 @@ For cron, add to crontab:
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from subscriptions.models import Broadcast, BroadcastStatus
-from subscriptions.utils import send_broadcast_email
+from subscriptions.models import Broadcast, BroadcastStatus, BroadcastType
+from subscriptions.utils import send_broadcast_email, send_broadcast_push_notification
 import logging
 
 logger = logging.getLogger(__name__)
@@ -88,9 +88,11 @@ class Command(BaseCommand):
             scheduled_time = broadcast.scheduled_at.strftime('%Y-%m-%d %H:%M:%S')
             
             if verbose:
+                from subscriptions.utils import get_broadcast_targets_list
+                targets_list = get_broadcast_targets_list(broadcast)
                 self.stdout.write(
                     f'  - Broadcast ID {broadcast.id}: "{broadcast.subject}" '
-                    f'(scheduled for {scheduled_time}, target: {broadcast.target})'
+                    f'(scheduled for {scheduled_time}, targets: {targets_list})'
                 )
             
             if dry_run:
@@ -102,8 +104,12 @@ class Command(BaseCommand):
                 sent_count += 1
                 continue
             
-            # Send the broadcast email
-            result = send_broadcast_email(broadcast)
+            # Send by broadcast type (email or push)
+            broadcast_type = broadcast.broadcast_type or BroadcastType.EMAIL.value
+            if broadcast_type == BroadcastType.PUSH.value:
+                result = send_broadcast_push_notification(broadcast)
+            else:
+                result = send_broadcast_email(broadcast)
             
             if result.get('success'):
                 # Update broadcast status
