@@ -9,6 +9,7 @@ Usage:
     python manage.py check_lead_no_follow_up --hours 6
     python manage.py check_lead_no_follow_up --dry-run
 """
+import math
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.db import models
@@ -67,19 +68,25 @@ class Command(BaseCommand):
                 skipped_count += 1
                 continue
 
-            # Calculate hours since last contact (or since assignment if never contacted)
-            if lead.last_contacted_at:
-                hours_since = int((timezone.now() - lead.last_contacted_at).total_seconds() / 3600)
-            elif lead.assigned_at:
-                hours_since = int((timezone.now() - lead.assigned_at).total_seconds() / 3600)
-            else:
-                hours_since = 0
+            # Reference time: last contact, or assignment, or creation (real value for display)
+            reference = (
+                lead.last_contacted_at
+                or lead.assigned_at
+                or lead.created_at
+            )
+            # Only notify when the lead has had no action for at least `hours` (e.g. 6h)
+            if reference > threshold:
+                skipped_count += 1
+                continue
+            seconds = max(0, (timezone.now() - reference).total_seconds())
+            # ceil so e.g. 30 min → 1 hour (real calculated value); never show 0
+            hours_display = max(1, math.ceil(seconds / 3600))
 
             if dry_run:
                 self.stdout.write(
                     self.style.SUCCESS(
                         f'[DRY RUN] Would send notification to {lead.assigned_to.username} '
-                        f'for lead {lead.id} ({lead.name}) - No follow-up for {hours_since} hours'
+                        f'for lead {lead.id} ({lead.name}) - No follow-up for {hours_display} hours'
                     )
                 )
             else:
@@ -90,14 +97,14 @@ class Command(BaseCommand):
                         data={
                             'lead_id': lead.id,
                             'lead_name': lead.name,
-                            'hours': hours_since,
+                            'hours': hours_display,
                         },
                         lead_source=getattr(lead, 'source', None),
                     )
                     sent_count += 1
                     self.stdout.write(
                         self.style.SUCCESS(
-                            f'Sent notification to {lead.assigned_to.username} for lead {lead.id} ({lead.name}) - {hours_since} hours without follow-up'
+                            f'Sent notification to {lead.assigned_to.username} for lead {lead.id} ({lead.name}) - {hours_display} hours without follow-up'
                         )
                     )
                 except Exception as e:
