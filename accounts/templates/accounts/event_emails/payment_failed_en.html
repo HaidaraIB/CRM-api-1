@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        body { background-color: #f5f3ff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 32px 16px; color: #1f1f2e; }
+        .wrapper { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 24px; box-shadow: 0 20px 50px rgba(111, 62, 240, 0.15); overflow: hidden; border: 1px solid rgba(111, 62, 240, 0.08); }
+        .header { background: linear-gradient(135deg, #b91c1c, #dc2626); padding: 32px; color: #fff; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 700; }
+        .content { padding: 32px; line-height: 1.65; }
+        .note { padding: 16px; background: #fef2f2; border-radius: 12px; color: #991b1b; margin: 16px 0; }
+        .footer { padding: 24px 32px; font-size: 12px; color: #78738c; background: #fafafc; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="header"><h1>Payment failed</h1></div>
+        <div class="content">
+            <p>Hi {{ greeting_name }},</p>
+            <p>We were unable to process your payment for <strong>{{ plan_name }}</strong>.</p>
+            <div class="note">{{ reason }}</div>
+            <p>You can try again from your subscription page or choose a different payment method. If the problem continues, reply to this email and we'll help you.</p>
+        </div>
+        <div class="footer">Sent by LOOP CRM · Need help? Reply to: {{ support_email }}</div>
+    </div>
+</body>
+</html>

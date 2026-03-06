@@ -71,13 +71,32 @@ def get_recipient_emails_for_broadcast(broadcast):
     return list(set(all_emails))
 
 
-def send_broadcast_email(broadcast, language="ar"):
+def get_recipient_users_for_email_broadcast(broadcast):
     """
-    Send broadcast email to recipients based on target
+    Return list of User objects (with email) for all of the broadcast's targets, deduplicated.
+    Used to send each recipient the broadcast in their preferred language.
+    """
+    targets = get_broadcast_targets_list(broadcast)
+    seen_ids = set()
+    result = []
+    for t in targets:
+        users = _get_eligible_recipient_users_queryset(t)
+        for u in users:
+            if u.email and u.id not in seen_ids:
+                seen_ids.add(u.id)
+                result.append(u)
+    return result
+
+
+def send_broadcast_email(broadcast, language=None):
+    """
+    Send broadcast email to recipients based on target.
+    Each recipient receives the email in their chosen language (user.language).
+    If language is passed (e.g. from admin), it is used as fallback when user has no preference.
 
     Args:
         broadcast: Broadcast instance
-        language: Language code ('ar' for Arabic, 'en' for English). Default: 'ar'
+        language: Optional override; if None, each user gets email in their preferred language.
     """
     try:
         smtp_settings = SMTPSettings.get_settings()
@@ -89,11 +108,11 @@ def send_broadcast_email(broadcast, language="ar"):
                 "error": "SMTP is not active. Please configure and enable SMTP settings.",
             }
 
-        # Get recipient emails (supports multiple targets)
-        recipient_emails = get_recipient_emails_for_broadcast(broadcast)
+        # Get recipient users (with email) so we can use each user's language
+        recipient_users = get_recipient_users_for_email_broadcast(broadcast)
         targets_list = get_broadcast_targets_list(broadcast)
 
-        if not recipient_emails:
+        if not recipient_users:
             logger.warning(
                 f"No recipients found for broadcast targets: {targets_list}"
             )
@@ -102,53 +121,52 @@ def send_broadcast_email(broadcast, language="ar"):
                 "error": f"No recipients found for target(s): {', '.join(targets_list)}",
             }
 
-        # Get SMTP connection
         connection = get_smtp_connection()
-
-        # Prepare email
         from_email = (
             f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
             if smtp_settings.from_name
             else smtp_settings.from_email
         )
+        default_lang = language if language in ("ar", "en") else "ar"
 
-        # Determine template based on language
-        if language == "en":
-            template_name = "subscriptions/broadcast_email_en.html"
-        else:
-            template_name = "subscriptions/broadcast_email.html"  # Default Arabic
+        sent_count = 0
+        recipient_emails = []
+        for user in recipient_users:
+            # Use user's chosen language, then optional override, then default
+            user_lang = getattr(user, "language", None)
+            if user_lang in ("ar", "en"):
+                lang = user_lang
+            else:
+                lang = default_lang
 
-        # Prepare context for template
-        context = {"broadcast": broadcast, "from_name": smtp_settings.from_name}
+            if lang == "en":
+                template_name = "subscriptions/broadcast_email_en.html"
+            else:
+                template_name = "subscriptions/broadcast_email.html"
 
-        # Render HTML template
-        html_content = render_to_string(template_name, context)
+            context = {"broadcast": broadcast, "from_name": smtp_settings.from_name}
+            html_content = render_to_string(template_name, context)
+            plain_text = broadcast.content
 
-        # Create plain text version (fallback)
-        plain_text = broadcast.content
-
-        # Create email message
-        email = EmailMultiAlternatives(
-            subject=broadcast.subject,
-            body=plain_text,
-            from_email=from_email,
-            to=recipient_emails,
-            connection=connection,
-        )
-
-        # Attach HTML version
-        email.attach_alternative(html_content, "text/html")
-
-        # Send email
-        email.send()
+            email_msg = EmailMultiAlternatives(
+                subject=broadcast.subject,
+                body=plain_text,
+                from_email=from_email,
+                to=[user.email],
+                connection=connection,
+            )
+            email_msg.attach_alternative(html_content, "text/html")
+            email_msg.send()
+            sent_count += 1
+            recipient_emails.append(user.email)
 
         logger.info(
-            f"Broadcast {broadcast.id} sent successfully to {len(recipient_emails)} recipients"
+            f"Broadcast {broadcast.id} sent successfully to {sent_count} recipients (per-user language)"
         )
 
         return {
             "success": True,
-            "recipients_count": len(recipient_emails),
+            "recipients_count": sent_count,
             "recipients": recipient_emails,
         }
 

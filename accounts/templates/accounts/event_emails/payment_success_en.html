@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        body { background-color: #f5f3ff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 32px 16px; color: #1f1f2e; }
+        .wrapper { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 24px; box-shadow: 0 20px 50px rgba(111, 62, 240, 0.15); overflow: hidden; border: 1px solid rgba(111, 62, 240, 0.08); }
+        .header { background: linear-gradient(135deg, #7c3aed, #6f3ef0); padding: 32px; color: #fff; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 700; }
+        .content { padding: 32px; line-height: 1.65; }
+        .highlight { padding: 16px 24px; font-size: 18px; font-weight: 600; color: #6f3ef0; background: rgba(111, 62, 240, 0.08); border-radius: 16px; margin: 16px 0; }
+        .footer { padding: 24px 32px; font-size: 12px; color: #78738c; background: #fafafc; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="header"><h1>Payment received successfully</h1></div>
+        <div class="content">
+            <p>Hi {{ greeting_name }},</p>
+            <p>Your payment has been received successfully. Thank you for your subscription.</p>
+            <div class="highlight">Plan: {{ plan_name }} · Amount: {{ amount }}</div>
+            <p>Your subscription is now active. If you have any questions, reply to this email.</p>
+        </div>
+        <div class="footer">Sent by LOOP CRM · Need help? Reply to: {{ support_email }}</div>
+    </div>
+</body>
+</html>

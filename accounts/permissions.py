@@ -9,7 +9,7 @@ class HasActiveSubscription(permissions.BasePermission):
     Checks both is_active flag and end_date to ensure subscription is truly active.
     Super Admin is exempt from this check.
     """
-    message = "Your subscription is not active or has expired. Please contact support or complete your payment to access the system."
+    message = "Your subscription is not active or has expired. Please contact support or Complete Your Payment to access the system."
     
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:

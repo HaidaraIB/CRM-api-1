@@ -154,8 +154,12 @@ class PaymentSerializer(serializers.ModelSerializer):
             "subscription_company_name",
             "subscription_plan_name",
             "amount",
+            "currency",
+            "exchange_rate",
+            "amount_usd",
             "payment_method",
             "payment_status",
+            "tran_ref",
             "created_at",
             "updated_at",
         ]
@@ -163,7 +167,7 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class PaymentListSerializer(serializers.ModelSerializer):
-    """Simplified serializer for list views"""
+    """Simplified serializer for list views. Use amount_usd for display in USD."""
 
     subscription_company_name = serializers.CharField(
         source="subscription.company.name", read_only=True
@@ -176,8 +180,12 @@ class PaymentListSerializer(serializers.ModelSerializer):
             "subscription",
             "subscription_company_name",
             "amount",
+            "currency",
+            "exchange_rate",
+            "amount_usd",
             "payment_method",
             "payment_status",
+            "tran_ref",
             "created_at",
         ]
 

@@ -9,6 +9,56 @@ from settings.models import SMTPSettings
 
 logger = logging.getLogger(__name__)
 
+# Supported email languages
+EMAIL_LANGUAGES = ("ar", "en")
+
+
+def get_email_language_for_user(user, request=None, default="en"):
+    """
+    Get the language to use for sending email to a user.
+
+    Priority: X-Language header (current UI language from frontend) -> user.language (DB) ->
+    Accept-Language header -> default. This way the language the user is actually using
+    in the app (sent by the frontend) wins over the stored backend value, which may be
+    out of sync if the app only keeps language in localStorage.
+
+    Args:
+        user: User model instance (may have .language field).
+        request: Optional HttpRequest for headers (X-Language, Accept-Language).
+        default: Fallback when no preference is available.
+
+    Returns:
+        'ar' or 'en'
+    """
+    # 1) X-Language: frontend sends current UI language with each request (e.g. from localStorage)
+    if request:
+        x_lang = (request.META.get("HTTP_X_LANGUAGE") or "").strip().lower()
+        if x_lang in EMAIL_LANGUAGES:
+            return x_lang
+        if x_lang.startswith("en"):
+            return "en"
+        if x_lang.startswith("ar"):
+            return "ar"
+    # 2) User's saved preference in DB
+    raw = getattr(user, "language", None)
+    if raw is not None and str(raw).strip():
+        lang = str(raw).strip().lower()
+        if lang in EMAIL_LANGUAGES:
+            return lang
+        if lang.startswith("en"):
+            return "en"
+        if lang.startswith("ar"):
+            return "ar"
+    # 3) Accept-Language
+    if request:
+        accept = request.META.get("HTTP_ACCEPT_LANGUAGE", "") or ""
+        accept_lower = accept.lower()
+        if "en" in accept_lower:
+            return "en"
+        if "ar" in accept_lower:
+            return "ar"
+    return default if default in EMAIL_LANGUAGES else "en"
+
 
 def _get_smtp_connection():
     smtp_settings = SMTPSettings.get_settings()

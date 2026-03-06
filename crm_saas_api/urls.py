@@ -99,6 +99,7 @@ from subscriptions.views import (
     check_payment_status,
 )
 from integrations import urls as integrations_urls
+from support.views import SupportTicketViewSet
 
 # Create a router and register viewsets
 router = DefaultRouter()
@@ -152,6 +153,7 @@ router.register(r"payment-gateways", PaymentGatewayViewSet, basename="paymentgat
 router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
 router.register(r"supervisors", SupervisorViewSet, basename="supervisor")
+router.register(r"support-tickets", SupportTicketViewSet, basename="supportticket")
 
 urlpatterns = [
     path("", home, name="home"),

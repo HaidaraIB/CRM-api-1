@@ -1,5 +1,5 @@
 """
-Management command to check for expiring subscriptions and send notifications
+Management command to check for expiring subscriptions and send push + email notifications.
 Usage:
     python manage.py check_subscription_expiring
     python manage.py check_subscription_expiring --days-before 3
@@ -11,6 +11,8 @@ from datetime import timedelta
 from subscriptions.models import Subscription
 from notifications.services import NotificationService
 from notifications.models import NotificationType
+from accounts.event_emails import send_subscription_expiring_email
+from accounts.utils import get_email_language_for_user
 import logging
 
 logger = logging.getLogger(__name__)
@@ -39,7 +41,7 @@ class Command(BaseCommand):
         expiry_date = timezone.now().date() + timedelta(days=days_before)
 
         subscriptions = Subscription.objects.filter(
-            status='active',
+            is_active=True,
             end_date=expiry_date,
             company__owner__isnull=False,
         ).select_related('company', 'company__owner')
@@ -55,40 +57,50 @@ class Command(BaseCommand):
 
         for subscription in subscriptions:
             owner = subscription.company.owner
-            if not owner or not owner.fcm_token:
+            if not owner:
                 skipped_count += 1
                 continue
 
             if dry_run:
                 self.stdout.write(
                     self.style.SUCCESS(
-                        f'[DRY RUN] Would send notification to {owner.username} '
-                        f'for subscription {subscription.id} - Expires in {days_before} days'
+                        "[DRY RUN] Would send push + email to %s for subscription %s - Expires in %s days"
+                        % (owner.username, subscription.id, days_before)
                     )
                 )
-            else:
-                try:
+                sent_count += 1
+                continue
+
+            try:
+                # Push notification (skip if no FCM token)
+                if owner.fcm_token:
                     NotificationService.send_notification(
                         user=owner,
                         notification_type=NotificationType.SUBSCRIPTION_EXPIRING,
                         data={
-                            'days_remaining': days_before,
-                            'expiry_date': subscription.end_date.isoformat(),
+                            "days_remaining": days_before,
+                            "expiry_date": subscription.end_date.isoformat(),
                         },
-                        skip_settings_check=False,  # Respect user settings (but subscription notifications are critical)
+                        skip_settings_check=False,
                     )
-                    sent_count += 1
-                    self.stdout.write(
-                        self.style.SUCCESS(
-                            f'Sent notification to {owner.username} for subscription {subscription.id}'
-                        )
+                # Email in owner's language
+                if owner.email:
+                    language = get_email_language_for_user(owner, request=None, default="en")
+                    send_subscription_expiring_email(
+                        owner, subscription, days_before, language=language
                     )
-                except Exception as e:
-                    logger.error(f"Error sending notification for subscription {subscription.id}: {e}")
-                    self.stdout.write(
-                        self.style.ERROR(f'Error sending notification for subscription {subscription.id}: {e}')
+                sent_count += 1
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        "Sent notification to %s for subscription %s" % (owner.username, subscription.id)
                     )
-                    skipped_count += 1
+                )
+            except Exception as e:
+                logger.error("Error sending notification for subscription %s: %s", subscription.id, e)
+                self.stdout.write(
+                    self.style.ERROR("Error sending notification for subscription %s: %s" % (subscription.id, e))
+                )
+                skipped_count += 1
 
         if dry_run:
             self.stdout.write(

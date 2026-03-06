@@ -146,10 +146,22 @@ class PaymentGateway(models.Model):
 
 
 class Payment(models.Model):
+    """Amount is stored in the currency the customer actually paid (e.g. IQD or USD)."""
     subscription = models.ForeignKey(
         Subscription, on_delete=models.CASCADE, related_name="payments"
     )
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=10, default="USD", help_text="ISO currency code (USD, IQD, etc.)")
+    # Exchange rate at payment time (e.g. USD to IQD). Used to convert to USD for display/reporting.
+    exchange_rate = models.DecimalField(
+        max_digits=18, decimal_places=6, null=True, blank=True,
+        help_text="Rate at payment time (e.g. 1 USD = exchange_rate IQD). Null if USD."
+    )
+    # Amount in USD for consistent display and reporting. amount_usd = amount / exchange_rate when currency != USD.
+    amount_usd = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Payment amount in USD (stored at payment time for reporting)."
+    )
     payment_method = models.ForeignKey(
         PaymentGateway, on_delete=models.CASCADE, related_name="payments"
     )
@@ -163,7 +175,7 @@ class Payment(models.Model):
         db_table = "payments"
 
     def __str__(self):
-        return f"Payment #{self.id} - {self.subscription.company.name} - {self.amount}"
+        return f"Payment #{self.id} - {self.subscription.company.name} - {self.amount} {self.currency}"
 
 
 class Invoice(models.Model):

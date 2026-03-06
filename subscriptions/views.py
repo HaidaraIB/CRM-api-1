@@ -568,11 +568,15 @@ def create_paytabs_payment(request):
                     {"error": "Paytabs gateway is not configured or enabled"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            # Create payment record
+            # Create payment record (amount in USD at creation; callback will update to IQD if PayTabs charges in IQD)
             tran_ref = result.get("tran_ref", "")
+            from decimal import Decimal
             payment = Payment.objects.create(
                 subscription=subscription,
                 amount=amount,
+                currency="USD",
+                exchange_rate=Decimal("1"),
+                amount_usd=Decimal(str(amount)),
                 payment_method=paytabs_gateway,  # Use ForeignKey
                 payment_status=PaymentStatus.PENDING.value,
                 tran_ref=tran_ref,  # Store tran_ref
@@ -753,6 +757,24 @@ def paytabs_return(request):
             ).first()
 
             amount = float(result.get("cart_amount", 0))
+            cart_currency = (result.get("cart_currency") or "IQD").upper()[:10]
+            if not cart_currency:
+                cart_currency = "IQD"
+            
+            try:
+                from settings.models import SystemSettings
+                system_settings = SystemSettings.get_settings()
+                usd_to_iqd_rate = float(system_settings.usd_to_iqd_rate)
+            except Exception:
+                usd_to_iqd_rate = 1300.0
+            from decimal import Decimal
+            if cart_currency == "IQD" and usd_to_iqd_rate:
+                exchange_rate = Decimal(str(usd_to_iqd_rate))
+                amount_usd_val = Decimal(str(amount)) / exchange_rate
+                amount_usd_val = amount_usd_val.quantize(Decimal("0.01"))
+            else:
+                exchange_rate = Decimal("1")
+                amount_usd_val = Decimal(str(amount))
             
             # Find existing payment or create new one
             payment = None
@@ -766,45 +788,49 @@ def paytabs_return(request):
                 )
 
                 if payment:
-                    # Update existing payment
+                    # Update existing payment with actual charged amount, currency, rate and amount_usd
                     logger.info(f"Updating existing payment: ID={payment.id}, Old status={payment.payment_status}, "
-                               f"Old amount={payment.amount}, Old tran_ref={payment.tran_ref}")
+                               f"Old amount={payment.amount} {payment.currency}, Old tran_ref={payment.tran_ref}")
                     payment.payment_status = PaymentStatus.COMPLETED.value
                     payment.tran_ref = tran_ref
                     payment.amount = amount
+                    payment.currency = cart_currency
+                    payment.exchange_rate = exchange_rate
+                    payment.amount_usd = amount_usd_val
                     payment.save()
                     logger.info(f"Payment updated successfully: ID={payment.id}, New status={payment.payment_status}, "
-                               f"New amount={payment.amount}, New tran_ref={payment.tran_ref}")
+                               f"New amount={payment.amount} {payment.currency}, New tran_ref={payment.tran_ref}")
                 else:
-                    # Create new payment
-                    logger.info(f"Creating new payment: subscription_id={subscription.id}, amount={amount}, "
+                    # Create new payment (PayTabs return sends amount in gateway currency, e.g. IQD)
+                    logger.info(f"Creating new payment: subscription_id={subscription.id}, amount={amount} {cart_currency}, "
                                f"gateway={paytabs_gateway.name if paytabs_gateway else 'None'}, tran_ref={tran_ref}")
                     payment = Payment.objects.create(
                         subscription=subscription,
                         amount=amount,
+                        currency=cart_currency,
+                        exchange_rate=exchange_rate,
+                        amount_usd=amount_usd_val,
                         payment_method=paytabs_gateway,
                         payment_status=PaymentStatus.COMPLETED.value,
                         tran_ref=tran_ref,
                     )
                     logger.info(f"Payment created successfully: ID={payment.id}, status={payment.payment_status}")
             
-            # Determine billing cycle based on payment amount
+            # Determine billing cycle: compare USD equivalent to plan prices (plan prices are in USD)
             plan = subscription.plan
             billing_cycle = None
+            amount_usd = float(amount_usd_val)
             
-            # Check if amount matches yearly price (with small tolerance for rounding)
-            if abs(amount - float(plan.price_yearly)) < 0.01:
+            if abs(amount_usd - float(plan.price_yearly)) < 0.01:
                 billing_cycle = "yearly"
-            # Check if amount matches monthly price (with small tolerance for rounding)
-            elif abs(amount - float(plan.price_monthly)) < 0.01:
+            elif abs(amount_usd - float(plan.price_monthly)) < 0.01:
                 billing_cycle = "monthly"
             else:
-                # If amount doesn't match exactly, determine by comparing which is closer
-                yearly_diff = abs(amount - float(plan.price_yearly))
-                monthly_diff = abs(amount - float(plan.price_monthly))
+                yearly_diff = abs(amount_usd - float(plan.price_yearly))
+                monthly_diff = abs(amount_usd - float(plan.price_monthly))
                 billing_cycle = "yearly" if yearly_diff < monthly_diff else "monthly"
                 logger.warning(
-                    f"Payment amount {amount} doesn't exactly match plan prices "
+                    f"Payment amount {amount} {cart_currency} (≈{amount_usd} USD) doesn't exactly match plan prices "
                     f"(yearly: {plan.price_yearly}, monthly: {plan.price_monthly}). "
                     f"Using {billing_cycle} based on closest match."
                 )
@@ -1050,10 +1076,14 @@ def create_zaincash_payment(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
-        # Create payment record
+        # Create payment record (amount in USD at creation; return callback will update to IQD)
+        from decimal import Decimal
         payment = Payment.objects.create(
             subscription=subscription,
             amount=amount,
+            currency="USD",
+            exchange_rate=Decimal("1"),
+            amount_usd=Decimal(str(amount)),
             payment_method=zaincash_gateway,
             payment_status=PaymentStatus.PENDING.value,
             tran_ref=transaction_id,  # Store transaction ID
@@ -1428,9 +1458,22 @@ def zaincash_return(request):
             from .zaincash_utils import get_zaincash_gateway
             zaincash_gateway = get_zaincash_gateway()
 
+            # Zain Cash charges in IQD; decoded token contains the amount actually charged (IQD)
+            amount_iqd = float(result.get("amount", 0))
+            payment_currency = "IQD"
+            try:
+                from settings.models import SystemSettings
+                system_settings = SystemSettings.get_settings()
+                usd_to_iqd_rate = float(system_settings.usd_to_iqd_rate)
+            except Exception:
+                usd_to_iqd_rate = 1300.0
+            from decimal import Decimal
+            exchange_rate = Decimal(str(usd_to_iqd_rate))
+            amount_usd_val = (Decimal(str(amount_iqd)) / exchange_rate).quantize(Decimal("0.01"))
+
             # Find existing payment first (it should exist from when we created the session)
             payment = None
-            amount = 0.0
+            amount = amount_iqd
             if zaincash_gateway:
                 payment = (
                     Payment.objects.filter(
@@ -1441,29 +1484,22 @@ def zaincash_return(request):
                 )
 
                 if payment:
-                    # Get amount from existing payment record
-                    amount = float(payment.amount)
-                    # Update existing payment
+                    # Update existing payment with actual charged amount, currency, rate and amount_usd
                     payment.payment_status = PaymentStatus.COMPLETED.value
                     payment.tran_ref = token  # Store the JWT token from Zain Cash
+                    payment.amount = amount
+                    payment.currency = payment_currency
+                    payment.exchange_rate = exchange_rate
+                    payment.amount_usd = amount_usd_val
                     payment.save()
                 else:
-                    # Payment record doesn't exist - get amount from subscription plan
-                    # This shouldn't normally happen, but handle it gracefully
-                    plan = subscription.plan
-                    # Try to determine billing cycle from subscription or default to monthly
-                    if subscription.end_date and subscription.start_date:
-                        days_diff = (subscription.end_date - subscription.start_date).days
-                        billing_cycle = "yearly" if days_diff >= 330 else "monthly"
-                    else:
-                        billing_cycle = "monthly"  # Default to monthly
-                    
-                    amount = float(plan.price_yearly if billing_cycle == "yearly" else plan.price_monthly)
-                    
-                    # Create new payment record
+                    # Payment record doesn't exist - use amount from token (IQD)
                     payment = Payment.objects.create(
                         subscription=subscription,
                         amount=amount,
+                        currency=payment_currency,
+                        exchange_rate=exchange_rate,
+                        amount_usd=amount_usd_val,
                         payment_method=zaincash_gateway,
                         payment_status=PaymentStatus.COMPLETED.value,
                         tran_ref=token,
@@ -1473,30 +1509,30 @@ def zaincash_return(request):
                         f"this shouldn't normally happen as payment should exist from session creation"
                     )
             
-            # Determine billing cycle based on payment amount
+            # Determine billing cycle: compare USD equivalent to plan prices (plan prices are in USD)
             plan = subscription.plan
             billing_cycle = None
+            amount_usd = float(amount_usd_val)
             
-            if amount > 0:
-                if abs(amount - float(plan.price_yearly)) < 0.01:
+            if amount_usd > 0:
+                if abs(amount_usd - float(plan.price_yearly)) < 0.01:
                     billing_cycle = "yearly"
-                elif abs(amount - float(plan.price_monthly)) < 0.01:
+                elif abs(amount_usd - float(plan.price_monthly)) < 0.01:
                     billing_cycle = "monthly"
                 else:
-                    yearly_diff = abs(amount - float(plan.price_yearly))
-                    monthly_diff = abs(amount - float(plan.price_monthly))
+                    yearly_diff = abs(amount_usd - float(plan.price_yearly))
+                    monthly_diff = abs(amount_usd - float(plan.price_monthly))
                     billing_cycle = "yearly" if yearly_diff < monthly_diff else "monthly"
                     logger.info(
-                        f"Payment amount {amount} doesn't exactly match plan prices "
+                        f"Payment amount {amount} {payment_currency} (≈{amount_usd} USD) doesn't exactly match plan prices "
                         f"(yearly: {plan.price_yearly}, monthly: {plan.price_monthly}). "
                         f"Using {billing_cycle} based on closest match."
                     )
             else:
-                # If amount is still 0, default to monthly
                 billing_cycle = "monthly"
-                amount = float(plan.price_monthly)
+                amount_usd = float(plan.price_monthly)
                 logger.warning(
-                    f"Payment amount was 0, using default monthly price: {amount}"
+                    f"Payment amount was 0, using default monthly price: {amount_usd} USD"
                 )
 
             # Calculate new end date using the same logic as PayTabs and Stripe
@@ -1562,20 +1598,20 @@ def zaincash_return(request):
             
             logger.info(
                 f"✓ Activated subscription {subscription.id} for company {subscription.company.name if subscription.company else 'None'}. "
-                f"Billing cycle: {billing_cycle}, Amount: {amount}, "
+                f"Billing cycle: {billing_cycle}, Amount: {amount} {payment_currency}, "
                 f"End date set to: {new_end_date.strftime('%Y-%m-%d %H:%M:%S')}"
             )
 
-            # Create invoice
+            # Create invoice (store equivalent in USD for reporting consistency)
             Invoice.objects.create(
                 subscription=subscription,
-                amount=amount,
+                amount=amount_usd,
                 due_date=new_end_date,
                 status=InvoiceStatus.PAID.value,
             )
 
             logger.info(
-                f"Zain Cash payment completed for subscription {subscription_id}, amount: {amount}, billing_cycle: {billing_cycle}"
+                f"Zain Cash payment completed for subscription {subscription_id}, amount: {amount} {payment_currency} (≈{amount_usd} USD), billing_cycle: {billing_cycle}"
             )
 
             # Check if this is an API call (from frontend) or browser redirect
@@ -1943,11 +1979,15 @@ def create_stripe_payment(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             
-            # Create payment record
+            # Create payment record (Stripe amount in USD)
+            from decimal import Decimal
             session_id = result.get("session_id", "")
             payment = Payment.objects.create(
                 subscription=subscription,
                 amount=amount,
+                currency="USD",
+                exchange_rate=Decimal("1"),
+                amount_usd=Decimal(str(amount)),
                 payment_method=stripe_gateway,
                 payment_status=PaymentStatus.PENDING.value,
                 tran_ref=session_id,  # Store session_id as tran_ref
@@ -2069,29 +2109,37 @@ def stripe_return(request):
                 )
 
                 if payment:
-                    # Update existing payment
+                    # Update existing payment (Stripe amounts in USD)
+                    from decimal import Decimal
                     logger.info(f"Updating existing payment: ID={payment.id}, Old status={payment.payment_status}, "
                                f"Old amount={payment.amount}, Old tran_ref={payment.tran_ref}")
                     payment.payment_status = PaymentStatus.COMPLETED.value
                     payment.tran_ref = session_id
                     payment.amount = amount
+                    payment.currency = "USD"
+                    payment.exchange_rate = Decimal("1")
+                    payment.amount_usd = Decimal(str(amount))
                     payment.save()
                     logger.info(f"Payment updated successfully: ID={payment.id}, New status={payment.payment_status}, "
                                f"New amount={payment.amount}, New tran_ref={payment.tran_ref}")
                 else:
-                    # Create new payment
-                    logger.info(f"Creating new payment: subscription_id={subscription.id}, amount={amount}, "
+                    # Create new payment (Stripe in USD)
+                    from decimal import Decimal
+                    logger.info(f"Creating new payment: subscription_id={subscription.id}, amount={amount} USD, "
                                f"gateway={stripe_gateway.name if stripe_gateway else 'None'}, session_id={session_id}")
                     payment = Payment.objects.create(
                         subscription=subscription,
                         amount=amount,
+                        currency="USD",
+                        exchange_rate=Decimal("1"),
+                        amount_usd=Decimal(str(amount)),
                         payment_method=stripe_gateway,
                         payment_status=PaymentStatus.COMPLETED.value,
                         tran_ref=session_id,
                     )
                     logger.info(f"Payment created successfully: ID={payment.id}, status={payment.payment_status}")
             
-            # Determine billing cycle based on payment amount
+            # Determine billing cycle based on payment amount (Stripe amount in USD)
             plan = subscription.plan
             billing_cycle = None
             
@@ -2352,10 +2400,14 @@ def create_qicard_payment(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
-        # Create payment record
+        # Create payment record (QiCard plan amount in USD at creation; return may store IQD for display)
+        from decimal import Decimal
         payment = Payment.objects.create(
             subscription=subscription,
             amount=amount,
+            currency="USD",
+            exchange_rate=Decimal("1"),
+            amount_usd=Decimal(str(amount)),
             payment_method=qicard_gateway,
             payment_status=PaymentStatus.PENDING.value,
             tran_ref=payment_id,  # Store payment ID as tran_ref
@@ -2529,9 +2581,13 @@ def qicard_return(request):
                             except:
                                 original_amount = amount_iqd / 1300  # Default rate
                         
+                        from decimal import Decimal
                         payment = Payment.objects.create(
                             subscription=subscription,
                             amount=original_amount,  # Store original amount in USD
+                            currency="USD",
+                            exchange_rate=Decimal("1"),
+                            amount_usd=Decimal(str(original_amount)),
                             payment_method=qicard_gateway,
                             payment_status=PaymentStatus.COMPLETED.value,
                             tran_ref=payment_id,
@@ -2901,10 +2957,14 @@ def create_fib_payment(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
+    from decimal import Decimal
     payment_id = result.get("paymentId")
     payment = Payment.objects.create(
         subscription=subscription,
         amount=amount,
+        currency="USD",
+        exchange_rate=Decimal("1"),
+        amount_usd=Decimal(str(amount)),
         payment_method=fib_gateway,
         payment_status=PaymentStatus.PENDING.value,
         tran_ref=payment_id,

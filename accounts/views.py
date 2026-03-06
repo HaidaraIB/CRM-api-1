@@ -34,6 +34,7 @@ from django.utils import timezone
 from datetime import timedelta
 import secrets
 from .utils import (
+    get_email_language_for_user,
     send_email_verification,
     send_password_reset_email,
     send_two_factor_auth_email,
@@ -576,13 +577,8 @@ def resend_verification(request):
             user, expiry_hours=expiry_hours
         )
 
-        # Get language from request header or default to 'en'
-        language = request.META.get("HTTP_ACCEPT_LANGUAGE", "en")
-        if "ar" in language.lower():
-            language = "ar"
-        else:
-            language = "en"
-
+        # Use user's chosen language, then Accept-Language header, then default
+        language = get_email_language_for_user(user, request, default="en")
         sent = send_email_verification(user, verification, language=language)
 
         return Response(
@@ -651,12 +647,8 @@ def forgot_password(request):
     try:
         expiry_hours = getattr(settings, "PASSWORD_RESET_EXPIRY_HOURS", 1)
         reset = PasswordReset.create_for_user(user, expiry_hours=expiry_hours)
-        # Get language from request header or default to 'en'
-        language = request.META.get("HTTP_ACCEPT_LANGUAGE", "en")
-        if "ar" in language.lower():
-            language = "ar"
-        else:
-            language = "en"
+        # Use user's chosen language, then Accept-Language header, then default
+        language = get_email_language_for_user(user, request, default="en")
         sent = send_password_reset_email(user, reset, language=language)
 
         return Response(
@@ -823,7 +815,7 @@ def request_two_factor_auth(request):
                 else:
                     # Admins see subscription inactive message
                     error_data = {
-                        "error": "Your subscription is not active. Please contact support or complete your payment to access the system.",
+                        "error": "Your subscription is not active. Please contact support or Complete Your Payment to access the system.",
                         "code": "SUBSCRIPTION_INACTIVE",
                     }
                     if subscription:
@@ -878,12 +870,8 @@ def request_two_factor_auth(request):
             # Normal flow: generate random code
             two_fa = TwoFactorAuth.create_for_user(user, expiry_minutes=expiry_minutes)
 
-        # Get language from request header or default to 'ar'
-        language = request.META.get("HTTP_ACCEPT_LANGUAGE", "ar")
-        if "en" in language.lower():
-            language = "en"
-        else:
-            language = "ar"
+        # Use user's chosen language, then Accept-Language header, then default
+        language = get_email_language_for_user(user, request, default="ar")
         if not is_apple_demo and not is_google_demo:
             sent = send_two_factor_auth_email(user, two_fa, language=language)
         else:
@@ -1046,7 +1034,7 @@ def verify_two_factor_auth(request):
             else:
                 # Admins see subscription inactive message
                 error_data = {
-                    "error": "Your subscription is not active. Please contact support or complete your payment to access the system.",
+                    "error": "Your subscription is not active. Please contact support or Complete Your Payment to access the system.",
                     "code": "SUBSCRIPTION_INACTIVE",
                 }
                 if subscription:

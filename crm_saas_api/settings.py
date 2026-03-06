@@ -134,6 +134,7 @@ CORS_ALLOW_HEADERS = [
     "x-csrftoken",
     "x-requested-with",
     "x-api-key",
+    "x-language",
     "cache-control",
     "pragma",
 ]
@@ -188,6 +189,7 @@ INSTALLED_APPS = [
     "settings",
     "integrations",
     "notifications",
+    "support",
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_q",

@@ -15,11 +15,8 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
 from subscriptions.models import Subscription
-from subscriptions.utils import get_smtp_connection
-from django.core.mail import EmailMultiAlternatives
-from django.template.loader import render_to_string
-from accounts.models import User, Role
-from settings.models import SMTPSettings
+from accounts.event_emails import send_subscription_expiring_email
+from accounts.utils import get_email_language_for_user
 import logging
 
 logger = logging.getLogger(__name__)
@@ -46,113 +43,41 @@ class Command(BaseCommand):
             help='Show detailed output for each subscription',
         )
 
-    def send_renewal_reminder(self, subscription, language='en', dry_run=False):
+    def send_renewal_reminder(self, subscription, days_remaining, dry_run=False):
         """
-        Send renewal reminder email to subscription owner
+        Send renewal reminder email to subscription owner in their preferred language.
         """
         try:
-            smtp_settings = SMTPSettings.get_settings()
-            
-            if not smtp_settings.is_active:
-                logger.warning("SMTP is not active. Cannot send reminder.")
-                return {
-                    "success": False,
-                    "error": "SMTP is not active",
-                }
-            
-            # Get company owner email
             company = subscription.company
             owner = company.owner
-            
+
             if not owner or not owner.email:
-                logger.warning(f"No owner email found for subscription {subscription.id}")
-                return {
-                    "success": False,
-                    "error": "No owner email found",
-                }
-            
-            # Prepare email content
-            plan_name = subscription.plan.name
-            if language == 'ar' and subscription.plan.name_ar:
-                plan_name = subscription.plan.name_ar
-            
-            end_date_str = subscription.end_date.strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Create email subject and content
-            if language == 'ar':
-                subject = f"تذكير: انتهاء الاشتراك في {plan_name}"
-                message = f"""
-                عزيزي/عزيزتي {owner.first_name or owner.username},
-                
-                نود أن نذكرك بأن اشتراكك في خطة {plan_name} سينتهي في {end_date_str}.
-                
-                يرجى تجديد اشتراكك لتجنب انقطاع الخدمة.
-                
-                يمكنك تجديد اشتراكك من صفحة الملف الشخصي.
-                
-                شكراً لاستخدامك خدماتنا.
-                """
-            else:
-                subject = f"Reminder: Your {plan_name} subscription is ending soon"
-                message = f"""
-                Dear {owner.first_name or owner.username},
-                
-                We would like to remind you that your {plan_name} subscription will end on {end_date_str}.
-                
-                Please renew your subscription to avoid service interruption.
-                
-                You can renew your subscription from your profile page.
-                
-                Thank you for using our services.
-                """
-            
+                logger.warning("No owner email found for subscription %s", subscription.id)
+                return {"success": False, "error": "No owner email found"}
+
+            language = get_email_language_for_user(owner, request=None, default="en")
+
             if dry_run:
                 self.stdout.write(
                     self.style.WARNING(
-                        f'  [DRY RUN] Would send reminder to {owner.email} '
-                        f'for subscription {subscription.id}'
+                        "  [DRY RUN] Would send reminder to %s for subscription %s (language=%s)"
+                        % (owner.email, subscription.id, language)
                     )
                 )
                 return {"success": True, "dry_run": True}
-            
-            # Get SMTP connection
-            connection = get_smtp_connection()
-            
-            # Prepare email
-            from_email = (
-                f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
-                if smtp_settings.from_name
-                else smtp_settings.from_email
+
+            send_subscription_expiring_email(
+                owner, subscription, days_remaining, language=language
             )
-            
-            # Create email message
-            email = EmailMultiAlternatives(
-                subject=subject,
-                body=message,
-                from_email=from_email,
-                to=[owner.email],
-                connection=connection,
-            )
-            
-            # Send email
-            email.send()
-            
+            plan_name = getattr(subscription.plan, "name", "")
             logger.info(
-                f"Renewal reminder sent to {owner.email} for subscription {subscription.id} "
-                f"(Company: {company.name}, Plan: {plan_name})"
+                "Renewal reminder sent to %s for subscription %s (Company: %s, Plan: %s)",
+                owner.email, subscription.id, company.name, plan_name,
             )
-            
-            return {
-                "success": True,
-                "recipient": owner.email,
-            }
-            
+            return {"success": True, "recipient": owner.email}
         except Exception as e:
-            logger.error(f"Error sending reminder for subscription {subscription.id}: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-            }
+            logger.error("Error sending reminder for subscription %s: %s", subscription.id, e)
+            return {"success": False, "error": str(e)}
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
@@ -198,17 +123,14 @@ class Command(BaseCommand):
             plan_name = subscription.plan.name
             end_date = subscription.end_date
             days_until_end = (end_date - now).days
-            
+
             if verbose:
                 self.stdout.write(
-                    f'  - {company_name} ({plan_name}): '
-                    f'Ends in {days_until_end} day(s) on {end_date.strftime("%Y-%m-%d %H:%M:%S")}'
+                    "  - %s (%s): Ends in %s day(s) on %s"
+                    % (company_name, plan_name, days_until_end, end_date.strftime("%Y-%m-%d %H:%M:%S"))
                 )
-            
-            # Determine language (default to 'en', can be extended if User model has language field)
-            language = 'en'
-            
-            result = self.send_renewal_reminder(subscription, language, dry_run)
+
+            result = self.send_renewal_reminder(subscription, days_until_end, dry_run)
             
             if result.get('success'):
                 sent_count += 1
