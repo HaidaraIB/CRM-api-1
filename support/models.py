@@ -33,3 +33,20 @@ class SupportTicket(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class SupportTicketAttachment(models.Model):
+    """Screenshot or image attached to a support ticket."""
+    ticket = models.ForeignKey(
+        SupportTicket,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    file = models.ImageField(
+        upload_to="support_tickets/%Y/%m/%d/",
+        max_length=500,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]

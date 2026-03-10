@@ -64,6 +64,9 @@ class Unit(models.Model):
     city = models.CharField(max_length=255, blank=True, null=True)
     district = models.CharField(max_length=255, blank=True, null=True)
     zone = models.CharField(max_length=255, blank=True, null=True)
+    lounge = models.IntegerField(blank=True, null=True)
+    area = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    currency = models.CharField(max_length=10, blank=True, null=True)
     is_sold = models.BooleanField(default=False)
     company = models.ForeignKey(
         "companies.Company", on_delete=models.CASCADE, related_name="units"

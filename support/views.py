@@ -1,7 +1,9 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
 from accounts.permissions import HasActiveSubscription
-from .models import SupportTicket
+from .models import SupportTicket, SupportTicketAttachment
 from .serializers import (
     SupportTicketSerializer,
     SupportTicketListSerializer,
@@ -21,12 +23,11 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_super_admin():
-            return SupportTicket.objects.all().select_related(
-                "company", "created_by"
-            )
-        return SupportTicket.objects.filter(created_by=user).select_related(
-            "company", "created_by"
+        qs = SupportTicket.objects.all()
+        if not user.is_super_admin():
+            qs = qs.filter(created_by=user)
+        return qs.select_related("company", "created_by").prefetch_related(
+            "attachments"
         )
 
     def get_serializer_class(self):
@@ -35,6 +36,31 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         if self.action in ("partial_update", "update"):
             return SupportTicketStatusSerializer
         return SupportTicketSerializer
+
+    def create(self, request, *args, **kwargs):
+        """Accept JSON or multipart/form-data with optional screenshots (multiple)."""
+        is_multipart = "multipart/form-data" in (request.content_type or "")
+        if is_multipart:
+            data = request.data
+            files = request.FILES.getlist("screenshots")
+        else:
+            data = request.data
+            files = []
+
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        instance = serializer.instance
+
+        for f in files:
+            if f and f.size:
+                SupportTicketAttachment.objects.create(ticket=instance, file=f)
+
+        headers = self.get_success_headers(serializer.data)
+        # Re-fetch to include attachments in response
+        instance.refresh_from_db()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         instance = serializer.save(
