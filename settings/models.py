@@ -27,12 +27,13 @@ class Channel(models.Model):
         "companies.Company", on_delete=models.CASCADE, related_name="channels"
     )
     is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        ordering = ["-is_default", "-created_at"]
         unique_together = ["name", "company"]
 
     def __str__(self):
@@ -50,13 +51,14 @@ class LeadStage(models.Model):
         "companies.Company", on_delete=models.CASCADE, related_name="lead_stages"
     )
     is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "settings_lead_stage"
-        ordering = ["order", "name"]
+        ordering = ["-is_default", "order", "name"]
         unique_together = ["name", "company"]
 
     def __str__(self):
@@ -242,13 +244,14 @@ class CallMethod(models.Model):
         "companies.Company", on_delete=models.CASCADE, related_name="call_methods"
     )
     is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "settings_call_method"
-        ordering = ["name"]
+        ordering = ["-is_default", "name"]
         unique_together = ["name", "company"]
 
     def __str__(self):

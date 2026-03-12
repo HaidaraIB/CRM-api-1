@@ -27,6 +27,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "is_default",
             "created_at",
             "updated_at",
         ]
@@ -47,6 +48,7 @@ class ChannelListSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "is_default",
             "created_at",
         ]
 
@@ -68,6 +70,7 @@ class LeadStageSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "is_default",
             "created_at",
             "updated_at",
         ]
@@ -91,6 +94,7 @@ class LeadStageListSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "is_default",
             "created_at",
         ]
 
@@ -153,6 +157,7 @@ class CallMethodSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "is_default",
             "created_at",
             "updated_at",
         ]
@@ -173,6 +178,7 @@ class CallMethodListSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "is_default",
             "created_at",
         ]
 

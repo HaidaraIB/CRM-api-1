@@ -51,8 +51,8 @@ class ChannelViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "type", "priority"]
-    ordering_fields = ["created_at", "name", "priority"]
-    ordering = ["-created_at"]
+    ordering_fields = ["is_default", "created_at", "name", "priority"]
+    ordering = ["-is_default", "-created_at"]
 
     def get_queryset(self):
         user = self.request.user
@@ -63,6 +63,14 @@ class ChannelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         serializer.save(company=user.company)
+
+    def perform_update(self, serializer):
+        if serializer.validated_data.get("is_default", False):
+            Channel.objects.filter(
+                company=self.request.user.company,
+                is_default=True,
+            ).exclude(id=serializer.instance.id).update(is_default=False)
+        serializer.save()
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -79,8 +87,8 @@ class LeadStageViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
-    ordering_fields = ["order", "name", "created_at"]
-    ordering = ["order", "name"]
+    ordering_fields = ["is_default", "order", "name", "created_at"]
+    ordering = ["-is_default", "order", "name"]
 
     def get_queryset(self):
         user = self.request.user
@@ -95,6 +103,14 @@ class LeadStageViewSet(viewsets.ModelViewSet):
             max_order=models.Max('order')
         )['max_order'] or 0
         serializer.save(company=user.company, order=max_order + 1)
+
+    def perform_update(self, serializer):
+        if serializer.validated_data.get("is_default", False):
+            LeadStage.objects.filter(
+                company=self.request.user.company,
+                is_default=True,
+            ).exclude(id=serializer.instance.id).update(is_default=False)
+        serializer.save()
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -148,8 +164,8 @@ class CallMethodViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["name", "description"]
-    ordering_fields = ["name", "created_at"]
-    ordering = ["name"]
+    ordering_fields = ["is_default", "name", "created_at"]
+    ordering = ["-is_default", "name"]
 
     def get_queryset(self):
         user = self.request.user
@@ -160,6 +176,14 @@ class CallMethodViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         serializer.save(company=user.company)
+
+    def perform_update(self, serializer):
+        if serializer.validated_data.get("is_default", False):
+            CallMethod.objects.filter(
+                company=self.request.user.company,
+                is_default=True,
+            ).exclude(id=serializer.instance.id).update(is_default=False)
+        serializer.save()
 
     def get_serializer_class(self):
         if self.action == "list":
