@@ -262,6 +262,7 @@ def register_company(request):
                 "company": company.id,
                 "company_name": company.name,
                 "company_specialization": company.specialization,
+                "language": getattr(owner, "language", None) or "ar",
             },
             "company": {
                 "id": company.id,
@@ -1068,6 +1069,7 @@ def verify_two_factor_auth(request):
             "company_specialization": (
                 user.company.specialization if user.company else None
             ),
+            "language": getattr(user, "language", None) or "ar",
         },
     }
 

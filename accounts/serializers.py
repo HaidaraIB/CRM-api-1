@@ -308,6 +308,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             "is_active": self.user.is_active,
             "email_verified": self.user.email_verified,
             "is_superuser": self.user.is_superuser,
+            "language": getattr(self.user, "language", None) or "ar",
         }
         
         # Add limited admin permissions if user is a limited admin
@@ -383,6 +384,7 @@ def build_user_auth_payload(user, request=None):
         "is_active": user.is_active,
         "email_verified": user.email_verified,
         "is_superuser": user.is_superuser,
+        "language": getattr(user, "language", None) or "ar",
     }
     try:
         limited_admin = LimitedAdmin.objects.select_related("user").get(user=user)
