@@ -1,8 +1,10 @@
 """
-Management command to check for leads without follow-up and send notifications
+Management command to check for leads without follow-up and send notifications.
 This command runs 4 times a day and checks for leads that haven't been contacted
 since the last check. Once any action is taken on a lead (status change, task, call, etc.),
 the last_contacted_at field is updated and the lead will no longer receive this notification.
+At most 3 "no follow-up" notifications are sent in a row per client; after that, no further
+notification is sent until the lead is contacted again (last_contacted_at is updated).
 
 Usage:
     python manage.py check_lead_no_follow_up
@@ -16,8 +18,11 @@ from django.db import models
 from datetime import timedelta
 from crm.models import Client
 from notifications.services import NotificationService
-from notifications.models import NotificationType
+from notifications.models import NotificationType, Notification
 import logging
+
+# Maximum number of "no follow-up" notifications sent in a row per client before we stop until next contact
+MAX_NO_FOLLOW_UP_IN_ROW = 3
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,24 @@ class Command(BaseCommand):
             seconds = max(0, (timezone.now() - reference).total_seconds())
             # ceil so e.g. 30 min → 1 hour (real calculated value); never show 0
             hours_display = max(1, math.ceil(seconds / 3600))
+
+            # Cap at MAX_NO_FOLLOW_UP_IN_ROW notifications in a row per client (since last contact/assignment/creation)
+            no_follow_up_count = Notification.objects.filter(
+                user=lead.assigned_to,
+                type=NotificationType.LEAD_NO_FOLLOW_UP,
+                data__lead_id=lead.id,
+                created_at__gt=reference,
+            ).count()
+            if no_follow_up_count >= MAX_NO_FOLLOW_UP_IN_ROW:
+                skipped_count += 1
+                if dry_run:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f'[DRY RUN] Would skip lead {lead.id} ({lead.name}): '
+                            f'already {no_follow_up_count} no-follow-up notification(s) in row (max {MAX_NO_FOLLOW_UP_IN_ROW})'
+                        )
+                    )
+                continue
 
             if dry_run:
                 self.stdout.write(
