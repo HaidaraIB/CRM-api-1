@@ -5,7 +5,7 @@ Utility functions for sending emails via SMTP and push notifications
 from django.core.mail import EmailMultiAlternatives
 from django.core.mail.backends.smtp import EmailBackend
 from django.template.loader import render_to_string
-from settings.models import SMTPSettings
+from settings.models import SMTPSettings, PlatformTwilioSettings
 from companies.models import Company
 from accounts.models import User, Role
 from subscriptions.models import Subscription
@@ -336,3 +336,110 @@ def send_broadcast_push_notification(broadcast):
     except Exception as e:
         logger.error(f"Error sending broadcast push notification: {str(e)}")
         return {"success": False, "error": str(e)}
+
+
+def _normalize_phone_for_sms(phone):
+    """Normalize phone to E.164 (e.g. 07... -> +964...)."""
+    if not phone:
+        return None
+    to = str(phone).strip().replace(" ", "").replace("-", "")
+    if not to:
+        return None
+    if to.startswith("07") and len(to) >= 10:
+        to = "+964" + to[1:]
+    elif not to.startswith("+"):
+        to = "+" + to
+    return to
+
+
+def get_recipient_users_with_phone_for_targets(targets):
+    """
+    Return list of User objects that have a non-empty phone, for the given targets.
+    Same targeting as broadcast: all, plan_X, role_*, company_X. Deduplicated by user id.
+    """
+    if not targets:
+        targets = ["all"]
+    seen_ids = set()
+    result = []
+    for t in targets:
+        users = _get_eligible_recipient_users_queryset(t)
+        for u in users:
+            if u.id not in seen_ids and u.phone and str(u.phone).strip():
+                seen_ids.add(u.id)
+                result.append(u)
+    return result
+
+
+def send_broadcast_sms(targets, content):
+    """
+    Send SMS to all users with phone numbers matching the given targets, using platform Twilio.
+    targets: list of target strings (e.g. ["all"], ["company_1", "plan_2"]).
+    content: message body.
+    Returns: dict with success, sent_count, skipped_count, error (if any).
+    """
+    try:
+        twilio_settings = PlatformTwilioSettings.get_settings()
+        if not twilio_settings.is_enabled:
+            return {
+                "success": False,
+                "error": "Platform SMS is not enabled. Configure Twilio in Settings.",
+                "sent_count": 0,
+                "skipped_count": 0,
+            }
+        account_sid = twilio_settings.account_sid
+        auth_token = twilio_settings.get_auth_token()
+        twilio_number = twilio_settings.twilio_number
+        sender_id = (twilio_settings.sender_id or "").strip()
+        from_value = sender_id if sender_id else (twilio_number or "")
+        if not account_sid or not auth_token or not from_value:
+            return {
+                "success": False,
+                "error": "Twilio credentials incomplete. Set Account SID, Auth Token, and sender number or Sender ID.",
+                "sent_count": 0,
+                "skipped_count": 0,
+            }
+        users = get_recipient_users_with_phone_for_targets(targets)
+        if not users:
+            return {
+                "success": False,
+                "error": "No recipients with phone numbers found for the selected targets.",
+                "sent_count": 0,
+                "skipped_count": 0,
+            }
+        from twilio.rest import Client as TwilioClient
+        from twilio.base.exceptions import TwilioRestException
+
+        client = TwilioClient(account_sid, auth_token)
+        sent_count = 0
+        failed_count = 0
+        for user in users:
+            to = _normalize_phone_for_sms(user.phone)
+            if not to:
+                continue
+            try:
+                client.messages.create(body=content, from_=from_value, to=to)
+                sent_count += 1
+            except TwilioRestException as e:
+                logger.warning("Twilio SMS to %s failed: %s", to, e)
+                failed_count += 1
+        if sent_count > 0:
+            return {
+                "success": True,
+                "sent_count": sent_count,
+                "skipped_count": failed_count,
+                "error": None,
+            }
+        return {
+            "success": False,
+            "error": "Failed to send to any recipient. Check Twilio settings and phone numbers.",
+            "sent_count": 0,
+            "skipped_count": failed_count,
+        }
+    except Exception as e:
+        logger.exception("send_broadcast_sms failed: %s", e)
+        return {
+            "success": False,
+            "error": str(e),
+            "sent_count": 0,
+            "skipped_count": 0,
+        }

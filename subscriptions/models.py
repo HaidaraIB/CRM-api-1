@@ -65,7 +65,13 @@ class Plan(models.Model):
     trial_days = models.IntegerField(default=0)
     users = models.CharField(max_length=50, default="unlimited")
     clients = models.CharField(max_length=50, default="unlimited")
-    storage = models.IntegerField(default=10)  # In GB
+    # Entitlements (new): keep legacy fields above for UI compatibility.
+    # features: boolean flags (e.g. sms_enabled, whatsapp_enabled)
+    # limits: extra quota keys beyond users/clients (e.g. max_deals)
+    # usage_limits_monthly: monthly usage caps (e.g. monthly_sms_messages)
+    features = models.JSONField(blank=True, default=dict)
+    limits = models.JSONField(blank=True, default=dict)
+    usage_limits_monthly = models.JSONField(blank=True, default=dict)
     visible = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -76,6 +82,31 @@ class Plan(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class CompanyUsageCounter(models.Model):
+    """
+    Monthly usage counters for enforcing plan usage limits.
+    Stored in subscriptions app to avoid scattering usage logic across integrations/notifications.
+    """
+
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="usage_counters"
+    )
+    key = models.CharField(max_length=64)  # e.g. monthly_sms_messages
+    period_start = models.DateField()  # first day of month (UTC)
+    count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "company_usage_counters"
+        unique_together = ("company", "key", "period_start")
+        indexes = [
+            models.Index(fields=["company", "key", "period_start"]),
+        ]
+
+    def __str__(self):
+        return f"{self.company_id}:{self.key}:{self.period_start}={self.count}"
 
 
 class Subscription(models.Model):

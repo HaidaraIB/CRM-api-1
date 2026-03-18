@@ -44,7 +44,6 @@ class PlanAdmin(admin.ModelAdmin):
                     "trial_days",
                     "users",
                     "clients",
-                    "storage",
                     "visible",
                 )
             },

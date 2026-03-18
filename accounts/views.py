@@ -96,6 +96,23 @@ class UserViewSet(viewsets.ModelViewSet):
             request_user.company if request_user and request_user.company else None
         )
 
+        # Enforce plan quota: max users (company-scoped). Super admin is not company-scoped.
+        if company and not request_user.is_super_admin():
+            try:
+                from subscriptions.entitlements import require_quota
+                current_users = User.objects.filter(company=company).count()
+                require_quota(
+                    company,
+                    "max_users",
+                    current_count=current_users,
+                    requested_delta=1,
+                    message="You have reached your plan user limit. Please upgrade your plan to add more users.",
+                    error_key="plan_quota_max_users_exceeded",
+                )
+            except Exception as exc:
+                # Pass through DRF exceptions cleanly
+                raise
+
         # Set company in the serializer's validated_data if not already set
         # Note: The serializer has 'company' as SerializerMethodField (read-only),
         # so we need to set it directly on the model instance after creation

@@ -65,6 +65,7 @@ class ClientSerializer(serializers.ModelSerializer):
             "budget",
             "phone_number",  # Keep for backward compatibility
             "phone_numbers",  # New field for multiple phone numbers
+            "lead_company_name",
             "company",
             "company_name",
             "assigned_to",
@@ -187,7 +188,7 @@ class ClientSerializer(serializers.ModelSerializer):
                 })
 
         # Generic edit detection for other important fields
-        other_fields = ['name', 'priority', 'type', 'budget', 'communication_way']
+        other_fields = ['name', 'priority', 'type', 'budget', 'communication_way', 'lead_company_name']
         for field in other_fields:
             if field in validated_data and getattr(instance, field) != validated_data[field]:
                 field_name = field.replace('_', ' ').capitalize()
@@ -260,6 +261,7 @@ class ClientListSerializer(serializers.ModelSerializer):
             "budget",
             "phone_number",  # Keep for backward compatibility
             "phone_numbers",  # New field for multiple phone numbers
+            "lead_company_name",
             "company",
             "company_name",
             "assigned_to",
@@ -305,6 +307,7 @@ class DealSerializer(serializers.ModelSerializer):
             "payment_method",
             "status",
             "value",
+            "reminder_date",
             "start_date",
             "closed_date",
             "discount_percentage",
@@ -422,6 +425,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "payment_method",
             "status",
             "value",
+            "reminder_date",
             "start_date",
             "closed_date",
             "discount_percentage",

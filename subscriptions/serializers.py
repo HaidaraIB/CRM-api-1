@@ -66,7 +66,9 @@ class PlanSerializer(serializers.ModelSerializer):
             "trial_days",
             "users",
             "clients",
-            "storage",
+            "features",
+            "limits",
+            "usage_limits_monthly",
             "visible",
             "created_at",
             "updated_at",
@@ -90,7 +92,9 @@ class PlanListSerializer(serializers.ModelSerializer):
             "trial_days",
             "users",
             "clients",
-            "storage",
+            "features",
+            "limits",
+            "usage_limits_monthly",
             "visible",
         ]
 

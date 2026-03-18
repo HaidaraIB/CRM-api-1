@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { background-color: #eff6ff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 32px 16px; color: #0f172a; }
+    .wrapper { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 24px; box-shadow: 0 20px 50px rgba(37, 99, 235, 0.18); overflow: hidden; border: 1px solid rgba(37, 99, 235, 0.10); }
+    .header { background: linear-gradient(135deg, #2563eb, #1d4ed8); padding: 32px; color: #fff; text-align: center; }
+    .header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+    .content { padding: 32px; line-height: 1.8; }
+    .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; border: 1px solid rgba(29, 78, 216, 0.18); }
+    .highlight { padding: 16px 24px; font-size: 16px; font-weight: 800; color: #1e3a8a; background: #eff6ff; border-radius: 16px; margin: 16px 0; }
+    .muted { color: #334155; font-size: 13px; margin-top: 6px; }
+    .footer { padding: 24px 32px; font-size: 12px; color: #475569; background: #f8fafc; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <h1>تذكير متابعة</h1>
+    </div>
+    <div class="content">
+      <span class="badge">{{ reminder_kind|default:"متابعة" }}</span>
+      <p>مرحباً {{ greeting_name }}،</p>
+      <p>هذا تذكير يتم إرساله قبل <strong>{{ minutes_before }}</strong> دقيقة من موعد المتابعة.</p>
+
+      <div class="highlight">
+        {{ title }}
+        {% if lead_name %}<div class="muted">العميل: {{ lead_name }}</div>{% endif %}
+        {% if scheduled_for %}<div class="muted">الموعد: {{ scheduled_for }}</div>{% endif %}
+      </div>
+
+      {% if extra_line %}
+        <p class="muted">{{ extra_line }}</p>
+      {% endif %}
+    </div>
+    <div class="footer">تم الإرسال بواسطة LOOP CRM · تحتاج مساعدة؟ راسلنا على: {{ support_email }}</div>
+  </div>
+</body>
+</html>
+

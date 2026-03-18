@@ -1,6 +1,8 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 import json
 
 User = get_user_model()
@@ -79,6 +81,7 @@ class Notification(models.Model):
     read_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     
     class Meta:
         db_table = 'notifications'
@@ -86,6 +89,7 @@ class Notification(models.Model):
         indexes = [
             models.Index(fields=['user', '-created_at']),
             models.Index(fields=['user', 'read']),
+            models.Index(fields=['user', 'deleted_at']),
             models.Index(fields=['type']),
         ]
     
@@ -304,3 +308,54 @@ class NotificationSettings(models.Model):
                 return False
         
         return True
+
+
+class ReminderDispatchLog(models.Model):
+    """
+    Persistent log for reminder dispatch attempts to prevent duplicates.
+    We store one row per (user, reminder-source object, minutes_before, scheduled_for, notification_type).
+    """
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="reminder_dispatch_logs",
+    )
+    notification_type = models.CharField(max_length=50, choices=NotificationType.choices)
+    minutes_before = models.IntegerField(default=15)
+    scheduled_for = models.DateTimeField(help_text="The original reminder datetime (e.g. reminder_date / follow_up_date)")
+
+    # Generic reference to the source object (ClientTask / Task / ClientCall / etc.)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.CharField(max_length=64)
+    content_object = GenericForeignKey("content_type", "object_id")
+
+    push_sent = models.BooleanField(default=False)
+    email_sent = models.BooleanField(default=False)
+    last_error = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "notification_reminder_dispatch_log"
+        indexes = [
+            models.Index(fields=["user", "notification_type", "scheduled_for"]),
+            models.Index(fields=["content_type", "object_id"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "user",
+                    "notification_type",
+                    "content_type",
+                    "object_id",
+                    "scheduled_for",
+                    "minutes_before",
+                ],
+                name="unique_reminder_dispatch_per_user_object_time_offset_type",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} {self.notification_type} @ {self.scheduled_for} (-{self.minutes_before}m)"

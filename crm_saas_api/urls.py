@@ -67,6 +67,7 @@ from settings.views import (
     SystemBackupViewSet,
     SystemAuditLogViewSet,
     SystemSettingsViewSet,
+    PlatformTwilioSettingsViewSet,
 )
 from real_estate.views import (
     DeveloperViewSet,
@@ -97,6 +98,7 @@ from subscriptions.views import (
     create_fib_payment,
     fib_callback,
     check_payment_status,
+    switch_subscription_plan_free,
 )
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
@@ -125,6 +127,9 @@ router.register(
 )
 router.register(
     r"settings/system", SystemSettingsViewSet, basename="systemsettings"
+)
+router.register(
+    r"settings/platform-twilio", PlatformTwilioSettingsViewSet, basename="platformtwiliosettings"
 )
 
 router.register(r"developers", DeveloperViewSet, basename="developer")
@@ -195,6 +200,11 @@ urlpatterns = [
         "api/payment-status/<int:subscription_id>/",
         check_payment_status,
         name="check_payment_status",
+    ),
+    path(
+        "api/subscriptions/switch-plan-free/",
+        switch_subscription_plan_free,
+        name="switch_subscription_plan_free",
     ),
     # Custom user endpoints - must be before router.urls to avoid conflicts
     path("api/users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),

@@ -21,8 +21,11 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = NotificationSerializer
     
     def get_queryset(self):
-        """Return notifications for the authenticated user"""
-        queryset = Notification.objects.filter(user=self.request.user)
+        """Return notifications for the authenticated user (exclude soft-deleted)"""
+        queryset = Notification.objects.filter(
+            user=self.request.user,
+            deleted_at__isnull=True,
+        )
         
         # Filter by read status if provided
         read_status = self.request.query_params.get('read', None)
@@ -51,10 +54,11 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
-        """Mark all notifications as read"""
+        """Mark all notifications as read (only non soft-deleted)"""
         count = Notification.objects.filter(
             user=request.user,
-            read=False
+            read=False,
+            deleted_at__isnull=True,
         ).update(read=True, read_at=timezone.now())
         
         return Response({
@@ -63,21 +67,24 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=['get'])
     def unread_count(self, request):
-        """Get count of unread notifications"""
+        """Get count of unread notifications (exclude soft-deleted)"""
         count = Notification.objects.filter(
             user=request.user,
-            read=False
+            read=False,
+            deleted_at__isnull=True,
         ).count()
         
         return Response({'unread_count': count})
     
     @action(detail=False, methods=['delete'])
     def delete_all_read(self, request):
-        """Delete all read notifications"""
-        count, _ = Notification.objects.filter(
+        """Soft-delete all read notifications (set deleted_at, do not remove from DB)"""
+        qs = Notification.objects.filter(
             user=request.user,
-            read=True
-        ).delete()
+            read=True,
+            deleted_at__isnull=True,
+        )
+        count = qs.update(deleted_at=timezone.now())
         
         return Response({
             'message': f'{count} read notifications deleted'

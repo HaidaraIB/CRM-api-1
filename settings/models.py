@@ -299,3 +299,67 @@ class SystemSettings(models.Model):
         """Get the system settings instance (singleton)"""
         settings, created = cls.objects.get_or_create(pk=1)
         return settings
+
+
+class PlatformTwilioSettings(models.Model):
+    """
+    Platform-level Twilio settings for admin SMS broadcast.
+    Singleton pattern - only one instance (pk=1). Used by Communication > Send SMS.
+    """
+    account_sid = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="Twilio Account SID",
+    )
+    twilio_number = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="Twilio sender number",
+    )
+    auth_token = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Auth Token (stored encrypted)",
+    )
+    sender_id = models.CharField(
+        max_length=11,
+        blank=True,
+        null=True,
+        help_text="Sender ID (optional, alphanumeric)",
+    )
+    is_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable platform SMS broadcast",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_platform_twilio_settings"
+        verbose_name = "Platform Twilio Settings"
+        verbose_name_plural = "Platform Twilio Settings"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return "Platform Twilio (SMS Broadcast)"
+
+    def get_auth_token(self):
+        if not self.auth_token:
+            return None
+        from integrations.encryption import decrypt_token
+        return decrypt_token(self.auth_token)
+
+    def set_auth_token(self, token):
+        if token:
+            from integrations.encryption import encrypt_token
+            self.auth_token = encrypt_token(token)
+        else:
+            self.auth_token = None
+
+    @classmethod
+    def get_settings(cls):
+        """Get the singleton instance."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

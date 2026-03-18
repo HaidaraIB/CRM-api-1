@@ -772,6 +772,21 @@ def whatsapp_send_message(request):
     Body: { "phone_number_id": "optional", "to": "971501234567", "message": "نص الرسالة", "client_id": "optional" }
     """
     company = request.user.company
+    # Plan gating: feature + monthly usage
+    from subscriptions.entitlements import require_feature, require_monthly_usage, increment_monthly_usage
+    require_feature(
+        company,
+        "whatsapp_enabled",
+        message="WhatsApp is not available in your current plan. Please upgrade your plan.",
+        error_key="plan_feature_whatsapp_disabled",
+    )
+    require_monthly_usage(
+        company,
+        "monthly_whatsapp_messages",
+        requested_delta=1,
+        message="You have reached your monthly WhatsApp messages limit. Please upgrade your plan.",
+        error_key="plan_usage_monthly_whatsapp_exceeded",
+    )
     phone_number_id = request.data.get('phone_number_id')
     to = request.data.get('to')
     message = request.data.get('message') or request.data.get('text')
@@ -816,6 +831,8 @@ def whatsapp_send_message(request):
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
+        # Increment usage after success only
+        increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
         if wa_account.integration_account_id:
             IntegrationLog.objects.create(
                 account_id=wa_account.integration_account_id,
@@ -981,6 +998,22 @@ def tiktok_leadgen_webhook(request):
         company = Company.objects.get(id=company_id)
     except Company.DoesNotExist:
         logger.warning("TikTok Lead Gen webhook: company_id=%s not found", company_id)
+        return HttpResponse('OK', status=200)
+    # Enforce plan quota for leads created via webhook
+    try:
+        from subscriptions.entitlements import require_quota
+        from crm.models import Client as CRMClient
+        current_clients = CRMClient.objects.filter(company=company).count()
+        require_quota(
+            company,
+            "max_clients",
+            current_count=current_clients,
+            requested_delta=1,
+            message="Lead limit reached for this company plan.",
+            error_key="plan_quota_max_clients_exceeded",
+        )
+    except Exception as e:
+        logger.warning("TikTok Lead Gen webhook: plan quota blocked lead creation for company_id=%s err=%s", company_id, str(e)[:200])
         return HttpResponse('OK', status=200)
     from .models import IntegrationAccount, IntegrationLog
     from crm.models import Client, ClientPhoneNumber, ClientEvent
@@ -1279,6 +1312,25 @@ def meta_webhook(request):
                             # إنشاء Client جديد
                             from crm.models import Client, ClientPhoneNumber, ClientEvent
                             from crm.signals import get_least_busy_employee
+                            # Enforce plan quota for leads created via webhook
+                            try:
+                                from subscriptions.entitlements import require_quota
+                                current_clients = Client.objects.filter(company=account.company).count()
+                                require_quota(
+                                    account.company,
+                                    "max_clients",
+                                    current_count=current_clients,
+                                    requested_delta=1,
+                                    message="Lead limit reached for this company plan.",
+                                    error_key="plan_quota_max_clients_exceeded",
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "META_WEBHOOK: plan quota blocked lead creation company_id=%s err=%s",
+                                    getattr(account.company, "id", None),
+                                    str(e)[:200],
+                                )
+                                continue
                             
                             # استخراج البيانات
                             name = lead_info.get('full_name') or lead_info.get('name') or lead_info.get('first_name', '') + ' ' + lead_info.get('last_name', '')
@@ -1436,6 +1488,21 @@ def send_lead_sms_view(request):
     body = data['body']
 
     company = request.user.company
+    # Plan gating: feature + monthly usage
+    from subscriptions.entitlements import require_feature, require_monthly_usage, increment_monthly_usage
+    require_feature(
+        company,
+        "sms_enabled",
+        message="SMS is not available in your current plan. Please upgrade your plan.",
+        error_key="plan_feature_sms_disabled",
+    )
+    require_monthly_usage(
+        company,
+        "monthly_sms_messages",
+        requested_delta=1,
+        message="You have reached your monthly SMS limit. Please upgrade your plan.",
+        error_key="plan_usage_monthly_sms_exceeded",
+    )
     try:
         client = Client.objects.get(id=lead_id, company=company)
     except Client.DoesNotExist:
@@ -1508,6 +1575,8 @@ def send_lead_sms_view(request):
         twilio_sid=twilio_sid,
         created_by=request.user,
     )
+    # Increment usage after success only
+    increment_monthly_usage(company, "monthly_sms_messages", requested_delta=1)
     return Response(
         LeadSMSMessageSerializer(sms_record).data,
         status=status.HTTP_201_CREATED,

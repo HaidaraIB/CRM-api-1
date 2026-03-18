@@ -55,6 +55,26 @@ class ClientViewSet(viewsets.ModelViewSet):
             return ClientListSerializer
         return ClientSerializer
 
+    def perform_create(self, serializer):
+        """
+        Enforce plan quota for clients (leads) before creating.
+        """
+        user = self.request.user
+        company = getattr(user, "company", None)
+        if company and not user.is_super_admin():
+            from subscriptions.entitlements import require_quota
+
+            current_clients = Client.objects.filter(company=company).count()
+            require_quota(
+                company,
+                "max_clients",
+                current_count=current_clients,
+                requested_delta=1,
+                message="You have reached your plan leads limit. Please upgrade your plan to add more leads.",
+                error_key="plan_quota_max_clients_exceeded",
+            )
+        serializer.save(company=company)
+
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):
         """

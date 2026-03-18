@@ -128,3 +128,50 @@ def send_support_ticket_created_email(user, ticket, language="en"):
         "support_email": SMTPSettings.get_settings().from_email,
     }
     return _send_event_email(user, subject, "support_ticket_created", context, language)
+
+
+def send_followup_reminder_email(
+    user,
+    *,
+    reminder_kind: str,
+    title: str,
+    scheduled_for,
+    minutes_before: int = 15,
+    lead_name: str = None,
+    extra_line: str = None,
+    language: str = "en",
+):
+    """
+    Send a follow-up reminder email (generic for lead/task/call).
+
+    reminder_kind: one of 'lead', 'task', 'call', 'deal' (used only for display).
+    title: short label shown in the email (e.g. task title / lead name / call reminder).
+    scheduled_for: datetime of the original reminder time.
+    """
+    try:
+        lang = language if language in EMAIL_LANGUAGES else "en"
+        if lang == "ar":
+            subject = "تذكير متابعة - LOOP CRM"
+        else:
+            subject = "Follow-up reminder - LOOP CRM"
+
+        when_str = ""
+        try:
+            when_str = scheduled_for.strftime("%Y-%m-%d %H:%M") if scheduled_for else ""
+        except Exception:
+            when_str = str(scheduled_for) if scheduled_for else ""
+
+        context = {
+            "greeting_name": user.first_name or user.username or ("مرحباً" if lang == "ar" else "there"),
+            "reminder_kind": reminder_kind,
+            "title": title,
+            "lead_name": lead_name,
+            "minutes_before": minutes_before,
+            "scheduled_for": when_str,
+            "extra_line": extra_line,
+            "support_email": SMTPSettings.get_settings().from_email,
+        }
+        return _send_event_email(user, subject, "followup_reminder", context, lang)
+    except Exception as exc:
+        logger.error("Failed to send followup reminder email: %s", exc)
+        return False

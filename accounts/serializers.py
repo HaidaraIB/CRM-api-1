@@ -159,6 +159,28 @@ class UserSerializer(serializers.ModelSerializer):
                 "end_date": subscription.end_date.isoformat() if subscription.end_date else None,
                 "auto_renew": subscription.auto_renew,
             }
+            # Attach computed entitlements snapshot for frontend gating/UX.
+            try:
+                from subscriptions.entitlements import (
+                    build_company_entitlements,
+                    get_monthly_usage_snapshot,
+                )
+
+                ent = build_company_entitlements(company)
+                company_data["subscription"]["entitlements"] = {
+                    "plan_id": ent.plan_id,
+                    "plan_name": ent.plan_name,
+                    "quotas": {
+                        "max_users": ent.max_users,
+                        "max_clients": ent.max_clients,
+                        **(ent.extra_limits or {}),
+                    },
+                    "features": ent.features,
+                    "usage_limits_monthly": ent.usage_limits_monthly,
+                    "usage_month_to_date": get_monthly_usage_snapshot(company),
+                }
+            except Exception:
+                company_data["subscription"]["entitlements"] = None
         else:
             company_data["subscription"] = None
         
@@ -600,9 +622,15 @@ class RegisterCompanySerializer(serializers.Serializer):
         if plan_id:
             try:
                 plan = Plan.objects.get(id=plan_id)
-                # Check if plan requires payment
-                price = plan.price_yearly if billing_cycle == 'yearly' else plan.price_monthly
-                requires_payment = price > 0
+                # Free/trial plans never require payment and do not have billing cycles.
+                # - Free: price_monthly==0 and price_yearly==0 and trial_days==0 -> no expiry (we store far-future end_date)
+                # - Trial: price_monthly==0 and price_yearly==0 and trial_days>0 -> expires after trial_days
+                is_free_or_trial = float(plan.price_monthly) <= 0 and float(plan.price_yearly) <= 0
+                requires_payment = False
+                if not is_free_or_trial:
+                    # Check if plan requires payment for selected billing cycle
+                    price = plan.price_yearly if billing_cycle == 'yearly' else plan.price_monthly
+                    requires_payment = price > 0
                 
                 # Create subscription first to get the actual start_date
                 # Then calculate end_date based on start_date and billing cycle
@@ -613,11 +641,18 @@ class RegisterCompanySerializer(serializers.Serializer):
                     is_active=not requires_payment,  # Inactive if payment required
                 )
                 
-                # Calculate end_date based on billing cycle using the actual start_date
-                if billing_cycle == 'yearly':
-                    end_date = subscription.start_date + timedelta(days=365)
+                # Calculate end_date using the actual start_date
+                if is_free_or_trial:
+                    if int(getattr(plan, "trial_days", 0) or 0) > 0:
+                        end_date = subscription.start_date + timedelta(days=int(plan.trial_days))
+                    else:
+                        # Treat "free forever" as a far-future end_date (Subscription.end_date is non-nullable)
+                        end_date = subscription.start_date + timedelta(days=365 * 100)
                 else:
-                    end_date = subscription.start_date + timedelta(days=30)
+                    if billing_cycle == 'yearly':
+                        end_date = subscription.start_date + timedelta(days=365)
+                    else:
+                        end_date = subscription.start_date + timedelta(days=30)
                 
                 # Update subscription with correct end_date
                 subscription.end_date = end_date

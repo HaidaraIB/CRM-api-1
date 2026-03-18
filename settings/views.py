@@ -23,6 +23,7 @@ from .models import (
     SystemBackup,
     SystemAuditLog,
     SystemSettings,
+    PlatformTwilioSettings,
 )
 from .serializers import (
     ChannelSerializer,
@@ -34,6 +35,7 @@ from .serializers import (
     CallMethodSerializer,
     CallMethodListSerializer,
     SMTPSettingsSerializer,
+    PlatformTwilioSettingsSerializer,
     SystemBackupSerializer,
     SystemAuditLogSerializer,
     SystemSettingsSerializer,
@@ -204,6 +206,31 @@ class SMTPSettingsViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Return singleton instance"""
         return SMTPSettings.objects.filter(pk=1)
+
+
+class PlatformTwilioSettingsViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for platform Twilio settings (admin SMS broadcast).
+    Singleton pattern - only one instance (pk=1). GET and PUT only.
+    """
+    permission_classes = [IsAuthenticated, CanManageSettings]
+    serializer_class = PlatformTwilioSettingsSerializer
+    http_method_names = ["get", "put", "head", "options"]
+
+    def get_queryset(self):
+        return PlatformTwilioSettings.objects.filter(pk=1)
+
+    def get_object(self):
+        """Ensure singleton exists (get_or_create) when accessing pk=1."""
+        if self.kwargs.get("pk") == "1" or self.kwargs.get("pk") == 1:
+            return PlatformTwilioSettings.get_settings()
+        return super().get_object()
+
+    def list(self, request, *args, **kwargs):
+        """Return the singleton data."""
+        instance = PlatformTwilioSettings.get_settings()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
 
 class SystemBackupViewSet(viewsets.ModelViewSet):

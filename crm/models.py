@@ -93,6 +93,11 @@ class Client(models.Model):
         max_length=20, blank=True, null=True
     )  # Keep for backward compatibility
 
+    lead_company_name = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text="اسم شركة العميل / الليد (اختياري)",
+    )
+
     company = models.ForeignKey(
         "companies.Company",
         on_delete=models.CASCADE,
@@ -275,6 +280,11 @@ class Deal(models.Model):
         blank=True,
         null=True,
         help_text="Total deal value",
+    )
+    reminder_date = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="Follow-up reminder datetime for this deal",
     )
     start_date = models.DateField(blank=True, null=True, help_text="Deal start date")
     closed_date = models.DateField(blank=True, null=True, help_text="Deal closed date")

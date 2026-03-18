@@ -10,6 +10,7 @@ from .models import (
     SystemBackup,
     SystemAuditLog,
     SystemSettings,
+    PlatformTwilioSettings,
 )
 
 
@@ -211,6 +212,41 @@ class SMTPSettingsSerializer(serializers.ModelSerializer):
         if data.get('use_tls') and data.get('use_ssl'):
             raise serializers.ValidationError("Cannot use both TLS and SSL. Choose one.")
         return data
+
+
+class PlatformTwilioSettingsSerializer(serializers.ModelSerializer):
+    """Platform Twilio for admin SMS broadcast. Auth token is write-only and stored encrypted."""
+    auth_token_masked = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = PlatformTwilioSettings
+        fields = [
+            "id",
+            "account_sid",
+            "twilio_number",
+            "auth_token",
+            "auth_token_masked",
+            "sender_id",
+            "is_enabled",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {"auth_token": {"write_only": True, "required": False}}
+
+    def get_auth_token_masked(self, obj):
+        if obj.auth_token:
+            return "********"
+        return None
+
+    def update(self, instance, validated_data):
+        auth = validated_data.pop("auth_token", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if auth is not None:
+            instance.set_auth_token(auth)
+        instance.save()
+        return instance
 
 
 class SystemBackupSerializer(serializers.ModelSerializer):

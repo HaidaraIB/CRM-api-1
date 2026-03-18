@@ -114,6 +114,89 @@ class PublicPaymentGatewayListView(generics.ListAPIView):
         ).order_by('name')
 
 
+def _deactivate_other_subscriptions_for_company(company_id, exclude_subscription_id=None):
+    """Ensure only one subscription per company is active: deactivate all others for this company."""
+    qs = Subscription.objects.filter(company_id=company_id)
+    if exclude_subscription_id is not None:
+        qs = qs.exclude(pk=exclude_subscription_id)
+    updated = qs.filter(is_active=True).update(is_active=False)
+    if updated:
+        logger.info(
+            "Deactivated %s other subscription(s) for company_id=%s (only one active per company)",
+            updated,
+            company_id,
+        )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def switch_subscription_plan_free(request):
+    """
+    Switch the current company's active subscription to a FREE/TRIAL plan (no payment, no billing cycle).
+    POST /api/subscriptions/switch-plan-free/
+    Body: { "plan_id": <int> }
+    """
+    user = request.user
+    company = getattr(user, "company", None)
+    if not company:
+        return Response({"error": "User is not associated with a company."}, status=status.HTTP_400_BAD_REQUEST)
+
+    plan_id = request.data.get("plan_id")
+    try:
+        plan_id = int(plan_id)
+    except (TypeError, ValueError):
+        return Response({"error": "plan_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        plan = Plan.objects.get(id=plan_id, visible=True)
+    except Plan.DoesNotExist:
+        return Response({"error": "Plan not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Only allow free/trial plans in this endpoint
+    is_free_or_trial = float(plan.price_monthly) <= 0 and float(plan.price_yearly) <= 0
+    if not is_free_or_trial:
+        return Response(
+            {"error": "Selected plan requires payment.", "requires_payment": True},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Find current subscription (prefer active; otherwise latest)
+    subscription = (
+        Subscription.objects.filter(company=company, is_active=True)
+        .order_by("-created_at")
+        .first()
+    ) or Subscription.objects.filter(company=company).order_by("-created_at").first()
+
+    if not subscription:
+        return Response({"error": "Subscription not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Ensure only one active subscription for the company
+    _deactivate_other_subscriptions_for_company(company.id, exclude_subscription_id=subscription.id)
+
+    now = timezone.now()
+    # Update plan + dates
+    subscription.plan = plan
+    subscription.is_active = True
+    subscription.start_date = now
+    if int(getattr(plan, "trial_days", 0) or 0) > 0:
+        subscription.end_date = now + timedelta(days=int(plan.trial_days))
+    else:
+        subscription.end_date = now + timedelta(days=365 * 100)
+    subscription.auto_renew = False
+    subscription.save(update_fields=["plan", "is_active", "start_date", "end_date", "auto_renew", "updated_at"])
+
+    return Response(
+        {
+            "subscription_id": subscription.id,
+            "plan_id": plan.id,
+            "plan_name": plan.name,
+            "end_date": subscription.end_date.isoformat() if subscription.end_date else None,
+            "is_active": bool(subscription.is_active),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 class SubscriptionViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing Subscription instances.
@@ -132,6 +215,23 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return SubscriptionListSerializer
         return SubscriptionSerializer
+
+    def perform_create(self, serializer):
+        validated = serializer.validated_data
+        if validated.get("is_active", True):
+            company_id = validated["company"].id
+            _deactivate_other_subscriptions_for_company(company_id, exclude_subscription_id=None)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        validated = serializer.validated_data
+        # When this subscription is (or will be) active, ensure no other active sub for same company
+        will_be_active = validated.get("is_active", instance.is_active)
+        if will_be_active:
+            company_id = instance.company_id
+            _deactivate_other_subscriptions_for_company(company_id, exclude_subscription_id=instance.id)
+        serializer.save()
 
 
 class PaymentViewSet(viewsets.ModelViewSet):
@@ -239,6 +339,45 @@ class BroadcastViewSet(viewsets.ModelViewSet):
                 "recipients_count": result.get("recipients_count", 0),
                 "broadcast_type": broadcast_type,
             }
+        )
+
+    @action(detail=False, methods=["post"], url_path="send-sms")
+    def send_sms(self, request):
+        """
+        Send SMS to users matching targets (same as broadcast: all, plan_X, role_*, company_X).
+        Body: { "targets": ["all"] | ["company_1", ...], "content": "message text" }.
+        Uses platform Twilio settings.
+        """
+        from subscriptions.utils import send_broadcast_sms
+
+        targets = request.data.get("targets")
+        content = request.data.get("content") or ""
+        if not isinstance(targets, list):
+            targets = ["all"] if not targets else [targets] if isinstance(targets, str) else []
+        if not targets:
+            targets = ["all"]
+        content = (content or "").strip()
+        if not content:
+            return Response(
+                {"error": "Message content is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        result = send_broadcast_sms(targets, content)
+        if not result["success"]:
+            return Response(
+                {
+                    "error": result.get("error", "Failed to send SMS."),
+                    "sent_count": result.get("sent_count", 0),
+                    "skipped_count": result.get("skipped_count", 0),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {
+                "sent_count": result.get("sent_count", 0),
+                "skipped_count": result.get("skipped_count", 0),
+            },
+            status=status.HTTP_200_OK,
         )
 
     @action(detail=True, methods=["post"])
@@ -1810,6 +1949,32 @@ def check_payment_status(request, subscription_id):
 
         # Return all fields the frontend needs - ensure values match what frontend expects
         # Check if subscription is truly active (considering end_date)
+        # Normalize free/trial subscriptions: they do not have billing cycles.
+        # Older records may have been created with a default 30-day end_date; fix/override using plan.trial_days.
+        try:
+            plan = subscription.plan
+            is_free_or_trial = float(plan.price_monthly) <= 0 and float(plan.price_yearly) <= 0
+            has_completed_payment = (
+                Payment.objects.filter(
+                    subscription=subscription,
+                    payment_status=PaymentStatus.COMPLETED.value,
+                ).exists()
+            )
+            if is_free_or_trial and not has_completed_payment:
+                from datetime import timedelta
+                if int(getattr(plan, "trial_days", 0) or 0) > 0:
+                    computed_end = subscription.start_date + timedelta(days=int(plan.trial_days))
+                else:
+                    computed_end = subscription.start_date + timedelta(days=365 * 100)
+                # If stored end_date is clearly not matching computed_end, update it.
+                if subscription.end_date is None or abs((subscription.end_date - computed_end).days) >= 1:
+                    subscription.end_date = computed_end
+                    subscription.save(update_fields=["end_date", "updated_at"])
+                    subscription.refresh_from_db()
+        except Exception as _exc:
+            # Never break status endpoint due to normalization
+            pass
+
         is_truly_active = subscription.is_truly_active()
         days_until_expiry = subscription.days_until_expiry()
         is_expiring_soon = subscription.is_expiring_soon(days_threshold=30)
