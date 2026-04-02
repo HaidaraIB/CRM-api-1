@@ -2,6 +2,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from crm_saas_api.responses import error_response, success_response
 from .models import Company
 from .serializers import CompanySerializer, CompanyListSerializer
 from accounts.permissions import CanManageTenants
@@ -75,9 +76,10 @@ class CompanyViewSet(viewsets.ModelViewSet):
         
         # Check permissions: user must be admin of this company or super admin
         if not (user.is_super_admin() or (user.is_admin() and user.company == company)):
-            return Response(
-                {'error': 'You do not have permission to update these settings.'},
-                status=status.HTTP_403_FORBIDDEN
+            return error_response(
+                "You do not have permission to update these settings.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
             )
         
         # Update settings
@@ -93,18 +95,18 @@ class CompanyViewSet(viewsets.ModelViewSet):
             try:
                 hours = int(re_assign_hours)
                 if hours < 1:
-                    return Response(
-                        {'error': 're_assign_hours must be at least 1 hour.'},
-                        status=status.HTTP_400_BAD_REQUEST
+                    return error_response(
+                        "re_assign_hours must be at least 1 hour.",
+                        code="invalid_re_assign_hours",
                     )
                 company.re_assign_hours = hours
             except (ValueError, TypeError):
-                return Response(
-                    {'error': 're_assign_hours must be a valid integer.'},
-                    status=status.HTTP_400_BAD_REQUEST
+                return error_response(
+                    "re_assign_hours must be a valid integer.",
+                    code="invalid_re_assign_hours",
                 )
         
         company.save(update_fields=['auto_assign_enabled', 're_assign_enabled', 're_assign_hours'])
         
         serializer = CompanySerializer(company, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return success_response(data=serializer.data)

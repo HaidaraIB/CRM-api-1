@@ -154,6 +154,14 @@ class Client(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["company", "assigned_to"], name="idx_client_company_assigned"),
+            models.Index(fields=["company", "created_at"], name="idx_client_company_created"),
+            models.Index(fields=["company", "status"], name="idx_client_company_status"),
+            models.Index(fields=["company", "source"], name="idx_client_company_source"),
+        ]
+
     def __str__(self):
         return self.name
 
@@ -342,6 +350,13 @@ class Deal(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["company", "employee"], name="idx_deal_company_employee"),
+            models.Index(fields=["company", "stage"], name="idx_deal_company_stage"),
+            models.Index(fields=["company", "created_at"], name="idx_deal_company_created"),
+        ]
 
     def __str__(self):
         return f"{self.client.name} - {self.stage}"

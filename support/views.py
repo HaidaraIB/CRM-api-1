@@ -1,7 +1,8 @@
+import logging
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
 from rest_framework import status
+from crm_saas_api.responses import error_response, success_response
 from accounts.permissions import HasActiveSubscription
 from .models import SupportTicket, SupportTicketAttachment
 from .serializers import (
@@ -9,6 +10,11 @@ from .serializers import (
     SupportTicketListSerializer,
     SupportTicketStatusSerializer,
 )
+
+logger = logging.getLogger(__name__)
+
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB per file
 
 
 class SupportTicketViewSet(viewsets.ModelViewSet):
@@ -53,14 +59,29 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         instance = serializer.instance
 
         for f in files:
-            if f and f.size:
-                SupportTicketAttachment.objects.create(ticket=instance, file=f)
+            if not f or not f.size:
+                continue
+            if f.content_type not in ALLOWED_IMAGE_TYPES:
+                return error_response(
+                    f"File type '{f.content_type}' is not allowed. Use JPEG, PNG, GIF, or WebP.",
+                    code="invalid_file_type",
+                )
+            if f.size > MAX_FILE_SIZE:
+                return error_response(
+                    f"File '{f.name}' exceeds the 5 MB limit.",
+                    code="file_too_large",
+                )
+            SupportTicketAttachment.objects.create(ticket=instance, file=f)
 
         headers = self.get_success_headers(serializer.data)
         # Re-fetch to include attachments in response
         instance.refresh_from_db()
         serializer = self.get_serializer(instance)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        return success_response(
+            data=serializer.data,
+            status_code=status.HTTP_201_CREATED,
+            headers=headers,
+        )
 
     def perform_create(self, serializer):
         instance = serializer.save(
@@ -79,7 +100,6 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
                 self.request.user, instance, language=language
             )
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).exception(
+            logger.exception(
                 "Failed to send support ticket created email: %s", e
             )

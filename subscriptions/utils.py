@@ -17,25 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 def get_smtp_connection():
-    """
-    Get SMTP connection using SMTPSettings
-    """
-    smtp_settings = SMTPSettings.get_settings()
-
-    if not smtp_settings.is_active:
-        raise Exception(
-            "SMTP is not active. Please configure and enable SMTP settings."
-        )
-
-    return EmailBackend(
-        host=smtp_settings.host,
-        port=smtp_settings.port,
-        username=smtp_settings.username,
-        password=smtp_settings.password,
-        use_tls=smtp_settings.use_tls,
-        use_ssl=smtp_settings.use_ssl,
-        fail_silently=False,
-    )
+    """Get SMTP connection using platform SMTPSettings singleton."""
+    from crm_saas_api.utils import get_smtp_connection as _get_smtp
+    return _get_smtp()
 
 
 def get_broadcast_targets_list(broadcast):

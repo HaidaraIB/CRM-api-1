@@ -14,6 +14,7 @@ from pathlib import Path
 import os
 from datetime import timedelta
 from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 # ============================================================================
 # Path Configuration
@@ -27,7 +28,16 @@ load_dotenv(BASE_DIR / ".env")
 # ============================================================================
 
 SECRET_KEY = os.getenv("SECRET_KEY")
-DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-dev-key-change-me-in-production"
+    else:
+        raise ImproperlyConfigured(
+            "SECRET_KEY environment variable is required in production. "
+            "Set it in your .env file."
+        )
 
 # Domain Configuration
 BASE_DOMAIN = os.getenv("BASE_DOMAIN", "")
@@ -166,6 +176,27 @@ if BASE_DOMAIN:
     CSRF_TRUSTED_ORIGINS.append(f"http://{BASE_DOMAIN}")
 
 # ============================================================================
+# Production Security Settings
+# ============================================================================
+
+SECURE_SSL_REDIRECT = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+SECURE_HSTS_PRELOAD = not DEBUG
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = "DENY"
+
+# ============================================================================
+# File Upload Limits
+# ============================================================================
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# ============================================================================
 # Application Definition
 # ============================================================================
 
@@ -179,6 +210,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "accounts",
     "companies",
     "crm",
@@ -231,12 +263,27 @@ WSGI_APPLICATION = "crm_saas_api.wsgi.application"
 # Database Configuration
 # ============================================================================
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+_db_engine = os.getenv("DB_ENGINE", "sqlite3")
+
+if _db_engine == "postgresql":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("DB_NAME", "crm_db"),
+            "USER": os.getenv("DB_USER", "postgres"),
+            "PASSWORD": os.getenv("DB_PASSWORD", ""),
+            "HOST": os.getenv("DB_HOST", "localhost"),
+            "PORT": os.getenv("DB_PORT", "5432"),
+            "CONN_MAX_AGE": 600,
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 # ============================================================================
 # Authentication & Password Validation
@@ -292,12 +339,21 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ============================================================================
 # Cache (for OAuth state etc. - survives redirects from external sites)
 # ============================================================================
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "oauth-state-cache",
+_redis_url = os.getenv("REDIS_URL", "")
+if _redis_url:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _redis_url,
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "oauth-state-cache",
+        }
+    }
 
 # ============================================================================
 # Frontend & Onboarding Settings
@@ -310,16 +366,33 @@ EMAIL_VERIFICATION_EXPIRY_HOURS = 48
 # Django REST Framework Settings
 # ============================================================================
 
+_REST_FRAMEWORK_RENDERERS = [
+    "crm_saas_api.renderers.EnvelopeJSONRenderer",
+]
+# Browsable API exposes HTML forms and session auth hints; keep it dev/staging only.
+if DEBUG or os.getenv("ENABLE_BROWSABLE_API", "").lower() == "true":
+    _REST_FRAMEWORK_RENDERERS.append("rest_framework.renderers.BrowsableAPIRenderer")
+
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.BasicAuthentication",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "30/minute",
+        "user": "120/minute",
+        "auth": "5/minute",
+    },
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "crm_saas_api.exception_handler.custom_exception_handler",
+    "DEFAULT_RENDERER_CLASSES": _REST_FRAMEWORK_RENDERERS,
     "PAGE_SIZE": 20,
 }
 

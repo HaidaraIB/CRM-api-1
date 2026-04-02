@@ -1,4 +1,6 @@
 from rest_framework import permissions
+from django.core.cache import cache
+from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 from subscriptions.models import Subscription
 
@@ -11,41 +13,41 @@ class HasActiveSubscription(permissions.BasePermission):
     """
     message = "Your subscription is not active or has expired. Please contact support or Complete Your Payment to access the system."
     
+    CACHE_TTL = 300  # 5 minutes
+
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        
-        # Super Admin doesn't need active subscription
+
         if request.user.is_super_admin():
             return True
-        
-        # Check if user has a company
+
         if not request.user.company:
             return False
-        
-        # Check if company has an active subscription
-        # Must be: is_active=True AND end_date > now
+
+        company_id = request.user.company_id
+        cache_key = f"active_sub_{company_id}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         now = timezone.now()
         active_subscription = Subscription.objects.filter(
-            company=request.user.company,
+            company_id=company_id,
             is_active=True,
-            end_date__gt=now
-        ).first()
-        
-        # If subscription exists but end_date has passed, update is_active to False
+            end_date__gt=now,
+        ).only("id").first()
+
         if not active_subscription:
-            # Check if there's a subscription that should be deactivated
-            expired_subscription = Subscription.objects.filter(
-                company=request.user.company,
+            Subscription.objects.filter(
+                company_id=company_id,
                 is_active=True,
-                end_date__lte=now
-            ).first()
-            
-            if expired_subscription:
-                expired_subscription.is_active = False
-                expired_subscription.save(update_fields=['is_active', 'updated_at'])
-        
-        return active_subscription is not None
+                end_date__lte=now,
+            ).update(is_active=False)
+
+        result = active_subscription is not None
+        cache.set(cache_key, result, self.CACHE_TTL)
+        return result
 
 
 class IsSuperAdmin(permissions.BasePermission):
@@ -316,7 +318,7 @@ class IsSuperAdminOrLimitedAdmin(permissions.BasePermission):
         try:
             limited_admin = request.user.limited_admin_profile
             return limited_admin.is_active
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -336,7 +338,7 @@ class CanViewDashboard(IsSuperAdminOrLimitedAdmin):
         try:
             limited_admin = request.user.limited_admin_profile
             return limited_admin.is_active and limited_admin.can_view_dashboard
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -360,7 +362,7 @@ class CanManageTenants(IsSuperAdminOrLimitedAdmin):
             if request.method in permissions.SAFE_METHODS:
                 return limited_admin.can_view_dashboard or limited_admin.can_manage_tenants
             return limited_admin.can_manage_tenants
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -382,7 +384,7 @@ class CanManageSubscriptions(IsSuperAdminOrLimitedAdmin):
             if request.method in permissions.SAFE_METHODS:
                 return limited_admin.can_view_dashboard or limited_admin.can_manage_subscriptions
             return limited_admin.can_manage_subscriptions
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -404,7 +406,7 @@ class CanManagePlans(IsSuperAdminOrLimitedAdmin):
             if request.method in permissions.SAFE_METHODS:
                 return limited_admin.can_view_dashboard or limited_admin.can_manage_subscriptions
             return limited_admin.can_manage_subscriptions
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -433,7 +435,7 @@ class CanManagePayments(IsSuperAdminOrLimitedAdmin):
                 limited_admin.can_manage_payment_gateways or
                 limited_admin.can_view_reports
             )
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -453,7 +455,7 @@ class CanManagePaymentGateways(IsSuperAdminOrLimitedAdmin):
         try:
             limited_admin = request.user.limited_admin_profile
             return limited_admin.is_active and limited_admin.can_manage_payment_gateways
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -473,7 +475,7 @@ class CanViewReports(IsSuperAdminOrLimitedAdmin):
         try:
             limited_admin = request.user.limited_admin_profile
             return limited_admin.is_active and limited_admin.can_view_reports
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -493,7 +495,7 @@ class CanManageCommunication(IsSuperAdminOrLimitedAdmin):
         try:
             limited_admin = request.user.limited_admin_profile
             return limited_admin.is_active and limited_admin.can_manage_communication
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -515,7 +517,7 @@ class CanManageSettings(IsSuperAdminOrLimitedAdmin):
             if request.method in permissions.SAFE_METHODS:
                 return limited_admin.can_view_dashboard or limited_admin.can_manage_settings
             return limited_admin.can_manage_settings
-        except:
+        except ObjectDoesNotExist:
             return False
 
 
@@ -535,5 +537,5 @@ class CanManageLimitedAdmins(IsSuperAdminOrLimitedAdmin):
         try:
             limited_admin = request.user.limited_admin_profile
             return limited_admin.is_active and limited_admin.can_manage_limited_admins
-        except:
+        except ObjectDoesNotExist:
             return False

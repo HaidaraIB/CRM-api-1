@@ -2,7 +2,12 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from accounts.permissions import CanAccessClient, CanAccessDeal, CanAccessTask, IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee, IsAdminOrSupervisorLeadsOrReadOnlyForEmployee
+from accounts.permissions import (
+    CanAccessClient, CanAccessDeal, CanAccessTask,
+    IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee,
+    IsAdminOrSupervisorLeadsOrReadOnlyForEmployee,
+)
+from crm_saas_api.responses import success_response, error_response
 from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientEvent
 from accounts.models import User
 from .serializers import (
@@ -23,10 +28,7 @@ from .serializers import (
 
 
 class ClientViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Client instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing Client instances (CRUD)."""
 
     queryset = Client.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
@@ -37,7 +39,10 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related(
+            "company", "assigned_to", "communication_way", "status", "campaign",
+            "integration_account",
+        )
 
         if user.is_admin():
             return queryset.filter(company=user.company)
@@ -56,9 +61,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         return ClientSerializer
 
     def perform_create(self, serializer):
-        """
-        Enforce plan quota for clients (leads) before creating.
-        """
+        """Enforce plan quota for clients (leads) before creating."""
         user = self.request.user
         company = getattr(user, "company", None)
         if company and not user.is_super_admin():
@@ -77,104 +80,93 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):
-        """
-        Auto-assign all unassigned clients for companies with auto_assign_enabled
-        POST /api/clients/assign_unassigned/
-        """
+        """Auto-assign all unassigned clients for companies with auto_assign_enabled."""
         from crm.signals import get_least_busy_employee
         from django.utils import timezone
-        
+
         user = request.user
         company = user.company
-        
+
         if not company:
-            return Response(
-                {"error": "You must belong to a company."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        
-        # Only admins can trigger this
+            return error_response("You must belong to a company.", code="no_company")
+
         if not user.is_admin():
-            return Response(
-                {"error": "Only admins can assign unassigned clients."},
-                status=status.HTTP_403_FORBIDDEN,
+            return error_response(
+                "Only admins can assign unassigned clients.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
             )
-        
-        # Get unassigned clients for this company
-        unassigned_clients = Client.objects.filter(
-            company=company,
-            assigned_to__isnull=True
+
+        unassigned_clients = list(
+            Client.objects.filter(company=company, assigned_to__isnull=True)
         )
-        
-        if not unassigned_clients.exists():
-            return Response({
-                "message": "No unassigned clients found.",
-                "assigned_count": 0
-            })
-        
-        # Only assign if auto_assign is enabled
+
+        if not unassigned_clients:
+            return success_response(
+                data={"assigned_count": 0},
+                message="No unassigned clients found.",
+            )
+
         if not company.auto_assign_enabled:
-            return Response({
-                "message": "Auto assign is not enabled for your company.",
-                "assigned_count": 0
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Get the least busy employee
+            return error_response(
+                "Auto assign is not enabled for your company.",
+                code="auto_assign_disabled",
+            )
+
         employee = get_least_busy_employee(company)
-        
         if not employee:
-            return Response({
-                "error": "No active employees found in your company.",
-                "assigned_count": 0
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        assigned_count = 0
+            return error_response(
+                "No active employees found in your company.",
+                code="no_employees",
+            )
+
+        now = timezone.now()
+        employee_name = employee.get_full_name() or employee.username
+        events_to_create = []
+
         for client in unassigned_clients:
             client.assigned_to = employee
-            client.assigned_at = timezone.now()
-            client.save(update_fields=['assigned_to', 'assigned_at'])
-            
-            # Record the event
-            ClientEvent.objects.create(
-                client=client,
-                event_type='assignment',
-                old_value="Unassigned",
-                new_value=employee.get_full_name() or employee.username,
-                notes=f"Auto-assigned to {employee.get_full_name() or employee.username}",
-                created_by=user
+            client.assigned_at = now
+            events_to_create.append(
+                ClientEvent(
+                    client=client,
+                    event_type="assignment",
+                    old_value="Unassigned",
+                    new_value=employee_name,
+                    notes=f"Auto-assigned to {employee_name}",
+                    created_by=user,
+                )
             )
-            assigned_count += 1
-        
-        return Response({
-            "message": f"Successfully assigned {assigned_count} client(s) to {employee.get_full_name() or employee.username}.",
-            "assigned_count": assigned_count,
-            "assigned_to": employee.get_full_name() or employee.username
-        })
+
+        Client.objects.bulk_update(unassigned_clients, ["assigned_to", "assigned_at"])
+        ClientEvent.objects.bulk_create(events_to_create)
+
+        return success_response(
+            data={
+                "assigned_count": len(unassigned_clients),
+                "assigned_to": employee_name,
+            },
+            message=f"Successfully assigned {len(unassigned_clients)} client(s) to {employee_name}.",
+        )
 
     @action(detail=False, methods=["post"])
     def bulk_assign(self, request):
-        """
-        Assign multiple clients to a specific user or unassign them
-        POST /api/clients/bulk_assign/
-        Body: { "client_ids": [1, 2, 3], "user_id": 4 } or { "client_ids": [1, 2, 3], "user_id": null }
-        """
+        """Assign multiple clients to a specific user or unassign them."""
+        from django.utils import timezone
+
         client_ids = request.data.get("client_ids", [])
         user_id = request.data.get("user_id")
 
         if not client_ids:
-            return Response(
-                {"error": "client_ids is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return error_response("client_ids is required.", code="missing_field")
 
-        # Only admins can bulk assign leads
         if not request.user.is_admin():
-            return Response(
-                {"error": "Only admins can assign leads."},
-                status=status.HTTP_403_FORBIDDEN,
+            return error_response(
+                "Only admins can assign leads.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
             )
 
-        # Handle unassign (user_id is None or null)
         if user_id is None:
             target_user = None
             new_assigned_name = "Unassigned"
@@ -183,60 +175,60 @@ class ClientViewSet(viewsets.ModelViewSet):
                 target_user = User.objects.get(pk=user_id, company=request.user.company)
                 new_assigned_name = target_user.get_full_name() or target_user.username
             except User.DoesNotExist:
-                return Response(
-                    {"error": "User not found or does not belong to your company."},
-                    status=status.HTTP_404_NOT_FOUND,
+                return error_response(
+                    "User not found or does not belong to your company.",
+                    code="not_found",
+                    status_code=status.HTTP_404_NOT_FOUND,
                 )
 
-        clients_to_update = Client.objects.filter(
-            id__in=client_ids, company=request.user.company
+        clients_to_update = list(
+            Client.objects.filter(id__in=client_ids, company=request.user.company)
         )
-        
-        from django.utils import timezone
-        
-        updated_count = 0
+
+        now = timezone.now()
+        changed_clients = []
+        events_to_create = []
+
         for client in clients_to_update:
-            old_assigned_name = client.assigned_to.get_full_name() or client.assigned_to.username if client.assigned_to else "Unassigned"
-            
-            # Check if assignment actually changed
-            if client.assigned_to != target_user:
-                client.assigned_to = target_user
-                if target_user:
-                    client.assigned_at = timezone.now()
-                else:
-                    # When unassigning, clear assigned_at
-                    client.assigned_at = None
-                client.save(update_fields=['assigned_to', 'assigned_at'])
-                updated_count += 1
-                
-                # Format notes based on assignment/unassignment
-                if target_user:
-                    notes = f"Bulk assigned to {new_assigned_name} (was {old_assigned_name})"
-                else:
-                    notes = f"Unassigned (was {old_assigned_name})"
-                
-                # Record the event
-                ClientEvent.objects.create(
+            if client.assigned_to == target_user:
+                continue
+            old_assigned_name = (
+                client.assigned_to.get_full_name() or client.assigned_to.username
+            ) if client.assigned_to else "Unassigned"
+
+            client.assigned_to = target_user
+            client.assigned_at = now if target_user else None
+            changed_clients.append(client)
+
+            notes = (
+                f"Bulk assigned to {new_assigned_name} (was {old_assigned_name})"
+                if target_user
+                else f"Unassigned (was {old_assigned_name})"
+            )
+            events_to_create.append(
+                ClientEvent(
                     client=client,
-                    event_type='assignment',
+                    event_type="assignment",
                     old_value=old_assigned_name,
                     new_value=new_assigned_name,
                     notes=notes,
-                    created_by=request.user
+                    created_by=request.user,
                 )
+            )
+
+        if changed_clients:
+            Client.objects.bulk_update(changed_clients, ["assigned_to", "assigned_at"])
+            ClientEvent.objects.bulk_create(events_to_create)
 
         action_text = "assigned" if target_user else "unassigned"
-        return Response(
-            {"message": f"Successfully {action_text} {updated_count} lead(s)."},
-            status=status.HTTP_200_OK,
+        return success_response(
+            data={"updated_count": len(changed_clients)},
+            message=f"Successfully {action_text} {len(changed_clients)} lead(s).",
         )
 
 
 class DealViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Deal instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing Deal instances (CRUD)."""
 
     queryset = Deal.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessDeal]
@@ -247,7 +239,10 @@ class DealViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related(
+            "client", "company", "employee", "started_by", "closed_by",
+            "unit", "project",
+        )
 
         if user.is_admin():
             return queryset.filter(company=user.company)
@@ -267,10 +262,7 @@ class DealViewSet(viewsets.ModelViewSet):
 
 
 class TaskViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Task instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing Task instances (CRUD)."""
 
     queryset = Task.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessTask]
@@ -281,7 +273,9 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related(
+            "deal", "deal__company", "deal__client", "stage",
+        )
 
         if user.is_admin():
             return queryset.filter(deal__company=user.company)
@@ -301,11 +295,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
 
 class CampaignViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Campaign instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    Admin and supervisor (with can_manage_leads) can manage; employees can read (GET) only.
-    """
+    """ViewSet for managing Campaign instances (CRUD)."""
 
     queryset = Campaign.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorLeadsOrReadOnlyForEmployee]
@@ -316,7 +306,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related("company")
 
         if user.is_admin():
             return queryset.filter(company=user.company)
@@ -330,42 +320,35 @@ class CampaignViewSet(viewsets.ModelViewSet):
         return queryset.none()
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
-        company = serializer.validated_data['company']
-        
-        # البحث عن آخر campaign لهذه الشركة مع code يبدأ بـ CAMP
+        """Auto-generate a unique campaign code."""
+        company = serializer.validated_data["company"]
+
         last_campaign = Campaign.objects.filter(
             company=company,
-            code__startswith='CAMP'
-        ).order_by('-id').first()
-        
+            code__startswith="CAMP",
+        ).order_by("-id").first()
+
         new_num = 1
         if last_campaign and last_campaign.code:
             try:
-                # استخراج الرقم من آخر code
-                code_suffix = last_campaign.code.replace('CAMP', '').strip()
+                code_suffix = last_campaign.code.replace("CAMP", "").strip()
                 if code_suffix:
-                    last_num = int(code_suffix)
-                    new_num = last_num + 1
+                    new_num = int(code_suffix) + 1
             except (ValueError, AttributeError):
                 new_num = 1
-        
-        # التأكد من أن الـ code فريد (في حالة race condition)
+
         max_attempts = 1000
-        attempt = 0
         new_code = None
-        
-        while attempt < max_attempts:
+        for _ in range(max_attempts):
             candidate_code = f"CAMP{str(new_num).zfill(3)}"
             if not Campaign.objects.filter(company=company, code=candidate_code).exists():
                 new_code = candidate_code
                 break
             new_num += 1
-            attempt += 1
-        
+
         if not new_code:
             raise ValueError("Unable to generate unique campaign code")
-        
+
         serializer.save(code=new_code)
 
     def get_serializer_class(self):
@@ -375,10 +358,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
 
 class ClientTaskViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing ClientTask instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing ClientTask instances (CRUD)."""
 
     queryset = ClientTask.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
@@ -389,7 +369,9 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related(
+            "client", "client__company", "stage", "created_by",
+        )
 
         if user.is_admin():
             return queryset.filter(client__company=user.company)
@@ -412,10 +394,7 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
 
 
 class ClientCallViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing ClientCall instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing ClientCall instances (CRUD)."""
 
     queryset = ClientCall.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
@@ -426,7 +405,9 @@ class ClientCallViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related(
+            "client", "client__company", "call_method", "created_by",
+        )
 
         if user.is_admin():
             return queryset.filter(client__company=user.company)
@@ -449,10 +430,7 @@ class ClientCallViewSet(viewsets.ModelViewSet):
 
 
 class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    ViewSet for viewing ClientEvent instances.
-    Provides read-only access to events.
-    """
+    """ViewSet for viewing ClientEvent instances (read-only)."""
 
     queryset = ClientEvent.objects.all()
     serializer_class = ClientEventSerializer
@@ -464,10 +442,11 @@ class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-        
-        # Filter by client ID if provided in query params
-        client_id = self.request.query_params.get('client', None)
+        queryset = super().get_queryset().select_related(
+            "client", "client__company", "created_by",
+        )
+
+        client_id = self.request.query_params.get("client", None)
         if client_id:
             queryset = queryset.filter(client_id=client_id)
 

@@ -5,6 +5,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from crm_saas_api.responses import error_response, success_response
 from django.http import FileResponse
 from django.db import models
 from accounts.permissions import (
@@ -230,7 +231,7 @@ class PlatformTwilioSettingsViewSet(viewsets.ModelViewSet):
         """Return the singleton data."""
         instance = PlatformTwilioSettings.get_settings()
         serializer = self.get_serializer(instance)
-        return Response(serializer.data)
+        return success_response(data=serializer.data)
 
 
 class SystemBackupViewSet(viewsets.ModelViewSet):
@@ -253,18 +254,23 @@ class SystemBackupViewSet(viewsets.ModelViewSet):
                 notes=notes,
             )
         except Exception as exc:
-            return Response(
-                {"detail": str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
+            return error_response(
+                str(exc),
+                code="bad_request",
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
         serializer = self.get_serializer(backup)
         headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        return success_response(
+            data=serializer.data,
+            status_code=status.HTTP_201_CREATED,
+            headers=headers,
+        )
 
     def destroy(self, request, *args, **kwargs):
         backup = self.get_object()
         delete_backup(backup, user=request.user)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return success_response(status_code=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"])
     def restore(self, request, pk=None):
@@ -272,34 +278,37 @@ class SystemBackupViewSet(viewsets.ModelViewSet):
         try:
             snapshot_path = restore_database_backup(backup, user=request.user)
         except Exception as exc:
-            return Response(
-                {"detail": str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
+            return error_response(
+                str(exc),
+                code="bad_request",
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
-        return Response(
-            {
+        return success_response(
+            data={
                 "status": "restored",
                 "backup_id": backup.id,
                 "snapshot": str(snapshot_path),
             },
-            status=status.HTTP_200_OK,
+            status_code=status.HTTP_200_OK,
         )
 
     @action(detail=True, methods=["get"])
     def download(self, request, pk=None):
         backup = self.get_object()
         if not backup.file or not backup.file.name:
-            return Response(
-                {"detail": "Backup file not found on disk."},
-                status=status.HTTP_404_NOT_FOUND,
+            return error_response(
+                "Backup file not found on disk.",
+                code="not_found",
+                status_code=status.HTTP_404_NOT_FOUND,
             )
         try:
             with backup.file.open("rb") as f:
                 content = f.read()
         except (OSError, FileNotFoundError):
-            return Response(
-                {"detail": "Backup file not found on disk."},
-                status=status.HTTP_404_NOT_FOUND,
+            return error_response(
+                "Backup file not found on disk.",
+                code="not_found",
+                status_code=status.HTTP_404_NOT_FOUND,
             )
         filename = Path(backup.file.name).name
         response = FileResponse(
@@ -346,10 +355,10 @@ class SystemSettingsViewSet(viewsets.ModelViewSet):
         """Override list to return singleton as single item"""
         instance = SystemSettings.get_settings()
         serializer = self.get_serializer(instance)
-        return Response(serializer.data)
+        return success_response(data=serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
         """Override retrieve to always return singleton"""
         instance = SystemSettings.get_settings()
         serializer = self.get_serializer(instance)
-        return Response(serializer.data)
+        return success_response(data=serializer.data)

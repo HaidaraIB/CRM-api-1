@@ -1,78 +1,94 @@
 """
-Encryption utilities for sensitive data (Access Tokens, Refresh Tokens)
+Encryption utilities for sensitive data (Access Tokens, Refresh Tokens).
+Uses Fernet symmetric encryption from the cryptography library.
 """
-from cryptography.fernet import Fernet
+import logging
+from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
-import base64
-import os
+
+logger = logging.getLogger(__name__)
+
+_fernet_instance = None
+
+
+class EncryptionKeyMissing(Exception):
+    """Raised when INTEGRATION_ENCRYPTION_KEY is not configured."""
+    pass
 
 
 def get_encryption_key():
     """
-    الحصول على مفتاح التشفير من settings أو إنشاء واحد جديد
+    Retrieve the Fernet encryption key from settings.
+    Raises EncryptionKeyMissing if not configured in production.
     """
-    key = getattr(settings, 'INTEGRATION_ENCRYPTION_KEY', None)
-    
+    key = getattr(settings, "INTEGRATION_ENCRYPTION_KEY", "") or ""
+
     if not key:
-        # في Production، يجب إضافة INTEGRATION_ENCRYPTION_KEY في settings
-        # للاختبار، نستخدم مفتاح افتراضي (⚠️ لا تستخدم في Production!)
-        key = os.getenv('INTEGRATION_ENCRYPTION_KEY')
-        
-        if not key:
-            # Generate a key (only for development)
-            key = Fernet.generate_key().decode()
-            import warnings
-            warnings.warn(
-                "INTEGRATION_ENCRYPTION_KEY not set. Using generated key. "
-                "This is NOT secure for production!",
-                UserWarning
+        if settings.DEBUG:
+            logger.warning(
+                "INTEGRATION_ENCRYPTION_KEY not set. "
+                "Encryption/decryption will fail for new tokens."
             )
-    
-    # Ensure key is bytes
+            raise EncryptionKeyMissing(
+                "INTEGRATION_ENCRYPTION_KEY not configured. "
+                "Set it in your .env file."
+            )
+        raise EncryptionKeyMissing(
+            "INTEGRATION_ENCRYPTION_KEY is required in production. "
+            "Set it in your .env file."
+        )
+
     if isinstance(key, str):
         key = key.encode()
-    
+
     return key
 
 
+def _get_fernet():
+    """Return a cached Fernet instance (reuses key across calls)."""
+    global _fernet_instance
+    if _fernet_instance is None:
+        _fernet_instance = Fernet(get_encryption_key())
+    return _fernet_instance
+
+
 def encrypt_token(token):
-    """
-    تشفير Token
-    """
+    """Encrypt a plaintext token string. Returns encrypted string or None."""
     if not token:
         return None
-    
+
     try:
-        key = get_encryption_key()
-        fernet = Fernet(key)
-        encrypted = fernet.encrypt(token.encode())
+        encrypted = _get_fernet().encrypt(token.encode())
         return encrypted.decode()
+    except EncryptionKeyMissing:
+        logger.error("Cannot encrypt token: encryption key not configured.")
+        raise
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error encrypting token: {str(e)}")
-        # في حالة الخطأ، نرجع Token بدون تشفير (للتوافق مع البيانات القديمة)
-        return token
+        logger.error(f"Failed to encrypt token: {e}")
+        raise
 
 
 def decrypt_token(encrypted_token):
     """
-    فك تشفير Token
+    Decrypt an encrypted token string.
+    Falls back to returning the token as-is only if it looks like
+    a legacy unencrypted value (not a valid Fernet token).
     """
     if not encrypted_token:
         return None
-    
+
     try:
-        key = get_encryption_key()
-        fernet = Fernet(key)
-        decrypted = fernet.decrypt(encrypted_token.encode())
+        decrypted = _get_fernet().decrypt(encrypted_token.encode())
         return decrypted.decode()
-    except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"Error decrypting token (might be unencrypted): {str(e)}")
-        # إذا فشل فك التشفير، قد يكون Token غير مشفر (للتوافق مع البيانات القديمة)
+    except EncryptionKeyMissing:
+        logger.error("Cannot decrypt token: encryption key not configured.")
+        raise
+    except InvalidToken:
+        logger.warning(
+            "Token is not a valid Fernet token — "
+            "treating as legacy unencrypted value."
+        )
         return encrypted_token
-
-
-
+    except Exception as e:
+        logger.error(f"Failed to decrypt token: {e}")
+        raise

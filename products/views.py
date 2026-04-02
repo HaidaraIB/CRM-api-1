@@ -13,10 +13,7 @@ from .serializers import (
 
 
 class ProductCategoryViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing ProductCategory instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing ProductCategory instances (CRUD)."""
 
     queryset = ProductCategory.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessProductCategory]
@@ -27,15 +24,14 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company", "parent_category")
         return queryset.filter(company=user.company)
 
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
+        # Auto-generate sequential code
         company = serializer.validated_data['company']
-        # البحث عن آخر category لهذه الشركة مع code يبدأ بـ CAT
+        # Find the last category code for this company
         last_category = ProductCategory.objects.filter(
             company=company,
             code__startswith='CAT'
@@ -44,7 +40,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_category and last_category.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_category.code.replace('CAT', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -52,7 +48,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None
@@ -77,10 +73,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
 
 
 class ProductViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Product instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing Product instances (CRUD)."""
 
     queryset = Product.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessProduct]
@@ -91,14 +84,13 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company", "category", "supplier")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
+        # Auto-generate sequential code
         company = serializer.validated_data['company']
-        # البحث عن آخر product لهذه الشركة مع code يبدأ بـ PRD
+        # Find the last product code for this company
         last_product = Product.objects.filter(
             company=company,
             code__startswith='PRD'
@@ -107,7 +99,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_product and last_product.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_product.code.replace('PRD', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -115,7 +107,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None
@@ -140,10 +132,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Supplier instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing Supplier instances (CRUD)."""
 
     queryset = Supplier.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessSupplier]
@@ -154,14 +143,13 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
+        # Auto-generate sequential code
         company = serializer.validated_data['company']
-        # البحث عن آخر supplier لهذه الشركة مع code يبدأ بـ SUP
+        # Find the last supplier code for this company
         last_supplier = Supplier.objects.filter(
             company=company,
             code__startswith='SUP'
@@ -170,7 +158,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_supplier and last_supplier.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_supplier.code.replace('SUP', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -178,7 +166,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None

@@ -13,10 +13,7 @@ from .serializers import (
 
 
 class ServiceViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing Service instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing Service instances (CRUD)."""
 
     queryset = Service.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessService]
@@ -27,14 +24,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company", "provider")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
+        # Auto-generate sequential code
         company = serializer.validated_data['company']
-        # البحث عن آخر service لهذه الشركة مع code يبدأ بـ SVC
+        # Find the last service code for this company
         last_service = Service.objects.filter(
             company=company,
             code__startswith='SVC'
@@ -43,7 +39,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_service and last_service.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_service.code.replace('SVC', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -51,7 +47,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None
@@ -76,10 +72,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
 
 class ServicePackageViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing ServicePackage instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing ServicePackage instances (CRUD)."""
 
     queryset = ServicePackage.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessServicePackage]
@@ -90,14 +83,13 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company").prefetch_related("services")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
+        # Auto-generate sequential code
         company = serializer.validated_data['company']
-        # البحث عن آخر package لهذه الشركة مع code يبدأ بـ PKG
+        # Find the last package code for this company
         last_package = ServicePackage.objects.filter(
             company=company,
             code__startswith='PKG'
@@ -106,7 +98,7 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_package and last_package.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_package.code.replace('PKG', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -114,7 +106,7 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None
@@ -139,10 +131,7 @@ class ServicePackageViewSet(viewsets.ModelViewSet):
 
 
 class ServiceProviderViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing ServiceProvider instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    """
+    """ViewSet for managing ServiceProvider instances (CRUD)."""
 
     queryset = ServiceProvider.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessServiceProvider]
@@ -153,14 +142,13 @@ class ServiceProviderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
+        # Auto-generate sequential code
         company = serializer.validated_data['company']
-        # البحث عن آخر provider لهذه الشركة مع code يبدأ بـ PRV
+        # Find the last provider code for this company
         last_provider = ServiceProvider.objects.filter(
             company=company,
             code__startswith='PRV'
@@ -169,7 +157,7 @@ class ServiceProviderViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_provider and last_provider.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_provider.code.replace('PRV', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -177,7 +165,7 @@ class ServiceProviderViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None

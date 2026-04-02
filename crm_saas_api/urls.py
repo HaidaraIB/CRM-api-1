@@ -160,115 +160,58 @@ router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
 router.register(r"supervisors", SupervisorViewSet, basename="supervisor")
 router.register(r"support-tickets", SupportTicketViewSet, basename="supportticket")
 
+# --- Versioned API patterns (v1) ---
+v1_patterns = [
+    path("payments/create-paytabs-session/", create_paytabs_payment, name="create_paytabs_payment"),
+    path("payments/paytabs-return/", paytabs_return, name="paytabs_return"),
+    path("payments/create-zaincash-session/", create_zaincash_payment, name="create_zaincash_payment"),
+    path("payments/zaincash-return/", zaincash_return, name="zaincash_return"),
+    path("payments/create-stripe-session/", create_stripe_payment, name="create_stripe_payment"),
+    path("payments/stripe-return/", stripe_return, name="stripe_return"),
+    path("payments/create-qicard-session/", create_qicard_payment, name="create_qicard_payment"),
+    path("payments/qicard-return/", qicard_return, name="qicard_return"),
+    path("payments/qicard-webhook/", qicard_webhook, name="qicard_webhook"),
+    path("payments/create-fib-session/", create_fib_payment, name="create_fib_payment"),
+    path("payments/fib-callback/", fib_callback, name="fib_callback"),
+    path("payment-status/<int:subscription_id>/", check_payment_status, name="check_payment_status"),
+    path("subscriptions/switch-plan-free/", switch_subscription_plan_free, name="switch_subscription_plan_free"),
+    path("users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
+    path("users/update-language/", update_language, name="update_language"),
+    path("users/fcm-diagnostics-full/", fcm_diagnostics_full, name="fcm_diagnostics_full"),
+    path("", include(router.urls)),
+    path("auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
+    path("auth/register/", register_company, name="register_company"),
+    path("auth/impersonate/", impersonate, name="impersonate"),
+    path("auth/impersonate-exchange/status/", impersonate_exchange_status, name="impersonate_exchange_status"),
+    path("auth/impersonate-exchange/", impersonate_exchange, name="impersonate_exchange"),
+    re_path(r"^auth/impersonate-exchange$", impersonate_exchange, name="impersonate_exchange_no_slash"),
+    path("auth/check-availability/", check_registration_availability, name="check_registration_availability"),
+    path("auth/verify-email/", verify_email, name="verify_email"),
+    path("auth/resend-verification/", resend_verification, name="resend_verification"),
+    path("auth/forgot-password/", forgot_password, name="forgot_password"),
+    path("auth/reset-password/", reset_password, name="reset_password"),
+    path("auth/request-2fa/", request_two_factor_auth, name="request_two_factor_auth"),
+    path("auth/verify-2fa/", verify_two_factor_auth, name="verify_two_factor_auth"),
+    path("public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
+    path("public/payment-gateways/", PublicPaymentGatewayListView.as_view(), name="public_payment_gateway_list"),
+    path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
+    path("integrations/", include(integrations_urls)),
+    path("", include("notifications.urls")),
+]
+
 urlpatterns = [
     path("", home, name="home"),
     path("admin/", admin.site.urls),
-    # Custom payment endpoints - must be before router.urls to avoid conflicts
-    path(
-        "api/payments/create-paytabs-session/",
-        create_paytabs_payment,
-        name="create_paytabs_payment",
-    ),
-    path("api/payments/paytabs-return/", paytabs_return, name="paytabs_return"),
-    path(
-        "api/payments/create-zaincash-session/",
-        create_zaincash_payment,
-        name="create_zaincash_payment",
-    ),
-    path("api/payments/zaincash-return/", zaincash_return, name="zaincash_return"),
-    path(
-        "api/payments/create-stripe-session/",
-        create_stripe_payment,
-        name="create_stripe_payment",
-    ),
-    path("api/payments/stripe-return/", stripe_return, name="stripe_return"),
-    path(
-        "api/payments/create-qicard-session/",
-        create_qicard_payment,
-        name="create_qicard_payment",
-    ),
-    path("api/payments/qicard-return/", qicard_return, name="qicard_return"),
-    path("api/payments/qicard-webhook/", qicard_webhook, name="qicard_webhook"),
-    path(
-        "api/payments/create-fib-session/",
-        create_fib_payment,
-        name="create_fib_payment",
-    ),
-    path("api/payments/fib-callback/", fib_callback, name="fib_callback"),
-    # Status endpoint - use a path that won't conflict with router
-    path(
-        "api/payment-status/<int:subscription_id>/",
-        check_payment_status,
-        name="check_payment_status",
-    ),
-    path(
-        "api/subscriptions/switch-plan-free/",
-        switch_subscription_plan_free,
-        name="switch_subscription_plan_free",
-    ),
-    # Custom user endpoints - must be before router.urls to avoid conflicts
-    path("api/users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
-    path("api/users/update-language/", update_language, name="update_language"),
-    path(
-        "api/users/fcm-diagnostics-full/",
-        fcm_diagnostics_full,
-        name="fcm_diagnostics_full",
-    ),
-    # Router URLs (includes /api/payments/ which would conflict if placed before custom endpoints)
-    path("api/", include(router.urls)),
-    # JWT Authentication endpoints
-    path(
-        "api/auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"
-    ),
-    path("api/auth/register/", register_company, name="register_company"),
-    path("api/auth/impersonate/", impersonate, name="impersonate"),
-    # Diagnostic: confirms impersonate-exchange routes are deployed (GET returns {"status":"ok"})
-    path(
-        "api/auth/impersonate-exchange/status/",
-        impersonate_exchange_status,
-        name="impersonate_exchange_status",
-    ),
-    # Support both with and without trailing slash (some proxies/clients strip it)
-    path(
-        "api/auth/impersonate-exchange/",
-        impersonate_exchange,
-        name="impersonate_exchange",
-    ),
-    re_path(
-        r"^api/auth/impersonate-exchange$",
-        impersonate_exchange,
-        name="impersonate_exchange_no_slash",
-    ),
-    path(
-        "api/auth/check-availability/",
-        check_registration_availability,
-        name="check_registration_availability",
-    ),
-    path("api/auth/verify-email/", verify_email, name="verify_email"),
-    path("api/auth/resend-verification/", resend_verification, name="resend_verification"),
-    path("api/auth/forgot-password/", forgot_password, name="forgot_password"),
-    path("api/auth/reset-password/", reset_password, name="reset_password"),
-    path(
-        "api/auth/request-2fa/", request_two_factor_auth, name="request_two_factor_auth"
-    ),
-    path("api/auth/verify-2fa/", verify_two_factor_auth, name="verify_two_factor_auth"),
-    path("api/public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
-    path("api/public/payment-gateways/", PublicPaymentGatewayListView.as_view(), name="public_payment_gateway_list"),
-    path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
-    path("api/auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
-    # Integrations URLs
-    path("api/integrations/", include(integrations_urls)),
-    # Notifications URLs
-    path("api/", include("notifications.urls")),
+    # Versioned API (canonical)
+    path("api/v1/", include((v1_patterns, "v1"))),
+    # Backward-compatible unversioned routes (same patterns, no namespace)
+    path("api/", include(v1_patterns)),
     # API Documentation
-    path(
-        "api/docs/",
-        SpectacularSwaggerView.as_view(url_name="schema"),
-        name="swagger-ui",
-    ),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
-    path("api-auth/", include("rest_framework.urls")),  # For browsable API login
+    path("api-auth/", include("rest_framework.urls")),
 ]
 
 # Serve static files during development

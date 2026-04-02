@@ -29,18 +29,15 @@ class DeveloperViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
         company = serializer.validated_data.get('company')
         if not company:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'company': 'Company is required'})
-        
-        # البحث عن آخر developer لهذه الشركة مع code يبدأ بـ DEV
+
         last_developer = Developer.objects.filter(
             company=company,
             code__startswith='DEV'
@@ -49,7 +46,7 @@ class DeveloperViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_developer and last_developer.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_developer.code.replace('DEV', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -57,7 +54,7 @@ class DeveloperViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None
@@ -96,14 +93,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company", "developer")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
         company = serializer.validated_data['company']
-        # البحث عن آخر project لهذه الشركة مع code يبدأ بـ PROJ
         last_project = Project.objects.filter(
             company=company,
             code__startswith='PROJ'
@@ -112,7 +106,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_project and last_project.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_project.code.replace('PROJ', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -120,7 +114,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None
@@ -159,14 +153,11 @@ class UnitViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company", "project", "project__developer")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
         company = serializer.validated_data['company']
-        # البحث عن آخر unit لهذه الشركة مع code يبدأ بـ UNIT
         last_unit = Unit.objects.filter(
             company=company,
             code__startswith='UNIT'
@@ -175,7 +166,7 @@ class UnitViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_unit and last_unit.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_unit.code.replace('UNIT', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -183,7 +174,7 @@ class UnitViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None
@@ -222,14 +213,11 @@ class OwnerViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
-
+        queryset = super().get_queryset().select_related("company")
         return queryset.filter(company=user.company)
 
     def perform_create(self, serializer):
-        # توليد code تلقائياً
         company = serializer.validated_data['company']
-        # البحث عن آخر owner لهذه الشركة مع code يبدأ بـ OWN
         last_owner = Owner.objects.filter(
             company=company,
             code__startswith='OWN'
@@ -238,7 +226,7 @@ class OwnerViewSet(viewsets.ModelViewSet):
         new_num = 1
         if last_owner and last_owner.code:
             try:
-                # استخراج الرقم من آخر code
+                # Extract the number from the last code
                 code_suffix = last_owner.code.replace('OWN', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
@@ -246,7 +234,7 @@ class OwnerViewSet(viewsets.ModelViewSet):
             except (ValueError, AttributeError):
                 new_num = 1
         
-        # التأكد من أن الـ code فريد (في حالة race condition)
+        # Ensure uniqueness (handle race conditions)
         max_attempts = 1000
         attempt = 0
         new_code = None

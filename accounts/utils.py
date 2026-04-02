@@ -61,21 +61,8 @@ def get_email_language_for_user(user, request=None, default="en"):
 
 
 def _get_smtp_connection():
-    smtp_settings = SMTPSettings.get_settings()
-    if not smtp_settings.is_active:
-        raise RuntimeError(
-            "SMTP is not active. Please configure SMTP settings before sending emails."
-        )
-
-    return EmailBackend(
-        host=smtp_settings.host,
-        port=smtp_settings.port,
-        username=smtp_settings.username,
-        password=smtp_settings.password,
-        use_tls=smtp_settings.use_tls,
-        use_ssl=smtp_settings.use_ssl,
-        fail_silently=False,
-    )
+    from crm_saas_api.utils import get_smtp_connection
+    return get_smtp_connection()
 
 
 def _get_frontend_base_url():

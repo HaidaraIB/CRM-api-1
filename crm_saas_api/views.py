@@ -1,8 +1,8 @@
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
+from crm_saas_api.responses import success_response
 
 
 class HomeResponseSerializer(serializers.Serializer):
@@ -83,4 +83,4 @@ def home(request):
         ],
     }
     
-    return Response(data)
+    return success_response(data=data)
