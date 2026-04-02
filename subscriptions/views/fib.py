@@ -1,6 +1,5 @@
 import json
 import logging
-from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -21,6 +20,7 @@ from ..models import (
 )
 from ..serializers import CreateFibPaymentSerializer
 from ..fib_utils import get_fib_gateway, create_fib_payment_session
+from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def create_fib_payment(request):
         )
 
     try:
-        subscription = Subscription.objects.get(id=subscription_id)
+        subscription = Subscription.objects.select_related("plan").get(id=subscription_id)
     except Subscription.DoesNotExist:
         return error_response(
             "Subscription not found",
@@ -56,17 +56,20 @@ def create_fib_payment(request):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    if plan_id:
-        try:
-            new_plan = Plan.objects.get(id=plan_id)
-            subscription.plan = new_plan
-            subscription.save(update_fields=["plan", "updated_at"])
-        except Plan.DoesNotExist:
-            return error_response(
-                "Plan not found",
-                code="not_found",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
+    try:
+        target_plan, billing_cycle, amount_dec, intent = resolve_checkout_pricing(
+            subscription,
+            target_plan_id=plan_id,
+            billing_cycle_param=billing_cycle_param,
+        )
+    except ValueError as e:
+        return error_response(str(e), code="invalid_checkout")
+    except Plan.DoesNotExist:
+        return error_response(
+            "Plan not found",
+            code="not_found",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
 
     is_renewal = billing_cycle_param is not None
     if subscription.is_active and not plan_id and not is_renewal:
@@ -75,14 +78,7 @@ def create_fib_payment(request):
             code="bad_request",
         )
 
-    plan = subscription.plan
-    if billing_cycle_param:
-        billing_cycle = billing_cycle_param
-    else:
-        days_diff = (subscription.end_date - subscription.start_date).days
-        billing_cycle = "yearly" if days_diff >= 330 else "monthly"
-
-    amount = float(plan.price_yearly if billing_cycle == "yearly" else plan.price_monthly)
+    amount = float(amount_dec)
     if amount <= 0:
         return error_response(
             "Plan is free, no payment required",
@@ -129,6 +125,8 @@ def create_fib_payment(request):
         payment_method=fib_gateway,
         payment_status=PaymentStatus.PENDING.value,
         tran_ref=payment_id,
+        target_plan=target_plan,
+        billing_cycle=billing_cycle,
     )
     logger.info(
         "Created FIB payment record: payment_id=%s, fib_payment_id=%s, subscription_id=%s",
@@ -186,48 +184,26 @@ def fib_callback(request):
         payment.payment_status = PaymentStatus.COMPLETED.value
         payment.save(update_fields=["payment_status", "updated_at"])
 
-        plan = subscription.plan
-        if amount > 0:
-            if abs(amount - float(plan.price_yearly)) < 0.01:
-                billing_cycle = "yearly"
-            elif abs(amount - float(plan.price_monthly)) < 0.01:
-                billing_cycle = "monthly"
-            else:
-                yearly_diff = abs(amount - float(plan.price_yearly))
-                monthly_diff = abs(amount - float(plan.price_monthly))
-                billing_cycle = "yearly" if yearly_diff < monthly_diff else "monthly"
-        else:
-            billing_cycle = "monthly"
-            amount = float(plan.price_monthly)
+        pay_usd = float(payment.amount_usd) if payment.amount_usd is not None else float(payment.amount)
+        try:
+            finalize_completed_payment(subscription, payment, pay_usd)
+            subscription.refresh_from_db()
+        except ValueError as err:
+            logger.error("FIB billing apply failed: %s", err, exc_info=True)
+            return error_response(str(err), code="billing_error", status_code=status.HTTP_400_BAD_REQUEST)
 
-        now = timezone.now()
-        has_completed = Payment.objects.filter(
-            subscription=subscription, payment_status=PaymentStatus.COMPLETED.value
-        ).exclude(id=payment.id).exists()
-
-        if has_completed and subscription.end_date and subscription.end_date > now:
-            base_date = subscription.end_date
-        elif has_completed and (not subscription.end_date or subscription.end_date <= now):
-            base_date = now
-        else:
-            base_date = subscription.start_date if subscription.start_date and subscription.start_date > now else now
-
-        new_end_date = base_date + (timedelta(days=365) if billing_cycle == "yearly" else timedelta(days=30))
-        subscription.is_active = True
-        subscription.end_date = new_end_date
-        if not subscription.start_date or subscription.start_date <= now:
-            subscription.start_date = now
-        subscription.save(update_fields=["is_active", "end_date", "start_date", "updated_at"])
-
+        due = subscription.end_date.date() if subscription.end_date else timezone.now().date()
         Invoice.objects.create(
             subscription=subscription,
-            amount=amount,
-            due_date=new_end_date,
+            amount=pay_usd,
+            due_date=due,
             status=InvoiceStatus.PAID.value,
         )
         logger.info(
-            "FIB payment PAID: subscription_id=%s, amount=%s, billing_cycle=%s, end_date=%s",
-            subscription_id, amount, billing_cycle, new_end_date,
+            "FIB payment PAID: subscription_id=%s, amount_usd=%s, end_date=%s",
+            subscription_id,
+            pay_usd,
+            subscription.end_date,
         )
     elif fib_status == "DECLINED":
         payment.payment_status = PaymentStatus.FAILED.value

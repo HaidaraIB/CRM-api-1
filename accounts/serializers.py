@@ -1,11 +1,12 @@
 from rest_framework import serializers
+from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from drf_spectacular.utils import extend_schema_field
 from .models import User, Role, TwoFactorAuth, LimitedAdmin, SupervisorPermission
 from companies.models import Company
-from subscriptions.models import Plan, Subscription
+from subscriptions.models import Plan, Subscription, SubscriptionStatus, BillingCycle
 
 # Inventory permission keys; only one is allowed per company based on specialization
 INVENTORY_PERM_KEYS = ('can_manage_products', 'can_manage_services', 'can_manage_real_estate')
@@ -139,24 +140,41 @@ class UserSerializer(serializers.ModelSerializer):
             "name": company.name,
             "domain": company.domain,
             "specialization": company.specialization,
-            "registration_completed": company.registration_completed,
-            "registration_completed_at": company.registration_completed_at.isoformat() if company.registration_completed_at else None,
             "auto_assign_enabled": company.auto_assign_enabled,
             "re_assign_enabled": company.re_assign_enabled,
             "re_assign_hours": company.re_assign_hours,
+            "free_trial_consumed": getattr(company, "free_trial_consumed", False),
         }
         
         if subscription:
+            now = timezone.now()
+            days_remaining = None
+            if subscription.end_date:
+                days_remaining = max(0, (subscription.end_date - now).days)
+            pending = subscription.pending_plan
             company_data["subscription"] = {
                 "id": subscription.id,
                 "plan": {
                     "id": subscription.plan.id,
                     "name": subscription.plan.name,
                     "name_ar": subscription.plan.name_ar if subscription.plan.name_ar else None,
+                    "tier": getattr(subscription.plan, "tier", 0),
                 },
                 "is_active": subscription.is_active,
                 "start_date": subscription.start_date.isoformat() if subscription.start_date else None,
                 "end_date": subscription.end_date.isoformat() if subscription.end_date else None,
+                "current_period_start": subscription.current_period_start.isoformat()
+                if getattr(subscription, "current_period_start", None)
+                else None,
+                "billing_cycle": getattr(subscription, "billing_cycle", None),
+                "subscription_status": getattr(subscription, "subscription_status", None),
+                "days_remaining_in_period": days_remaining,
+                "pending_plan": (
+                    {"id": pending.id, "name": pending.name, "tier": getattr(pending, "tier", 0)}
+                    if pending
+                    else None
+                ),
+                "pending_billing_cycle": getattr(subscription, "pending_billing_cycle", None),
                 "auto_renew": subscription.auto_renew,
             }
             # Attach computed entitlements snapshot for frontend gating/UX.
@@ -654,9 +672,26 @@ class RegisterCompanySerializer(serializers.Serializer):
                     else:
                         end_date = subscription.start_date + timedelta(days=30)
                 
-                # Update subscription with correct end_date
                 subscription.end_date = end_date
-                subscription.save(update_fields=['end_date'])
+                subscription.current_period_start = subscription.start_date
+                subscription.billing_cycle = (
+                    BillingCycle.YEARLY if billing_cycle == "yearly" else BillingCycle.MONTHLY
+                )
+                if is_free_or_trial:
+                    td = int(getattr(plan, "trial_days", 0) or 0)
+                    subscription.subscription_status = (
+                        SubscriptionStatus.TRIALING if td > 0 else SubscriptionStatus.ACTIVE
+                    )
+                else:
+                    subscription.subscription_status = SubscriptionStatus.ACTIVE
+                subscription.save(
+                    update_fields=[
+                        "end_date",
+                        "current_period_start",
+                        "billing_cycle",
+                        "subscription_status",
+                    ]
+                )
             except Plan.DoesNotExist:
                 pass  # If plan doesn't exist, continue without subscription
 

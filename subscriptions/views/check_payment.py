@@ -66,7 +66,7 @@ def check_payment_status(request, subscription_id):
                 # If it's a Zain Cash payment, check status using transaction ID
                 if "zain" in gateway_name or "zaincash" in gateway_name:
                     try:
-                        from .zaincash_utils import check_zaincash_payment_status
+                        from ..zaincash_utils import check_zaincash_payment_status
                         result = check_zaincash_payment_status(payment.tran_ref)
                         gateway_status = result.get("status", "pending")
                         if gateway_status == "success":
@@ -134,8 +134,10 @@ def check_payment_status(request, subscription_id):
 
         # Return all fields the frontend needs - ensure values match what frontend expects
         # Check if subscription is truly active (considering end_date)
+        subscription.refresh_from_db()
         # Normalize free/trial subscriptions: they do not have billing cycles.
         # Older records may have been created with a default 30-day end_date; fix/override using plan.trial_days.
+        # Paid plans: fix stale end_date (e.g. trial window) after completed payment when gateway return was missed.
         try:
             plan = subscription.plan
             is_free_or_trial = float(plan.price_monthly) <= 0 and float(plan.price_yearly) <= 0
@@ -147,6 +149,7 @@ def check_payment_status(request, subscription_id):
             )
             if is_free_or_trial and not has_completed_payment:
                 from datetime import timedelta
+
                 if int(getattr(plan, "trial_days", 0) or 0) > 0:
                     computed_end = subscription.start_date + timedelta(days=int(plan.trial_days))
                 else:
@@ -156,6 +159,11 @@ def check_payment_status(request, subscription_id):
                     subscription.end_date = computed_end
                     subscription.save(update_fields=["end_date", "updated_at"])
                     subscription.refresh_from_db()
+            elif has_completed_payment and not is_free_or_trial:
+                from ..services.subscription_helpers import normalize_paid_subscription_end_date
+
+                normalize_paid_subscription_end_date(subscription)
+                subscription.refresh_from_db()
         except Exception as _exc:
             # Never break status endpoint due to normalization
             pass

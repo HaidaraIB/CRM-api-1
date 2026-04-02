@@ -3,6 +3,27 @@ from drf_spectacular.utils import extend_schema_serializer
 from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientPhoneNumber, ClientEvent
 
 
+class CamelToSnakeMixin:
+    """Mixin that auto-converts camelCase keys to snake_case."""
+    camel_to_snake_fields = {}  # {'camelCase': 'snake_case'}
+
+    def to_internal_value(self, data):
+        if hasattr(data, "copy"):
+            data = data.copy()
+        elif isinstance(data, dict):
+            data = dict(data)
+        else:
+            data = dict(data) if data else {}
+
+        for camel, snake in getattr(self, 'camel_to_snake_fields', {}).items():
+            if camel in data and snake not in data:
+                data[snake] = data.pop(camel)
+            elif camel in data:
+                data.pop(camel, None)
+
+        return super().to_internal_value(data)
+
+
 class ClientEventSerializer(serializers.ModelSerializer):
     """Serializer for client events"""
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
@@ -274,7 +295,7 @@ class ClientListSerializer(serializers.ModelSerializer):
 
 
 @extend_schema_serializer(component_name="Deal")
-class DealSerializer(serializers.ModelSerializer):
+class DealSerializer(CamelToSnakeMixin, serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
     employee_username = serializers.CharField(
@@ -292,6 +313,14 @@ class DealSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(
         source="project.name", read_only=True, allow_null=True
     )
+
+    camel_to_snake_fields = {
+        "startedBy": "started_by",
+        "closedBy": "closed_by",
+        "startDate": "start_date",
+        "closedDate": "closed_date",
+        "paymentMethod": "payment_method",
+    }
 
     class Meta:
         model = Deal
@@ -327,48 +356,6 @@ class DealSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
-
-    def to_internal_value(self, data):
-        """Convert camelCase to snake_case before validation"""
-        # Create a mutable copy of data
-        if hasattr(data, "copy"):
-            # QueryDict or similar
-            data = data.copy()
-        elif isinstance(data, dict):
-            data = dict(data)
-        else:
-            # Fallback: convert to dict
-            data = dict(data) if data else {}
-
-        # Handle camelCase fields and convert to snake_case
-        # Only convert if snake_case version doesn't exist
-        if "startedBy" in data and "started_by" not in data:
-            data["started_by"] = data.pop("startedBy")
-        elif "startedBy" in data:
-            # Remove camelCase if snake_case exists
-            data.pop("startedBy", None)
-
-        if "closedBy" in data and "closed_by" not in data:
-            data["closed_by"] = data.pop("closedBy")
-        elif "closedBy" in data:
-            data.pop("closedBy", None)
-
-        if "startDate" in data and "start_date" not in data:
-            data["start_date"] = data.pop("startDate")
-        elif "startDate" in data:
-            data.pop("startDate", None)
-
-        if "closedDate" in data and "closed_date" not in data:
-            data["closed_date"] = data.pop("closedDate")
-        elif "closedDate" in data:
-            data.pop("closedDate", None)
-
-        if "paymentMethod" in data and "payment_method" not in data:
-            data["payment_method"] = data.pop("paymentMethod")
-        elif "paymentMethod" in data:
-            data.pop("paymentMethod", None)
-
-        return super().to_internal_value(data)
 
     def create(self, validated_data):
         """Create deal and ensure started_by and closed_by are set"""

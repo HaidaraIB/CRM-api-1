@@ -9,6 +9,7 @@ class PlanAdmin(admin.ModelAdmin):
     list_display = [
         "name",
         "name_ar",
+        "tier",
         "price_monthly",
         "price_yearly",
         "trial_days",
@@ -18,6 +19,7 @@ class PlanAdmin(admin.ModelAdmin):
     ]
     list_filter = [
         "visible",
+        "tier",
         "created_at",
         "updated_at",
     ]
@@ -42,14 +44,28 @@ class PlanAdmin(admin.ModelAdmin):
                     "price_monthly",
                     "price_yearly",
                     "trial_days",
+                    "tier",
                     "users",
                     "clients",
                     "visible",
                 )
             },
         ),
+        (
+            "Entitlements (JSON)",
+            {
+                "fields": ("features", "limits", "usage_limits_monthly"),
+                "classes": ("collapse",),
+            },
+        ),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
+
+    def save_model(self, request, obj, form, change):
+        from subscriptions.plan_constraints import validate_plan_instance_uniqueness
+
+        validate_plan_instance_uniqueness(obj, exclude_self=bool(obj.pk))
+        super().save_model(request, obj, form, change)
 
 
 class PaymentInline(admin.TabularInline):
@@ -57,7 +73,18 @@ class PaymentInline(admin.TabularInline):
 
     model = Payment
     extra = 0
-    fields = ["amount", "payment_method", "payment_status", "created_at"]
+    fields = [
+        "amount",
+        "currency",
+        "exchange_rate",
+        "amount_usd",
+        "target_plan",
+        "billing_cycle",
+        "payment_method",
+        "payment_status",
+        "tran_ref",
+        "created_at",
+    ]
     readonly_fields = ["created_at"]
 
 
@@ -69,8 +96,12 @@ class SubscriptionAdmin(admin.ModelAdmin):
         "id",
         "company",
         "plan",
+        "subscription_status",
+        "billing_cycle",
         "start_date",
         "end_date",
+        "current_period_start",
+        "pending_plan",
         "is_active",
         "auto_renew",
         "created_at",
@@ -78,7 +109,10 @@ class SubscriptionAdmin(admin.ModelAdmin):
     list_filter = [
         "is_active",
         "auto_renew",
+        "subscription_status",
+        "billing_cycle",
         "plan",
+        "pending_plan",
         "start_date",
         "end_date",
         "created_at",
@@ -98,11 +132,21 @@ class SubscriptionAdmin(admin.ModelAdmin):
                 "fields": (
                     "company",
                     "plan",
+                    "subscription_status",
+                    "billing_cycle",
                     "start_date",
                     "end_date",
+                    "current_period_start",
                     "is_active",
                     "auto_renew",
                 )
+            },
+        ),
+        (
+            "Scheduled change (downgrade / paid → free)",
+            {
+                "fields": ("pending_plan", "pending_billing_cycle"),
+                "classes": ("collapse",),
             },
         ),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
@@ -117,6 +161,10 @@ class PaymentAdmin(admin.ModelAdmin):
         "id",
         "subscription",
         "amount",
+        "currency",
+        "amount_usd",
+        "target_plan",
+        "billing_cycle",
         "payment_method",
         "payment_status",
         "created_at",
@@ -126,6 +174,9 @@ class PaymentAdmin(admin.ModelAdmin):
     list_filter = [
         "payment_status",
         "payment_method",
+        "currency",
+        "billing_cycle",
+        "target_plan",
         "created_at",
     ]
     search_fields = [
@@ -143,10 +194,20 @@ class PaymentAdmin(admin.ModelAdmin):
                 "fields": (
                     "subscription",
                     "amount",
+                    "currency",
+                    "exchange_rate",
+                    "amount_usd",
                     "payment_method",
                     "payment_status",
                     "tran_ref",
                 )
+            },
+        ),
+        (
+            "Checkout intent",
+            {
+                "fields": ("target_plan", "billing_cycle"),
+                "description": "Plan and cycle selected at checkout (may differ until payment completes).",
             },
         ),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),

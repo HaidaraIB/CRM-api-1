@@ -27,6 +27,7 @@ from ..qicard_utils import (
     create_qicard_payment_session,
     get_qicard_gateway,
 )
+from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def create_qicard_payment(request):
         )
 
     try:
-        subscription = Subscription.objects.get(id=subscription_id)
+        subscription = Subscription.objects.select_related("plan").get(id=subscription_id)
     except Subscription.DoesNotExist:
         return error_response(
             "Subscription not found",
@@ -62,23 +63,21 @@ def create_qicard_payment(request):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    # If plan_id is provided, update the subscription's plan (for plan changes)
-    if plan_id:
-        try:
-            new_plan = Plan.objects.get(id=plan_id)
-            subscription.plan = new_plan
-            subscription.save(update_fields=['plan', 'updated_at'])
-            logger.info(
-                f"Updated subscription {subscription_id} plan to {new_plan.name} (ID: {plan_id})"
-            )
-        except Plan.DoesNotExist:
-            return error_response(
-                "Plan not found",
-                code="not_found",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
+    try:
+        target_plan, billing_cycle, amount_dec, intent = resolve_checkout_pricing(
+            subscription,
+            target_plan_id=plan_id,
+            billing_cycle_param=billing_cycle_param,
+        )
+    except ValueError as e:
+        return error_response(str(e), code="invalid_checkout")
+    except Plan.DoesNotExist:
+        return error_response(
+            "Plan not found",
+            code="not_found",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
 
-    # Allow renewals and plan changes even if subscription is active
     is_renewal = billing_cycle_param is not None
     if subscription.is_active and not plan_id and not is_renewal:
         return error_response(
@@ -86,30 +85,10 @@ def create_qicard_payment(request):
             code="bad_request",
         )
 
-    plan = subscription.plan
-
-    # Determine billing cycle
-    if billing_cycle_param:
-        billing_cycle = billing_cycle_param
-        logger.info(
-            f"Using provided billing_cycle: {billing_cycle} for subscription {subscription_id}"
-        )
-    else:
-        days_diff = (subscription.end_date - subscription.start_date).days
-        billing_cycle = "yearly" if days_diff >= 330 else "monthly"
-        logger.info(
-            f"Calculated billing_cycle from subscription: {billing_cycle} "
-            f"(days_diff={days_diff}) for subscription {subscription_id}"
-        )
-    
-    # Get the correct amount based on billing cycle
-    amount = float(
-        plan.price_yearly if billing_cycle == "yearly" else plan.price_monthly
-    )
-    
+    amount = float(amount_dec)
     logger.info(
         f"Creating QiCard payment for subscription {subscription_id}: "
-        f"plan={plan.name}, billing_cycle={billing_cycle}, amount={amount}"
+        f"intent={intent}, plan={target_plan.name}, billing_cycle={billing_cycle}, amount={amount}"
     )
 
     if amount <= 0:
@@ -158,7 +137,7 @@ def create_qicard_payment(request):
             )
         
         # Get QiCard gateway using the utility function
-        from .qicard_utils import get_qicard_gateway
+        from ..qicard_utils import get_qicard_gateway
         qicard_gateway = get_qicard_gateway()
 
         if not qicard_gateway:
@@ -179,6 +158,8 @@ def create_qicard_payment(request):
             payment_method=qicard_gateway,
             payment_status=PaymentStatus.PENDING.value,
             tran_ref=payment_id,  # Store payment ID as tran_ref
+            target_plan=target_plan,
+            billing_cycle=billing_cycle,
         )
 
         logger.info(
@@ -270,7 +251,7 @@ def qicard_return(request):
 
         # Verify payment status with QiCard API
         logger.info(f"Attempting to verify QiCard payment with paymentId: {payment_id}")
-        from .qicard_utils import verify_qicard_payment, get_qicard_gateway
+        from ..qicard_utils import verify_qicard_payment, get_qicard_gateway
         verification_result = verify_qicard_payment(payment_id)
         logger.info(f"QiCard verification result: {json.dumps(verification_result, indent=2, default=str)}")
 
@@ -378,104 +359,19 @@ def qicard_return(request):
                 payment.save(update_fields=['payment_status', 'updated_at'])
                 logger.info(f"Updated payment {payment.id} to COMPLETED (amount remains {payment.amount} USD).")
             
-            # Update subscription end date and status
-            # Use the same logic as Paytabs and Stripe for consistency
             subscription = payment.subscription
-            plan = subscription.plan
-            
-            if plan:
-                # Get payment amount (in USD) to determine billing cycle
-                payment_amount = float(payment.amount)
-                
-                # Determine billing cycle based on payment amount (same as Paytabs/Stripe)
-                billing_cycle = None
-                if abs(payment_amount - float(plan.price_yearly)) < 0.01:
-                    billing_cycle = "yearly"
-                elif abs(payment_amount - float(plan.price_monthly)) < 0.01:
-                    billing_cycle = "monthly"
-                else:
-                    # If amount doesn't match exactly, determine by comparing which is closer
-                    yearly_diff = abs(payment_amount - float(plan.price_yearly))
-                    monthly_diff = abs(payment_amount - float(plan.price_monthly))
-                    billing_cycle = "yearly" if yearly_diff < monthly_diff else "monthly"
-                    logger.warning(
-                        f"Payment amount {payment_amount} doesn't exactly match plan prices "
-                        f"(yearly: {plan.price_yearly}, monthly: {plan.price_monthly}). "
-                        f"Using {billing_cycle} based on closest match."
+            if subscription.plan:
+                pay_usd = float(payment.amount_usd) if payment.amount_usd is not None else float(payment.amount)
+                try:
+                    finalize_completed_payment(subscription, payment, pay_usd)
+                    subscription.refresh_from_db()
+                except ValueError as err:
+                    logger.error("Billing apply failed (QiCard): %s", err, exc_info=True)
+                    frontend_url = settings.FRONTEND_URL
+                    return redirect(
+                        f"{frontend_url}/payment/success?subscription_id={subscription.id}"
+                        f"&status=failed&message={str(err)}"
                     )
-                
-                logger.info(f"Determined billing_cycle: {billing_cycle} for subscription {subscription.id} "
-                           f"(payment_amount: {payment_amount}, plan.yearly: {plan.price_yearly}, plan.monthly: {plan.price_monthly})")
-                
-                # Calculate correct end_date based on billing cycle (same logic as Paytabs/Stripe)
-                now = timezone.now()
-                
-                # Check if this is a new subscription (first payment) or renewal
-                # Exclude the current payment we just created/updated
-                payment_id_to_exclude = payment.id if payment else None
-                has_completed_payments = Payment.objects.filter(
-                    subscription=subscription,
-                    payment_status=PaymentStatus.COMPLETED.value
-                )
-                if payment_id_to_exclude:
-                    has_completed_payments = has_completed_payments.exclude(id=payment_id_to_exclude)
-                has_completed_payments = has_completed_payments.exists()
-                
-                # Determine base_date based on subscription state (same as Paytabs/Stripe):
-                # 1. Renewal: has completed payments AND end_date is in the future -> extend from end_date
-                # 2. Reactivation: has completed payments BUT end_date is in the past -> start from now
-                # 3. New subscription: no completed payments -> start from now or start_date
-                if has_completed_payments and subscription.end_date > now:
-                    # This is a renewal - extend from existing end_date
-                    base_date = subscription.end_date
-                    logger.info(
-                        f"Subscription {subscription.id} is a RENEWAL - extending from end_date ({subscription.end_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                    )
-                elif has_completed_payments and subscription.end_date <= now:
-                    # This is a reactivation - subscription expired, start from now
-                    base_date = now
-                    logger.info(
-                        f"Subscription {subscription.id} is a REACTIVATION (expired) - starting from now ({base_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                    )
-                else:
-                    # This is a new subscription (first payment) - start from now or start_date
-                    if subscription.start_date and subscription.start_date > now:
-                        base_date = subscription.start_date
-                        logger.info(
-                            f"Subscription {subscription.id} is NEW - using start_date ({subscription.start_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                        )
-                    else:
-                        base_date = now
-                        logger.info(
-                            f"Subscription {subscription.id} is NEW - using now ({base_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                        )
-                
-                # Calculate new end_date based on billing cycle
-                if billing_cycle == "yearly":
-                    new_end_date = base_date + timedelta(days=365)
-                else:
-                    new_end_date = base_date + timedelta(days=30)
-                
-                # Update subscription with correct end_date and activate it (same as Paytabs/Stripe)
-                old_is_active = subscription.is_active
-                old_end_date = subscription.end_date
-                logger.info(f"BEFORE UPDATE - Subscription {subscription.id}: is_active={old_is_active}, "
-                           f"end_date={old_end_date.strftime('%Y-%m-%d %H:%M:%S') if old_end_date else 'None'}")
-                
-                subscription.is_active = True
-                subscription.end_date = new_end_date
-                subscription.save(update_fields=['is_active', 'end_date', 'updated_at'])
-                
-                # Refresh from DB to verify update (same as Paytabs/Stripe)
-                subscription.refresh_from_db()
-                logger.info(f"AFTER UPDATE - Subscription {subscription.id}: is_active={subscription.is_active}, "
-                           f"end_date={subscription.end_date.strftime('%Y-%m-%d %H:%M:%S') if subscription.end_date else 'None'}")
-                
-                logger.info(
-                    f"✓ Activated subscription {subscription.id} for company {subscription.company.name if subscription.company else 'None'}. "
-                    f"Billing cycle: {billing_cycle}, Amount: {payment_amount}, "
-                    f"End date set to: {new_end_date.strftime('%Y-%m-%d %H:%M:%S')}"
-                )
             else:
                 logger.warning(f"Subscription {subscription.id} has no plan, cannot set end date.")
 

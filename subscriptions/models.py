@@ -63,6 +63,11 @@ class Plan(models.Model):
     price_monthly = models.DecimalField(max_digits=10, decimal_places=2)
     price_yearly = models.DecimalField(max_digits=10, decimal_places=2)
     trial_days = models.IntegerField(default=0)
+    # Higher tier = higher offering; used for upgrade/downgrade (not price heuristics).
+    tier = models.IntegerField(
+        default=0,
+        help_text="Relative plan level; upgrade requires higher tier, downgrade schedules at period end.",
+    )
     users = models.CharField(max_length=50, default="unlimited")
     clients = models.CharField(max_length=50, default="unlimited")
     # Entitlements (new): keep legacy fields above for UI compatibility.
@@ -109,6 +114,17 @@ class CompanyUsageCounter(models.Model):
         return f"{self.company_id}:{self.key}:{self.period_start}={self.count}"
 
 
+class SubscriptionStatus(models.TextChoices):
+    TRIALING = "trialing", "Trialing"
+    ACTIVE = "active", "Active"
+    CANCELED = "canceled", "Canceled"
+
+
+class BillingCycle(models.TextChoices):
+    MONTHLY = "monthly", "Monthly"
+    YEARLY = "yearly", "Yearly"
+
+
 class Subscription(models.Model):
     company = models.ForeignKey(
         "companies.Company", on_delete=models.CASCADE, related_name="subscriptions"
@@ -118,6 +134,36 @@ class Subscription(models.Model):
     )
     start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField()
+    # Start of the current paid/trial period (end_date is current period end).
+    current_period_start = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Start of current billing period; used for proration.",
+    )
+    billing_cycle = models.CharField(
+        max_length=10,
+        choices=BillingCycle.choices,
+        default=BillingCycle.MONTHLY,
+    )
+    subscription_status = models.CharField(
+        max_length=20,
+        choices=SubscriptionStatus.choices,
+        default=SubscriptionStatus.ACTIVE,
+    )
+    # Downgrade / paid→free scheduled for end of current period.
+    pending_plan = models.ForeignKey(
+        Plan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pending_subscriptions",
+    )
+    pending_billing_cycle = models.CharField(
+        max_length=10,
+        choices=BillingCycle.choices,
+        null=True,
+        blank=True,
+    )
     is_active = models.BooleanField(default=True)
     auto_renew = models.BooleanField(default=False)
 
@@ -198,6 +244,21 @@ class Payment(models.Model):
     )
     payment_status = models.CharField(max_length=255, choices=PaymentStatus.choices())
     tran_ref = models.CharField(max_length=255, blank=True, default="")
+    # Checkout intent: plan being paid for (may differ from subscription.plan until payment completes).
+    target_plan = models.ForeignKey(
+        "Plan",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="targeted_payments",
+    )
+    billing_cycle = models.CharField(
+        max_length=10,
+        choices=BillingCycle.choices,
+        null=True,
+        blank=True,
+        help_text="Billing cycle selected for this checkout session.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

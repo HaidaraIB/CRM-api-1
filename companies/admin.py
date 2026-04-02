@@ -10,31 +10,38 @@ class CompanyAdmin(admin.ModelAdmin):
         "name",
         "domain",
         "owner",
+        "free_trial_consumed",
         "created_at",
         "updated_at",
         "specialization",
-        "registration_completed",
-        "registration_completed_at",
     ]
     list_filter = [
         "created_at",
         "updated_at",
-        "registration_completed",
-        "registration_completed_at",
+        "free_trial_consumed",
     ]
     search_fields = [
         "name",
         "domain",
         "owner__username",
         "owner__email",
-        "registration_completed",
-        "registration_completed_at",
     ]
     ordering = ["-created_at"]
     readonly_fields = ["created_at", "updated_at"]
 
     fieldsets = (
-        ("Company Information", {"fields": ("name", "domain", "owner", "specialization", "registration_completed", "registration_completed_at")}),
+        (
+            "Company Information",
+            {
+                "fields": (
+                    "name",
+                    "domain",
+                    "owner",
+                    "specialization",
+                    "free_trial_consumed",
+                )
+            },
+        ),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
 

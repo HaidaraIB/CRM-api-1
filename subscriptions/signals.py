@@ -5,7 +5,7 @@ import logging
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
-from .models import Payment, PaymentStatus
+from .models import Payment, PaymentStatus, Subscription
 
 logger = logging.getLogger(__name__)
 
@@ -70,3 +70,13 @@ def on_payment_saved(sender, instance, created, **kwargs):
             send_payment_failed_email(owner, instance, subscription, language=language)
     except Exception as e:
         logger.exception("Failed to send payment event email: %s", e)
+
+
+@receiver(post_save, sender=Subscription)
+def subscription_saved_clear_permission_cache(sender, instance, **kwargs):
+    try:
+        from .cache_utils import invalidate_company_subscription_cache
+
+        invalidate_company_subscription_cache(instance.company_id)
+    except Exception:
+        logger.debug("subscription cache invalidate skipped", exc_info=True)

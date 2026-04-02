@@ -248,7 +248,12 @@ class ClientPhoneNumber(models.Model):
     class Meta:
         db_table = "client_phone_numbers"
         ordering = ["-is_primary", "phone_type", "created_at"]
-        unique_together = [["client", "phone_number"]]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["client", "phone_number"],
+                name="unique_client_phone_number"
+            )
+        ]
 
     def __str__(self):
         return f"{self.client.name} - {self.phone_number} ({self.phone_type})"

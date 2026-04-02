@@ -301,241 +301,122 @@ class CanAccessServicePackage(CanAccessCompanyData):
 
 
 # Limited Admin Permissions for Super Admin Panel
-class IsSuperAdminOrLimitedAdmin(permissions.BasePermission):
+class LimitedAdminPermission(permissions.BasePermission):
     """
-    Base permission class that allows Super Admin or active Limited Admin.
-    Limited Admin must be active to access.
+    Configurable base permission for Limited Admins.
+    Allows Super Admin by default.
     """
+    required_permission = None    # Simple: single permission for all methods
+    write_permission = None       # Read/write split: needed for write
+    read_permissions = []         # Read/write split: any of these + write_permission allow GET
+
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        
-        # Super Admin always has access
+            
         if request.user.is_super_admin():
             return True
-        
-        # Check if user is an active Limited Admin
+            
         try:
-            limited_admin = request.user.limited_admin_profile
-            return limited_admin.is_active
+            la = request.user.limited_admin_profile
+            if not la.is_active:
+                return False
+        except ObjectDoesNotExist:
+            return False
+            
+        # Simple mode
+        if self.required_permission:
+            return getattr(la, self.required_permission, False)
+            
+        # Read/write split mode
+        if request.method in permissions.SAFE_METHODS:
+            allowed = [self.write_permission] + list(self.read_permissions)
+            return any(getattr(la, p, False) for p in allowed if p)
+            
+        if self.write_permission:
+            return getattr(la, self.write_permission, False)
+            
+        return False
+
+
+class IsSuperAdminOrLimitedAdmin(LimitedAdminPermission):
+    """Base permission class that allows Super Admin or active Limited Admin."""
+    def has_permission(self, request, view):
+        if not super(LimitedAdminPermission, self).has_permission(request, view):
+            return False
+        if request.user.is_super_admin():
+            return True
+        try:
+            return request.user.limited_admin_profile.is_active
         except ObjectDoesNotExist:
             return False
 
 
-class CanViewDashboard(IsSuperAdminOrLimitedAdmin):
-    """Permission to view dashboard - requires can_view_dashboard permission"""
+class CanViewDashboard(LimitedAdminPermission):
     message = "You do not have permission to view the dashboard."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        # Super Admin always has access
-        if request.user.is_super_admin():
-            return True
-        
-        # Check Limited Admin permission
-        try:
-            limited_admin = request.user.limited_admin_profile
-            return limited_admin.is_active and limited_admin.can_view_dashboard
-        except ObjectDoesNotExist:
-            return False
+    required_permission = "can_view_dashboard"
 
 
-class CanManageTenants(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage tenants (companies). Read (GET) allowed with can_view_dashboard; write requires can_manage_tenants."""
+class CanManageTenants(LimitedAdminPermission):
     message = "You do not have permission to manage tenants."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        # Super Admin always has access
-        if request.user.is_super_admin():
-            return True
-        
-        try:
-            limited_admin = request.user.limited_admin_profile
-            if not limited_admin.is_active:
-                return False
-            # Read-only (dashboard): allow if can_view_dashboard or can_manage_tenants
-            if request.method in permissions.SAFE_METHODS:
-                return limited_admin.can_view_dashboard or limited_admin.can_manage_tenants
-            return limited_admin.can_manage_tenants
-        except ObjectDoesNotExist:
-            return False
+    write_permission = "can_manage_tenants"
+    read_permissions = ["can_view_dashboard"]
 
 
-class CanManageSubscriptions(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage subscriptions. Read (GET) allowed with can_view_dashboard; write requires can_manage_subscriptions."""
+class CanManageSubscriptions(LimitedAdminPermission):
     message = "You do not have permission to manage subscriptions."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        if request.user.is_super_admin():
-            return True
-        
-        try:
-            limited_admin = request.user.limited_admin_profile
-            if not limited_admin.is_active:
-                return False
-            if request.method in permissions.SAFE_METHODS:
-                return limited_admin.can_view_dashboard or limited_admin.can_manage_subscriptions
-            return limited_admin.can_manage_subscriptions
-        except ObjectDoesNotExist:
-            return False
+    write_permission = "can_manage_subscriptions"
+    read_permissions = ["can_view_dashboard"]
 
 
-class CanManagePlans(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage plans. Read (GET) allowed with can_view_dashboard; write requires can_manage_subscriptions."""
+class CanManagePlans(LimitedAdminPermission):
     message = "You do not have permission to manage plans."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        if request.user.is_super_admin():
-            return True
-        
-        try:
-            limited_admin = request.user.limited_admin_profile
-            if not limited_admin.is_active:
-                return False
-            if request.method in permissions.SAFE_METHODS:
-                return limited_admin.can_view_dashboard or limited_admin.can_manage_subscriptions
-            return limited_admin.can_manage_subscriptions
-        except ObjectDoesNotExist:
-            return False
+    write_permission = "can_manage_subscriptions"
+    read_permissions = ["can_view_dashboard"]
 
 
-class CanManagePayments(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage payments. Read (GET) allowed with can_view_dashboard; write requires can_manage_payment_gateways or can_view_reports."""
+class CanManagePayments(LimitedAdminPermission):
     message = "You do not have permission to manage payments."
     
     def has_permission(self, request, view):
-        if not super().has_permission(request, view):
+        if not super(LimitedAdminPermission, self).has_permission(request, view):
             return False
-        
         if request.user.is_super_admin():
             return True
-        
         try:
-            limited_admin = request.user.limited_admin_profile
-            if not limited_admin.is_active:
+            la = request.user.limited_admin_profile
+            if not la.is_active:
                 return False
-            if request.method in permissions.SAFE_METHODS:
-                return (
-                    limited_admin.can_view_dashboard or
-                    limited_admin.can_manage_payment_gateways or
-                    limited_admin.can_view_reports
-                )
-            return (
-                limited_admin.can_manage_payment_gateways or
-                limited_admin.can_view_reports
-            )
         except ObjectDoesNotExist:
             return False
+            
+        if request.method in permissions.SAFE_METHODS:
+            return la.can_view_dashboard or la.can_manage_payment_gateways or la.can_view_reports
+        return la.can_manage_payment_gateways or la.can_view_reports
 
 
-class CanManagePaymentGateways(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage payment gateways - requires can_manage_payment_gateways permission"""
+class CanManagePaymentGateways(LimitedAdminPermission):
     message = "You do not have permission to manage payment gateways."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        # Super Admin always has access
-        if request.user.is_super_admin():
-            return True
-        
-        # Check Limited Admin permission
-        try:
-            limited_admin = request.user.limited_admin_profile
-            return limited_admin.is_active and limited_admin.can_manage_payment_gateways
-        except ObjectDoesNotExist:
-            return False
+    required_permission = "can_manage_payment_gateways"
 
 
-class CanViewReports(IsSuperAdminOrLimitedAdmin):
-    """Permission to view reports - requires can_view_reports permission"""
+class CanViewReports(LimitedAdminPermission):
     message = "You do not have permission to view reports."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        # Super Admin always has access
-        if request.user.is_super_admin():
-            return True
-        
-        # Check Limited Admin permission
-        try:
-            limited_admin = request.user.limited_admin_profile
-            return limited_admin.is_active and limited_admin.can_view_reports
-        except ObjectDoesNotExist:
-            return False
+    required_permission = "can_view_reports"
 
 
-class CanManageCommunication(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage communication - requires can_manage_communication permission"""
+class CanManageCommunication(LimitedAdminPermission):
     message = "You do not have permission to manage communication."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        # Super Admin always has access
-        if request.user.is_super_admin():
-            return True
-        
-        # Check Limited Admin permission
-        try:
-            limited_admin = request.user.limited_admin_profile
-            return limited_admin.is_active and limited_admin.can_manage_communication
-        except ObjectDoesNotExist:
-            return False
+    required_permission = "can_manage_communication"
 
 
-class CanManageSettings(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage settings. Read (GET, e.g. audit logs) allowed with can_view_dashboard; write requires can_manage_settings."""
+class CanManageSettings(LimitedAdminPermission):
     message = "You do not have permission to manage settings."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        if request.user.is_super_admin():
-            return True
-        
-        try:
-            limited_admin = request.user.limited_admin_profile
-            if not limited_admin.is_active:
-                return False
-            if request.method in permissions.SAFE_METHODS:
-                return limited_admin.can_view_dashboard or limited_admin.can_manage_settings
-            return limited_admin.can_manage_settings
-        except ObjectDoesNotExist:
-            return False
+    write_permission = "can_manage_settings"
+    read_permissions = ["can_view_dashboard"]
 
 
-class CanManageLimitedAdmins(IsSuperAdminOrLimitedAdmin):
-    """Permission to manage limited admins - requires can_manage_limited_admins permission"""
+class CanManageLimitedAdmins(LimitedAdminPermission):
     message = "You do not have permission to manage limited admins."
-    
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        
-        # Super Admin always has access
-        if request.user.is_super_admin():
-            return True
-        
-        # Check Limited Admin permission
-        try:
-            limited_admin = request.user.limited_admin_profile
-            return limited_admin.is_active and limited_admin.can_manage_limited_admins
-        except ObjectDoesNotExist:
-            return False
+    required_permission = "can_manage_limited_admins"
+

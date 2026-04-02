@@ -21,10 +21,6 @@ class Company(models.Model):
     owner = models.ForeignKey(
         "accounts.User", on_delete=models.CASCADE, related_name="companies"
     )
-    # Track if registration was completed (payment made)
-    registration_completed = models.BooleanField(default=False)
-    registration_completed_at = models.DateTimeField(null=True, blank=True)
-    
     # Auto assignment settings
     auto_assign_enabled = models.BooleanField(
         default=False,
@@ -38,6 +34,8 @@ class Company(models.Model):
         default=24,
         help_text="عدد الساعات قبل إعادة تعيين العميل (افتراضي: 24 ساعة)"
     )
+    # After any paid conversion or expired/forfeited trial, user cannot start another time-limited trial.
+    free_trial_consumed = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

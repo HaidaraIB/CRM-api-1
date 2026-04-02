@@ -32,6 +32,7 @@ def create_stripe_payment_session(
     return_url: str,
     success_url: str,
     cancel_url: str,
+    extra_metadata: dict | None = None,
 ):
     """
     Create a Stripe Checkout Session for payment
@@ -102,6 +103,11 @@ def create_stripe_payment_session(
             metadata={
                 "subscription_id": str(subscription_id),
                 "customer_name": customer_name,
+                **(
+                    {k: str(v) for k, v in extra_metadata.items()}
+                    if extra_metadata
+                    else {}
+                ),
             },
             success_url=success_url,
             cancel_url=cancel_url,

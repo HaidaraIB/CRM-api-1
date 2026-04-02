@@ -108,13 +108,16 @@ def api_body(response):
 
 @pytest.fixture
 def subscription(company, plan, db):
-    from subscriptions.models import Subscription
+    from subscriptions.models import BillingCycle, Subscription
+    now = timezone.now()
     return Subscription.objects.create(
         company=company,
         plan=plan,
         is_active=True,
-        start_date=timezone.now(),
-        end_date=timezone.now() + timedelta(days=30),
+        start_date=now,
+        end_date=now + timedelta(days=30),
+        current_period_start=now,
+        billing_cycle=BillingCycle.MONTHLY,
     )
 
 

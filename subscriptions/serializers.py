@@ -1,4 +1,8 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+
+from subscriptions.plan_constraints import validate_single_free_trial_and_free_forever_plans
+
 from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
 
 
@@ -70,10 +74,50 @@ class PlanSerializer(serializers.ModelSerializer):
             "limits",
             "usage_limits_monthly",
             "visible",
+            "tier",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_name(self, value):
+        name = (value or "").strip()
+        if not name:
+            raise serializers.ValidationError("This field may not be blank.")
+        return name
+
+    def validate_name_ar(self, value):
+        return (value or "").strip()
+
+    def validate_description(self, value):
+        text = (value or "").strip()
+        if not text:
+            raise serializers.ValidationError("This field may not be blank.")
+        return text
+
+    def validate_description_ar(self, value):
+        return (value or "").strip()
+
+    def validate(self, attrs):
+        inst = self.instance
+        if inst:
+            pm = attrs.get("price_monthly", inst.price_monthly)
+            py = attrs.get("price_yearly", inst.price_yearly)
+            td = attrs.get("trial_days", inst.trial_days)
+        else:
+            pm = attrs.get("price_monthly", 0)
+            py = attrs.get("price_yearly", 0)
+            td = attrs.get("trial_days", 0)
+        try:
+            validate_single_free_trial_and_free_forever_plans(
+                price_monthly=pm,
+                price_yearly=py,
+                trial_days=td,
+                exclude_plan_id=inst.pk if inst else None,
+            )
+        except DjangoValidationError as e:
+            raise serializers.ValidationError(e.messages[0] if e.messages else str(e))
+        return attrs
 
 
 class PlanListSerializer(serializers.ModelSerializer):
@@ -96,12 +140,14 @@ class PlanListSerializer(serializers.ModelSerializer):
             "limits",
             "usage_limits_monthly",
             "visible",
+            "tier",
         ]
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
     plan_name = serializers.CharField(source="plan.name", read_only=True)
+    pending_plan_name = serializers.CharField(source="pending_plan.name", read_only=True)
 
     class Meta:
         model = Subscription
@@ -113,6 +159,12 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             "plan_name",
             "start_date",
             "end_date",
+            "current_period_start",
+            "billing_cycle",
+            "subscription_status",
+            "pending_plan",
+            "pending_plan_name",
+            "pending_billing_cycle",
             "is_active",
             "auto_renew",
             "created_at",
@@ -126,6 +178,7 @@ class SubscriptionListSerializer(serializers.ModelSerializer):
 
     company_name = serializers.CharField(source="company.name", read_only=True)
     plan_name = serializers.CharField(source="plan.name", read_only=True)
+    pending_plan_name = serializers.CharField(source="pending_plan.name", read_only=True)
 
     class Meta:
         model = Subscription
@@ -137,6 +190,12 @@ class SubscriptionListSerializer(serializers.ModelSerializer):
             "plan_name",
             "start_date",
             "end_date",
+            "current_period_start",
+            "billing_cycle",
+            "subscription_status",
+            "pending_plan",
+            "pending_plan_name",
+            "pending_billing_cycle",
             "is_active",
             "auto_renew",
         ]
@@ -149,6 +208,7 @@ class PaymentSerializer(serializers.ModelSerializer):
     subscription_plan_name = serializers.CharField(
         source="subscription.plan.name", read_only=True
     )
+    target_plan_name = serializers.CharField(source="target_plan.name", read_only=True)
 
     class Meta:
         model = Payment
@@ -157,6 +217,9 @@ class PaymentSerializer(serializers.ModelSerializer):
             "subscription",
             "subscription_company_name",
             "subscription_plan_name",
+            "target_plan",
+            "target_plan_name",
+            "billing_cycle",
             "amount",
             "currency",
             "exchange_rate",
@@ -176,6 +239,7 @@ class PaymentListSerializer(serializers.ModelSerializer):
     subscription_company_name = serializers.CharField(
         source="subscription.company.name", read_only=True
     )
+    target_plan_name = serializers.CharField(source="target_plan.name", read_only=True)
 
     class Meta:
         model = Payment
@@ -183,6 +247,9 @@ class PaymentListSerializer(serializers.ModelSerializer):
             "id",
             "subscription",
             "subscription_company_name",
+            "target_plan",
+            "target_plan_name",
+            "billing_cycle",
             "amount",
             "currency",
             "exchange_rate",

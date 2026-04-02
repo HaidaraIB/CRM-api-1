@@ -98,6 +98,8 @@ from subscriptions.views import (
     create_fib_payment,
     fib_callback,
     check_payment_status,
+    preview_subscription_change,
+    schedule_subscription_downgrade,
     switch_subscription_plan_free,
 )
 from integrations import urls as integrations_urls
@@ -175,6 +177,8 @@ v1_patterns = [
     path("payments/fib-callback/", fib_callback, name="fib_callback"),
     path("payment-status/<int:subscription_id>/", check_payment_status, name="check_payment_status"),
     path("subscriptions/switch-plan-free/", switch_subscription_plan_free, name="switch_subscription_plan_free"),
+    path("subscriptions/preview-change/", preview_subscription_change, name="preview_subscription_change"),
+    path("subscriptions/schedule-downgrade/", schedule_subscription_downgrade, name="schedule_subscription_downgrade"),
     path("users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
     path("users/update-language/", update_language, name="update_language"),
     path("users/fcm-diagnostics-full/", fcm_diagnostics_full, name="fcm_diagnostics_full"),

@@ -25,6 +25,7 @@ from ..models import (
 )
 from ..serializers import CreateZaincashPaymentSerializer
 from ..zaincash_utils import verify_zaincash_payment, create_zaincash_payment_session
+from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def create_zaincash_payment(request):
         )
 
     try:
-        subscription = Subscription.objects.get(id=subscription_id)
+        subscription = Subscription.objects.select_related("plan").get(id=subscription_id)
     except Subscription.DoesNotExist:
         return error_response(
             "Subscription not found",
@@ -60,23 +61,21 @@ def create_zaincash_payment(request):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    # If plan_id is provided, update the subscription's plan (for plan changes)
-    if plan_id:
-        try:
-            new_plan = Plan.objects.get(id=plan_id)
-            subscription.plan = new_plan
-            subscription.save(update_fields=['plan', 'updated_at'])
-            logger.info(
-                f"Updated subscription {subscription_id} plan to {new_plan.name} (ID: {plan_id})"
-            )
-        except Plan.DoesNotExist:
-            return error_response(
-                "Plan not found",
-                code="not_found",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
+    try:
+        target_plan, billing_cycle, amount_dec, intent = resolve_checkout_pricing(
+            subscription,
+            target_plan_id=plan_id,
+            billing_cycle_param=billing_cycle_param,
+        )
+    except ValueError as e:
+        return error_response(str(e), code="invalid_checkout")
+    except Plan.DoesNotExist:
+        return error_response(
+            "Plan not found",
+            code="not_found",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
 
-    # Allow renewals and plan changes even if subscription is active
     is_renewal = billing_cycle_param is not None
     if subscription.is_active and not plan_id and not is_renewal:
         return error_response(
@@ -84,30 +83,10 @@ def create_zaincash_payment(request):
             code="bad_request",
         )
 
-    plan = subscription.plan
-
-    # Determine billing cycle
-    if billing_cycle_param:
-        billing_cycle = billing_cycle_param
-        logger.info(
-            f"Using provided billing_cycle: {billing_cycle} for subscription {subscription_id}"
-        )
-    else:
-        days_diff = (subscription.end_date - subscription.start_date).days
-        billing_cycle = "yearly" if days_diff >= 330 else "monthly"
-        logger.info(
-            f"Calculated billing_cycle from subscription: {billing_cycle} "
-            f"(days_diff={days_diff}) for subscription {subscription_id}"
-        )
-    
-    # Get the correct amount based on billing cycle
-    amount = float(
-        plan.price_yearly if billing_cycle == "yearly" else plan.price_monthly
-    )
-    
+    amount = float(amount_dec)
     logger.info(
         f"Creating Zain Cash payment for subscription {subscription_id}: "
-        f"plan={plan.name}, billing_cycle={billing_cycle}, amount={amount}"
+        f"intent={intent}, plan={target_plan.name}, billing_cycle={billing_cycle}, amount={amount}"
     )
 
     if amount <= 0:
@@ -160,7 +139,7 @@ def create_zaincash_payment(request):
             payment_url = f"{api_base_url}/transaction/pay?id={transaction_id}"
         
         # Get Zain Cash gateway using the utility function
-        from .zaincash_utils import get_zaincash_gateway
+        from ..zaincash_utils import get_zaincash_gateway
         zaincash_gateway = get_zaincash_gateway()
 
         if not zaincash_gateway:
@@ -181,6 +160,8 @@ def create_zaincash_payment(request):
             payment_method=zaincash_gateway,
             payment_status=PaymentStatus.PENDING.value,
             tran_ref=transaction_id,  # Store transaction ID
+            target_plan=target_plan,
+            billing_cycle=billing_cycle,
         )
 
         logger.info(
@@ -330,7 +311,7 @@ def zaincash_return(request):
             try:
                 subscription_id = int(subscription_id_param)
                 # Use the same gateway lookup function
-                from .zaincash_utils import get_zaincash_gateway
+                from ..zaincash_utils import get_zaincash_gateway
                 zaincash_gateway = get_zaincash_gateway()
 
                 if zaincash_gateway:
@@ -369,7 +350,7 @@ def zaincash_return(request):
             if subscription_id_param:
                 try:
                     subscription_id = int(subscription_id_param)
-                    from .zaincash_utils import get_zaincash_gateway
+                    from ..zaincash_utils import get_zaincash_gateway
                     zaincash_gateway = get_zaincash_gateway()
                     
                     if zaincash_gateway:
@@ -547,7 +528,7 @@ def zaincash_return(request):
 
         # Update payment status - check if payment is successful
         if payment_status == "success" or result.get("id"):  # Payment successful
-            from .zaincash_utils import get_zaincash_gateway
+            from ..zaincash_utils import get_zaincash_gateway
             zaincash_gateway = get_zaincash_gateway()
 
             # Zain Cash charges in IQD; decoded token contains the amount actually charged (IQD)
@@ -601,109 +582,43 @@ def zaincash_return(request):
                         f"this shouldn't normally happen as payment should exist from session creation"
                     )
             
-            # Determine billing cycle: compare USD equivalent to plan prices (plan prices are in USD)
-            plan = subscription.plan
-            billing_cycle = None
             amount_usd = float(amount_usd_val)
-            
-            if amount_usd > 0:
-                if abs(amount_usd - float(plan.price_yearly)) < 0.01:
-                    billing_cycle = "yearly"
-                elif abs(amount_usd - float(plan.price_monthly)) < 0.01:
-                    billing_cycle = "monthly"
-                else:
-                    yearly_diff = abs(amount_usd - float(plan.price_yearly))
-                    monthly_diff = abs(amount_usd - float(plan.price_monthly))
-                    billing_cycle = "yearly" if yearly_diff < monthly_diff else "monthly"
-                    logger.info(
-                        f"Payment amount {amount} {payment_currency} (≈{amount_usd} USD) doesn't exactly match plan prices "
-                        f"(yearly: {plan.price_yearly}, monthly: {plan.price_monthly}). "
-                        f"Using {billing_cycle} based on closest match."
+            if payment:
+                try:
+                    finalize_completed_payment(subscription, payment, amount_usd)
+                    subscription.refresh_from_db()
+                except ValueError as err:
+                    logger.error("Billing apply failed (ZainCash): %s", err, exc_info=True)
+                    is_api_call = (
+                        request.method == "POST"
+                        and hasattr(request, "data")
+                        and request.data
+                        and isinstance(request.data, dict)
+                        and ("token" in request.data or "subscription_id" in request.data)
                     )
-            else:
-                billing_cycle = "monthly"
-                amount_usd = float(plan.price_monthly)
-                logger.warning(
-                    f"Payment amount was 0, using default monthly price: {amount_usd} USD"
-                )
+                    if is_api_call:
+                        return error_response(str(err), code="billing_error")
+                    frontend_url = settings.FRONTEND_URL
+                    return redirect(
+                        f"{frontend_url}/payment/success?subscription_id={subscription_id}"
+                        f"&status=failed&message={str(err)}"
+                    )
 
-            # Calculate new end date using the same logic as PayTabs and Stripe
-            now = timezone.now()
-            
-            # Check if subscription has any completed payments
-            has_completed_payments = Payment.objects.filter(
-                subscription=subscription,
-                payment_status=PaymentStatus.COMPLETED.value
-            ).exists()
-            
-            # Determine base_date based on subscription state:
-            # 1. Renewal: has completed payments AND end_date is in the future -> extend from end_date
-            # 2. Reactivation: has completed payments BUT end_date is in the past -> start from now
-            # 3. New subscription: no completed payments -> start from now or start_date
-            if has_completed_payments and subscription.end_date and subscription.end_date > now:
-                # This is a renewal - extend from existing end_date
-                base_date = subscription.end_date
-                logger.info(
-                    f"Subscription {subscription.id} is a RENEWAL - extending from end_date ({subscription.end_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                )
-            elif has_completed_payments and (not subscription.end_date or subscription.end_date <= now):
-                # This is a reactivation - subscription expired, start from now
-                base_date = now
-                logger.info(
-                    f"Subscription {subscription.id} is a REACTIVATION (expired) - starting from now ({base_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                )
-            else:
-                # This is a new subscription (first payment) - start from now or start_date
-                if subscription.start_date and subscription.start_date > now:
-                    base_date = subscription.start_date
-                    logger.info(
-                        f"Subscription {subscription.id} is NEW - using start_date ({subscription.start_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                    )
-                else:
-                    base_date = now
-                    logger.info(
-                        f"Subscription {subscription.id} is NEW - using now ({base_date.strftime('%Y-%m-%d %H:%M:%S')})"
-                    )
-            
-            if billing_cycle == "yearly":
-                new_end_date = base_date + timedelta(days=365)
-            else:
-                new_end_date = base_date + timedelta(days=30)
-            
-            # Update subscription with correct end_date and activate it
-            old_is_active = subscription.is_active
-            old_end_date = subscription.end_date
-            logger.info(f"BEFORE UPDATE - Subscription {subscription.id}: is_active={old_is_active}, "
-                       f"end_date={old_end_date.strftime('%Y-%m-%d %H:%M:%S') if old_end_date else 'None'}")
-            
-            subscription.is_active = True
-            subscription.end_date = new_end_date
-            # Only update start_date if it's a new subscription
-            if not subscription.start_date or subscription.start_date <= now:
-                subscription.start_date = now
-            subscription.save(update_fields=['is_active', 'end_date', 'start_date', 'updated_at'])
-            
-            # Refresh from DB to verify update
-            subscription.refresh_from_db()
-            logger.info(f"AFTER UPDATE - Subscription {subscription.id}: is_active={subscription.is_active}, "
-                       f"end_date={subscription.end_date.strftime('%Y-%m-%d %H:%M:%S') if subscription.end_date else 'None'}")
-            
-            logger.info(
-                f"✓ Activated subscription {subscription.id} for company {subscription.company.name if subscription.company else 'None'}. "
-                f"Billing cycle: {billing_cycle}, Amount: {amount} {payment_currency}, "
-                f"End date set to: {new_end_date.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            # Create invoice (store equivalent in USD for reporting consistency)
+            due = subscription.end_date.date() if subscription.end_date else timezone.now().date()
             Invoice.objects.create(
                 subscription=subscription,
                 amount=amount_usd,
-                due_date=new_end_date,
+                due_date=due,
                 status=InvoiceStatus.PAID.value,
             )
 
             logger.info(
-                f"Zain Cash payment completed for subscription {subscription_id}, amount: {amount} {payment_currency} (≈{amount_usd} USD), billing_cycle: {billing_cycle}"
+                "Zain Cash payment completed for subscription %s, amount: %s %s (≈%s USD), billing_cycle: %s",
+                subscription_id,
+                amount,
+                payment_currency,
+                amount_usd,
+                (payment.billing_cycle if payment else None) or subscription.billing_cycle,
             )
 
             # Check if this is an API call (from frontend) or browser redirect

@@ -16,6 +16,8 @@ from .viewsets_public import (
     PublicPaymentGatewayListView,
     PublicPlanListView,
     SubscriptionViewSet,
+    preview_subscription_change,
+    schedule_subscription_downgrade,
     switch_subscription_plan_free,
 )
 from .zaincash import create_zaincash_payment, zaincash_return
@@ -29,6 +31,8 @@ __all__ = [
     "PublicPaymentGatewayListView",
     "PublicPlanListView",
     "SubscriptionViewSet",
+    "preview_subscription_change",
+    "schedule_subscription_downgrade",
     "switch_subscription_plan_free",
     "check_payment_status",
     "create_fib_payment",

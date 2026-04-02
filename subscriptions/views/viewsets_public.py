@@ -8,16 +8,20 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
 from ..services import payment_gateway_test_response, deactivate_other_subscriptions_for_company
+from companies.models import Company
+from ..services.billing import is_plan_free, preview_plan_change
+from ..services.trial_eligibility import is_free_trial_plan, mark_company_free_trial_consumed
+from ..cache_utils import invalidate_company_subscription_cache
 from ..models import (
     Plan,
     Subscription,
+    SubscriptionStatus,
     Payment,
     Invoice,
     Broadcast,
     PaymentGateway,
     BroadcastStatus,
     InvoiceStatus,
-    PaymentStatus,
     PaymentGatewayStatus,
 )
 from ..serializers import (
@@ -128,6 +132,7 @@ def switch_subscription_plan_free(request):
             "User is not associated with a company.",
             code="no_company",
         )
+    company = Company.objects.get(pk=company.pk)
 
     plan_id = request.data.get("plan_id")
     try:
@@ -149,6 +154,13 @@ def switch_subscription_plan_free(request):
             details={"requires_payment": True},
         )
 
+    if is_free_trial_plan(plan) and company.free_trial_consumed:
+        return error_response(
+            "Free trial is not available for your account.",
+            code="trial_already_used",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
     # Find current subscription (prefer active; otherwise latest)
     subscription = (
         Subscription.objects.filter(company=company, is_active=True)
@@ -159,28 +171,181 @@ def switch_subscription_plan_free(request):
     if not subscription:
         return error_response("Subscription not found.", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
 
-    # Ensure only one active subscription for the company
+    # Paid → free/trial: schedule at period end (common SaaS practice)
+    if not is_plan_free(subscription.plan):
+        if is_free_trial_plan(plan) and company.free_trial_consumed:
+            return error_response(
+                "Free trial is not available for your account.",
+                code="trial_already_used",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        subscription.pending_plan = plan
+        subscription.pending_billing_cycle = None
+        subscription.save(update_fields=["pending_plan", "pending_billing_cycle", "updated_at"])
+        invalidate_company_subscription_cache(company.id)
+        return success_response(
+            data={
+                "scheduled": True,
+                "subscription_id": subscription.id,
+                "pending_plan_id": plan.id,
+                "pending_plan_name": plan.name,
+                "current_period_end": subscription.end_date.isoformat() if subscription.end_date else None,
+                "message": "Your plan will switch at the end of the current billing period.",
+            },
+        )
+
     deactivate_other_subscriptions_for_company(company.id, exclude_subscription_id=subscription.id)
 
     now = timezone.now()
-    # Update plan + dates
+    was_trialing = subscription.subscription_status == SubscriptionStatus.TRIALING
     subscription.plan = plan
     subscription.is_active = True
-    subscription.start_date = now
-    if int(getattr(plan, "trial_days", 0) or 0) > 0:
-        subscription.end_date = now + timedelta(days=int(plan.trial_days))
+    # start_date stays the original subscription created-at (analytics / support).
+    subscription.current_period_start = now
+    subscription.pending_plan = None
+    subscription.pending_billing_cycle = None
+    td = int(getattr(plan, "trial_days", 0) or 0)
+    if td > 0:
+        subscription.end_date = now + timedelta(days=td)
+        subscription.subscription_status = SubscriptionStatus.TRIALING
     else:
         subscription.end_date = now + timedelta(days=365 * 100)
+        subscription.subscription_status = SubscriptionStatus.ACTIVE
     subscription.auto_renew = False
-    subscription.save(update_fields=["plan", "is_active", "start_date", "end_date", "auto_renew", "updated_at"])
+    subscription.save(
+        update_fields=[
+            "plan",
+            "is_active",
+            "current_period_start",
+            "end_date",
+            "subscription_status",
+            "auto_renew",
+            "pending_plan",
+            "pending_billing_cycle",
+            "updated_at",
+        ]
+    )
+    if was_trialing and td == 0:
+        mark_company_free_trial_consumed(company.id)
+    invalidate_company_subscription_cache(company.id)
 
     return success_response(
         data={
+            "scheduled": False,
             "subscription_id": subscription.id,
             "plan_id": plan.id,
             "plan_name": plan.name,
             "end_date": subscription.end_date.isoformat() if subscription.end_date else None,
             "is_active": bool(subscription.is_active),
+        },
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def preview_subscription_change(request):
+    """
+    Preview proration / renewal price for changing plan or billing cycle.
+    GET /api/subscriptions/preview-change/?plan_id=&billing_cycle=
+    """
+    raw_pid = request.query_params.get("plan_id")
+    try:
+        plan_id = int(raw_pid)
+    except (TypeError, ValueError):
+        return error_response("plan_id is required.", code="missing_plan_id")
+
+    billing_cycle = request.query_params.get("billing_cycle") or None
+    user = request.user
+    company = getattr(user, "company", None)
+    if not company:
+        return error_response(
+            "User is not associated with a company.",
+            code="no_company",
+        )
+    subscription = (
+        Subscription.objects.filter(company=company, is_active=True)
+        .select_related("plan")
+        .order_by("-created_at")
+        .first()
+    )
+    if not subscription:
+        return error_response("Subscription not found.", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
+
+    data = preview_plan_change(
+        subscription,
+        plan_id=plan_id,
+        billing_cycle_param=billing_cycle,
+    )
+    if not data.get("ok"):
+        return error_response(
+            data.get("error", "Invalid change"),
+            code=data.get("code", "invalid_change"),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    return success_response(data=data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def schedule_subscription_downgrade(request):
+    """
+    Schedule a downgrade to a lower-tier plan at the end of the current period.
+    POST /api/subscriptions/schedule-downgrade/
+    Body: { "plan_id": int, "pending_billing_cycle"?: "monthly"|"yearly" }
+    """
+    plan_id = request.data.get("plan_id")
+    try:
+        plan_id = int(plan_id)
+    except (TypeError, ValueError):
+        return error_response("plan_id is required.", code="missing_plan_id")
+
+    user = request.user
+    company = getattr(user, "company", None)
+    if not company:
+        return error_response(
+            "User is not associated with a company.",
+            code="no_company",
+        )
+
+    try:
+        target = Plan.objects.get(id=plan_id, visible=True)
+    except Plan.DoesNotExist:
+        return error_response("Plan not found.", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
+
+    subscription = (
+        Subscription.objects.filter(company=company, is_active=True)
+        .select_related("plan")
+        .order_by("-created_at")
+        .first()
+    )
+    if not subscription:
+        return error_response("Subscription not found.", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
+
+    current = subscription.plan
+    if target.tier >= current.tier:
+        return error_response(
+            "Use payment checkout to upgrade or renew. This endpoint is for downgrades only.",
+            code="not_a_downgrade",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    pending_bc = request.data.get("pending_billing_cycle")
+    if pending_bc not in (None, "", "monthly", "yearly"):
+        return error_response(
+            "pending_billing_cycle must be monthly or yearly.",
+            code="invalid_billing_cycle",
+        )
+    subscription.pending_plan = target
+    subscription.pending_billing_cycle = pending_bc or subscription.billing_cycle
+    subscription.save(update_fields=["pending_plan", "pending_billing_cycle", "updated_at"])
+    invalidate_company_subscription_cache(company.id)
+
+    return success_response(
+        data={
+            "subscription_id": subscription.id,
+            "pending_plan_id": target.id,
+            "pending_plan_name": target.name,
+            "effective_at": subscription.end_date.isoformat() if subscription.end_date else None,
         },
     )
 

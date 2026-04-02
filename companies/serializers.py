@@ -19,6 +19,7 @@ class CompanySerializer(serializers.ModelSerializer):
             "auto_assign_enabled",
             "re_assign_enabled",
             "re_assign_hours",
+            "free_trial_consumed",
             "created_at",
             "updated_at",
         ]
@@ -42,6 +43,7 @@ class CompanyListSerializer(serializers.ModelSerializer):
             "owner_username",
             "owner_email",
             "owner_phone",
+            "free_trial_consumed",
             "created_at",
         ]
 
