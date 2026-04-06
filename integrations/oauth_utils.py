@@ -68,6 +68,7 @@ class MetaOAuth(OAuthBase):
         Scopes المستخدمة (يجب أن تكون مضافة في Facebook App وموافق عليها):
         - pages_show_list: قائمة الصفحات
         - pages_read_engagement: قراءة تفاعل الصفحة (مطلوب لـ Page Access Token)
+        - pages_manage_metadata: مطلوب لـ subscribed_apps / webhooks على مستوى الصفحة
         - pages_manage_ads: إدارة إعلانات الصفحة (مطلوب لـ Lead Forms / leadgen_forms)
         - business_management: إدارة Business
         - leads_retrieval: جلب الليدز من Lead Forms
@@ -76,6 +77,7 @@ class MetaOAuth(OAuthBase):
             scopes = [
                 'pages_show_list',
                 'pages_read_engagement',
+                'pages_manage_metadata',
                 'pages_manage_ads',
                 'business_management',
                 'leads_retrieval',
