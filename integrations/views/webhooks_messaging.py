@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import requests
 from django.conf import settings
+from django.db.models import Q
 from django.core.cache import cache
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
@@ -298,7 +299,7 @@ def tiktok_leadgen_webhook(request):
     except Exception as e:
         logger.warning("TikTok Lead Gen webhook: plan quota blocked lead creation for company_id=%s err=%s", company_id, str(e)[:200])
         return HttpResponse('OK', status=200)
-    from .models import IntegrationAccount, IntegrationLog
+    from ..models import IntegrationAccount, IntegrationLog
     from crm.models import Client, ClientPhoneNumber, ClientEvent
     from crm.signals import get_least_busy_employee
     account, _ = IntegrationAccount.objects.get_or_create(
@@ -415,6 +416,20 @@ def verify_meta_webhook_signature(request):
     return hmac.compare_digest(received_signature, expected_signature)
 
 
+def _q_json_id(field_name, raw_id):
+    """
+    Match JSONField key against str or int (Meta may send numeric ids as either).
+    Avoids metadata__contains, which SQLite does not support for JSONField.
+    """
+    q = Q(**{f"metadata__{field_name}": str(raw_id)})
+    try:
+        if str(raw_id).strip().isdigit():
+            q |= Q(**{f"metadata__{field_name}": int(str(raw_id).strip())})
+    except (ValueError, TypeError):
+        pass
+    return q
+
+
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 @rate_limit_webhook(max_requests=100, window=60)  # 100 requests per minute
@@ -506,8 +521,7 @@ def meta_webhook(request):
                             accounts_with_form = IntegrationAccount.objects.filter(
                                 platform='meta',
                                 status='connected',
-                                metadata__contains={'selected_form_id': form_id}
-                            )
+                            ).filter(_q_json_id('selected_form_id', form_id))
                             
                             if accounts_with_form.exists():
                                 # إذا وجدنا أكثر من حساب (نادر جداً)، نأخذ الأول
@@ -519,8 +533,7 @@ def meta_webhook(request):
                                 accounts_with_page = IntegrationAccount.objects.filter(
                                     platform='meta',
                                     status='connected',
-                                    metadata__contains={'selected_page_id': page_id}
-                                )
+                                ).filter(_q_json_id('selected_page_id', page_id))
                                 
                                 if accounts_with_page.exists():
                                     account = accounts_with_page.first()
@@ -534,10 +547,12 @@ def meta_webhook(request):
                                     status='connected'
                                 )
                                 
+                                page_id_str = str(page_id).strip()
                                 for acc in all_meta_accounts:
                                     pages = acc.metadata.get('pages', [])
                                     for page in pages:
-                                        if page.get('id') == page_id:
+                                        pid = page.get('id')
+                                        if pid is not None and str(pid).strip() == page_id_str:
                                             account = acc
                                             logger.info(f"Found account by page_id in pages array: {page_id} -> Company: {account.company.name}")
                                             break
@@ -559,8 +574,10 @@ def meta_webhook(request):
                             # الحصول على Page Access Token
                             pages = account.metadata.get('pages', [])
                             page_access_token = None
+                            page_id_str = str(page_id).strip()
                             for page in pages:
-                                if page.get('id') == page_id:
+                                pid = page.get('id')
+                                if pid is not None and str(pid).strip() == page_id_str:
                                     page_access_token = page.get('access_token')
                                     break
                             
@@ -693,13 +710,12 @@ def meta_webhook(request):
                             
                         except Exception as e:
                             logger.error(f"Error processing Meta webhook: {str(e)}", exc_info=True)
-                            # تسجيل الخطأ
-                            if 'account' in locals():
+                            if account is not None:
                                 IntegrationLog.objects.create(
                                     account=account,
                                     action='lead_received',
                                     status='error',
-                                    message=f'Failed to process lead from Meta',
+                                    message='Failed to process lead from Meta',
                                     error_details=str(e),
                                 )
                             continue
