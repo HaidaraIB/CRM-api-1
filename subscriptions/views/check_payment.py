@@ -24,10 +24,6 @@ def check_payment_status(request, subscription_id):
     logger = logging.getLogger(__name__)
     try:
         subscription = Subscription.objects.get(id=subscription_id)
-        logger.info(
-            f"Checking payment status for subscription {subscription_id}, is_active: {subscription.is_active}"
-        )
-
         # Get payment - handle case where payment might not exist yet
         # Find payment by subscription (regardless of gateway)
         try:
@@ -54,9 +50,6 @@ def check_payment_status(request, subscription_id):
             payment_status_value = PaymentStatus.COMPLETED.value
             paytabs_status = "A"  # For PayTabs compatibility
             gateway_status = "success"  # Generic success status
-            logger.info(
-                f"Subscription {subscription_id} is ACTIVE - returning completed status immediately"
-            )
         elif payment and payment.tran_ref:
             # Check payment gateway type and verify accordingly
             payment_gateway = payment.payment_method

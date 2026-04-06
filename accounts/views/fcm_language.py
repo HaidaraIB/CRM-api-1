@@ -191,8 +191,6 @@ def update_language(request):
     user.language = language
     user.save(update_fields=["language"])
 
-    logger.info(f"Language updated to {language} for user {user.username}")
-
     return success_response(
         data={"message": "Language updated successfully", "language": language},
     )
