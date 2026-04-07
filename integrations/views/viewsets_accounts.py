@@ -41,6 +41,25 @@ from ..serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _build_oauth_callback_frontend_url() -> str:
+    """
+    Build frontend oauth callback URL robustly.
+    Handles deployments where app is hosted under /point and FRONTEND_URL may end with /dashboard.
+    """
+    base = (
+        getattr(settings, 'FRONTEND_OAUTH_BASE_URL', None)
+        or getattr(settings, 'FRONTEND_URL', None)
+        or getattr(settings, 'FRONTEND_APP_URL', None)
+        or 'http://localhost:3000'
+    ).rstrip('/')
+    # If env accidentally points to dashboard page, normalize to app root
+    if base.endswith('/dashboard'):
+        base = base[:-len('/dashboard')]
+    return f"{base}/oauth-callback"
+
+
 class IntegrationAccountViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing integration accounts.
@@ -275,8 +294,8 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             request.session.pop(f'oauth_state_{account.id}', None)
             request.session.pop(f'oauth_account_id_{state}', None)
             # إعادة التوجيه إلى صفحة النجاح في Frontend (صفحة مخصصة للـ popup تعرض "Connection succeeded" وتطلب إغلاق النافذة)
-            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-            return redirect(f"{frontend_url}/oauth-callback?connected=true&account_id={account.id}")
+            callback_url = _build_oauth_callback_frontend_url()
+            return redirect(f"{callback_url}?connected=true&account_id={account.id}")
             
         except Exception as e:
             from urllib.parse import quote
@@ -293,9 +312,9 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             )
             
             # Redirect to frontend OAuth callback page with error so popup shows "Connection failed"
-            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
             err_msg = quote(str(e)[:200], safe='')
-            return redirect(f"{frontend_url}/oauth-callback?connected=false&error={err_msg}")
+            callback_url = _build_oauth_callback_frontend_url()
+            return redirect(f"{callback_url}?connected=false&error={err_msg}")
     
     @action(detail=True, methods=['post'])
     def disconnect(self, request, pk=None):
