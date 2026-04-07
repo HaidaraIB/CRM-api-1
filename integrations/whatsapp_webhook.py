@@ -64,23 +64,28 @@ def whatsapp_webhook(request):
     if request.method == 'GET':
         # WhatsApp Webhook Verification
         mode = request.GET.get('hub.mode')
-        token = request.GET.get('hub.verify_token')
+        token = (request.GET.get('hub.verify_token') or '').strip()
         challenge = request.GET.get('hub.challenge')
         
         verify_token = (
             getattr(settings, 'WHATSAPP_WEBHOOK_VERIFY_TOKEN', None)
             or getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')
         )
+        if isinstance(verify_token, str):
+            verify_token = verify_token.strip()
         token_ok = token == verify_token
         if mode == 'subscribe' and token_ok:
             logger.info("WhatsApp webhook GET verify succeeded (use this callback URL in Meta with the same verify token)")
             return HttpResponse(challenge, content_type='text/plain')
         else:
             logger.warning(
-                "WhatsApp webhook GET verify failed: mode=%s token_configured=%s token_match=%s",
+                "WhatsApp webhook GET verify failed: mode=%s token_configured=%s token_match=%s "
+                "incoming_token_len=%s expected_token_len=%s",
                 mode,
                 bool(verify_token),
                 token_ok,
+                len(token),
+                len(verify_token),
             )
             return HttpResponse('Forbidden', status=403)
     

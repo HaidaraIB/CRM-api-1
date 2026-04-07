@@ -459,8 +459,8 @@ META_CLIENT_ID = os.getenv("META_CLIENT_ID", "")
 META_CLIENT_SECRET = os.getenv("META_CLIENT_SECRET", "")
 META_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/meta/"
 
-# Meta Webhook Verification Token
-META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "")
+# Meta Webhook Verification Token (strip: trailing spaces in .env break Meta verify)
+META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "").strip()
 
 # WhatsApp Business API (uses Meta OAuth)
 WHATSAPP_CLIENT_ID = os.getenv("WHATSAPP_CLIENT_ID", META_CLIENT_ID)
@@ -470,7 +470,7 @@ WHATSAPP_REDIRECT_URI = (
 )
 
 # WhatsApp Webhook Settings
-WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
+WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "").strip()
 
 
 _wa_ips = os.getenv("WHATSAPP_WEBHOOK_ALLOWED_IPS", "").strip()
