@@ -71,11 +71,17 @@ def whatsapp_webhook(request):
             getattr(settings, 'WHATSAPP_WEBHOOK_VERIFY_TOKEN', None)
             or getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')
         )
-        if mode == 'subscribe' and token == verify_token:
-            logger.info("WhatsApp webhook verified successfully")
+        token_ok = token == verify_token
+        if mode == 'subscribe' and token_ok:
+            logger.info("WhatsApp webhook GET verify succeeded (use this callback URL in Meta with the same verify token)")
             return HttpResponse(challenge, content_type='text/plain')
         else:
-            logger.warning(f"WhatsApp webhook verification failed: mode={mode}, token_match={token == verify_token}")
+            logger.warning(
+                "WhatsApp webhook GET verify failed: mode=%s token_configured=%s token_match=%s",
+                mode,
+                bool(verify_token),
+                token_ok,
+            )
             return HttpResponse('Forbidden', status=403)
     
     # POST: استقبال الرسائل
@@ -94,10 +100,16 @@ def whatsapp_webhook(request):
         
         try:
             payload = json.loads(request.body)
-            logger.info(f"WhatsApp webhook received: {json.dumps(payload, indent=2)}")
+            entry = payload.get('entry', [])
+            n_changes = sum(len(e.get('changes') or []) for e in entry)
+            logger.info(
+                "WhatsApp webhook POST: entries=%s changes=%s (full payload at DEBUG)",
+                len(entry),
+                n_changes,
+            )
+            logger.debug("WhatsApp webhook payload: %s", json.dumps(payload, indent=2))
             
             # WhatsApp يرسل البيانات في entry[0].changes[0].value
-            entry = payload.get('entry', [])
             if not entry:
                 logger.warning("No entry in WhatsApp webhook payload")
                 return JsonResponse({'status': 'ok'}, status=200)
@@ -115,6 +127,11 @@ def whatsapp_webhook(request):
                         if not phone_number_id:
                             logger.warning("WhatsApp webhook: missing phone_number_id in value.metadata")
                             continue
+                        logger.info(
+                            "WhatsApp webhook inbound: phone_number_id=%s messages_count=%s",
+                            phone_number_id,
+                            len(messages),
+                        )
                         for message in messages:
                             try:
                                 process_whatsapp_message(message, phone_number_id)
@@ -164,9 +181,17 @@ def process_whatsapp_message(message, phone_number_id):
         ).select_related('company', 'integration_account').first()
         
         if not wa_account:
-            logger.warning("No WhatsAppAccount found for phone_number_id=%s", phone_number_id)
+            logger.warning(
+                "No WhatsAppAccount found for phone_number_id=%s (must match Meta webhook metadata)",
+                phone_number_id,
+            )
             return
-        
+
+        logger.info(
+            "WhatsApp inbound matched tenant: phone_number_id=%s company_id=%s",
+            phone_number_id,
+            wa_account.company_id,
+        )
         company = wa_account.company
         account = wa_account.integration_account
         

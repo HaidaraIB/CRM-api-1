@@ -42,6 +42,16 @@ from ..serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_phone_e164(phone: str) -> str:
+    """Last four digits only for debug logs (E.164 digits)."""
+    p = str(phone).replace(' ', '').replace('+', '').strip()
+    if len(p) <= 4:
+        return '****'
+    return f'...{p[-4:]}'
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_send_message(request):
@@ -107,50 +117,93 @@ def whatsapp_send_message(request):
         "type": "text",
         "text": {"body": message[:4096]},
     }
+    redacted_to = _redact_phone_e164(to)
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        # Increment usage after success only
-        increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
-        if wa_account.integration_account_id:
-            IntegrationLog.objects.create(
-                account_id=wa_account.integration_account_id,
-                action='whatsapp_message_sent',
-                status='success',
-                message=f'Message sent to {to}',
-                response_data=data,
-            )
-        # تخزين الرسالة في LeadWhatsAppMessage للتايملاين ومركز المراسلات (عند وجود client_id)
-        wam_id = (data.get('messages') or [{}])[0].get('id') if isinstance(data.get('messages'), list) else None
-        if client_id:
-            try:
-                client = company.clients.get(id=client_id)
-                LeadWhatsAppMessage.objects.create(
-                    client=client,
-                    phone_number=to,
-                    body=(message or '')[:65535],
-                    direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
-                    whatsapp_message_id=wam_id,
-                    created_by=request.user,
-                )
-            except Exception:
-                pass
-        return success_response(data=data)
     except requests.RequestException as e:
-        err_body = {'error': str(e)}
-        if getattr(e, 'response', None) is not None:
-            r = e.response
-            try:
-                err_body = r.json()
-            except Exception:
-                err_body = {'error': getattr(r, 'text', str(r))}
-        logger.warning("WhatsApp send failed: %s", err_body)
+        logger.warning(
+            "WhatsApp send request error: phone_number_id=%s to=%s error=%s",
+            wa_account.phone_number_id,
+            redacted_to,
+            e,
+        )
+        return error_response(
+            "WhatsApp API request failed.",
+            code="bad_request",
+            details={"error": str(e), "graph_http_status": None},
+        )
+
+    graph_status = resp.status_code
+    if graph_status >= 400:
+        try:
+            err_body = resp.json()
+        except Exception:
+            err_body = {'error': getattr(resp, 'text', '') or str(resp)}
+        if isinstance(err_body, dict):
+            err_body['graph_http_status'] = graph_status
+        else:
+            err_body = {'error': str(err_body), 'graph_http_status': graph_status}
+        logger.warning(
+            "WhatsApp send failed: graph_status=%s phone_number_id=%s to=%s body=%s",
+            graph_status,
+            wa_account.phone_number_id,
+            redacted_to,
+            err_body,
+        )
         return error_response(
             "WhatsApp API request failed.",
             code="bad_request",
             details=err_body if isinstance(err_body, dict) else {"error": str(err_body)},
         )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        logger.warning(
+            "WhatsApp send: invalid JSON from Graph status=%s phone_number_id=%s",
+            graph_status,
+            wa_account.phone_number_id,
+        )
+        return error_response(
+            "WhatsApp API returned invalid JSON.",
+            code="bad_request",
+            details={"graph_http_status": graph_status},
+        )
+
+    wam_id = (data.get('messages') or [{}])[0].get('id') if isinstance(data.get('messages'), list) else None
+    logger.info(
+        "WhatsApp send ok: graph_status=%s phone_number_id=%s to=%s wam_id=%s",
+        graph_status,
+        wa_account.phone_number_id,
+        redacted_to,
+        wam_id,
+    )
+
+    # Increment usage after success only
+    increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
+    if wa_account.integration_account_id:
+        IntegrationLog.objects.create(
+            account_id=wa_account.integration_account_id,
+            action='whatsapp_message_sent',
+            status='success',
+            message=f'Message sent to {to}',
+            response_data=data,
+        )
+    # تخزين الرسالة في LeadWhatsAppMessage للتايملاين ومركز المراسلات (عند وجود client_id)
+    if client_id:
+        try:
+            client = company.clients.get(id=client_id)
+            LeadWhatsAppMessage.objects.create(
+                client=client,
+                phone_number=to,
+                body=(message or '')[:65535],
+                direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+                whatsapp_message_id=wam_id,
+                created_by=request.user,
+            )
+        except Exception:
+            pass
+    return success_response(data=data)
 
 
 # ==================== TikTok Lead Gen Webhook ====================
