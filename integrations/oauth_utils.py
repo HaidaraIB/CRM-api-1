@@ -29,7 +29,7 @@ class OAuthBase:
         """الحصول على رابط التفويض - يجب تنفيذه في كل منصة"""
         raise NotImplementedError
     
-    def exchange_code_for_token(self, code):
+    def exchange_code_for_token(self, code, redirect_uri=None):
         """استبدال authorization code بـ access token"""
         raise NotImplementedError
     
@@ -93,12 +93,13 @@ class MetaOAuth(OAuthBase):
         
         return f"{self.auth_url}?{urlencode(params)}"
     
-    def exchange_code_for_token(self, code):
+    def exchange_code_for_token(self, code, redirect_uri=None):
         """استبدال code بـ access token"""
+        effective_redirect = self.redirect_uri if redirect_uri is None else redirect_uri
         params = {
             'client_id': self.client_id,
             'client_secret': self.client_secret,
-            'redirect_uri': self.redirect_uri,
+            'redirect_uri': effective_redirect,
             'code': code,
         }
         
@@ -344,11 +345,17 @@ class WhatsAppOAuth(OAuthBase):
         }
         return f"{self.auth_url}?{urlencode(params)}"
     
-    def exchange_code_for_token(self, code):
+    def exchange_code_for_token(self, code, redirect_uri=None):
+        """
+        Exchange authorization code for access token.
+        redirect_uri: defaults to WHATSAPP_REDIRECT_URI. For Embedded Signup (FB.login),
+        Meta often requires an empty string or a dedicated URI — set via caller/settings.
+        """
+        effective_redirect = self.redirect_uri if redirect_uri is None else redirect_uri
         params = {
             'client_id': self.client_id,
             'client_secret': self.client_secret,
-            'redirect_uri': self.redirect_uri,
+            'redirect_uri': effective_redirect,
             'code': code,
         }
         response = requests.post(self.token_url, params=params)

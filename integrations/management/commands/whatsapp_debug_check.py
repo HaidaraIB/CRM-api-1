@@ -50,6 +50,18 @@ class Command(BaseCommand):
         else:
             self.stdout.write("WHATSAPP_WEBHOOK_ALLOWED_IPS: not set (all IPs allowed after signature check)")
 
+        es_cfg = getattr(settings, "WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID", "") or ""
+        es_app = getattr(settings, "WHATSAPP_CLIENT_ID", "") or ""
+        self.stdout.write("")
+        self.stdout.write("Embedded Signup (FB SDK + config_id):")
+        self.stdout.write(
+            "  CRM connect flow uses Embedded Signup when WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID and WHATSAPP_CLIENT_ID are set."
+        )
+        if es_cfg and es_app:
+            self.stdout.write(f"  config_id: {es_cfg[:8]}... (len={len(es_cfg)}) app_id: {es_app[:6]}...")
+        else:
+            self.stdout.write(self.style.WARNING("  Not enabled - add WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID in .env (see WHATSAPP_EMBEDDED_SIGNUP.md)."))
+
         self.stdout.write("")
         self.stdout.write(f"Authenticated send endpoint (Bearer token): POST {api_base}{send_path}")
         self.stdout.write("  Body: to (E.164 digits), message, optional phone_number_id, optional client_id")

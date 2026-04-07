@@ -135,6 +135,11 @@ class OAuthCallbackSerializer(serializers.Serializer):
     error_description = serializers.CharField(required=False)
 
 
+class WhatsAppEmbeddedSignupCompleteSerializer(serializers.Serializer):
+    """Code returned by FB.login (Embedded Signup) — exchanged server-side."""
+    code = serializers.CharField(required=True, trim_whitespace=True)
+
+
 # --------------- Twilio SMS ---------------
 
 class TwilioSettingsSerializer(serializers.ModelSerializer):

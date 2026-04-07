@@ -33,6 +33,7 @@ from ..serializers import (
     IntegrationAccountDetailSerializer,
     IntegrationLogSerializer,
     OAuthCallbackSerializer,
+    WhatsAppEmbeddedSignupCompleteSerializer,
     TwilioSettingsSerializer,
     LeadSMSMessageSerializer,
     SendLeadSMSSerializer,
@@ -58,6 +59,80 @@ def _build_oauth_callback_frontend_url() -> str:
     if base.endswith('/dashboard'):
         base = base[:-len('/dashboard')]
     return f"{base}/oauth-callback"
+
+
+def apply_oauth_token_to_account(account, token_data, user_info):
+    """
+    Persist OAuth access token, IntegrationAccount metadata, Meta pages, and WhatsAppAccount rows.
+    Used by redirect oauth_callback and by WhatsApp Embedded Signup (FB.login) completion.
+    """
+    oauth_handler = get_oauth_handler(account.platform)
+    account.set_access_token(token_data['access_token'])
+    if 'refresh_token' in token_data:
+        account.set_refresh_token(token_data['refresh_token'])
+    expires_in = token_data.get('expires_in', 0)
+    if expires_in:
+        account.token_expires_at = timezone.now() + timedelta(seconds=expires_in)
+    account.external_account_id = user_info.get('id') or user_info.get('open_id') or str(account.id)
+    account.external_account_name = user_info.get('name') or user_info.get('display_name') or (account.name or 'Meta User')
+    account.status = 'connected'
+    account.error_message = None
+    account.metadata = {
+        'user_info': user_info,
+        'token_type': token_data.get('token_type', 'Bearer'),
+    }
+    if account.platform == 'meta' and hasattr(oauth_handler, 'get_pages'):
+        try:
+            pages = oauth_handler.get_pages(token_data['access_token'])
+            account.metadata['pages'] = pages
+            for page in pages:
+                page['access_token'] = page.get('access_token', '')
+        except Exception:
+            pass
+
+    if account.platform == 'whatsapp':
+        try:
+            wa_handler = get_oauth_handler('whatsapp')
+            if hasattr(wa_handler, 'get_waba_and_phone_numbers'):
+                waba_list = wa_handler.get_waba_and_phone_numbers(token_data['access_token'])
+                for item in waba_list:
+                    waba_id = item.get('waba_id')
+                    business_id = item.get('business_id')
+                    for ph in item.get('phone_numbers') or []:
+                        phone_number_id = ph.get('id')
+                        if not phone_number_id:
+                            continue
+                        display = (ph.get('display_phone_number') or '').strip()
+                        wa_account, _created = WhatsAppAccount.objects.update_or_create(
+                            phone_number_id=phone_number_id,
+                            defaults={
+                                'company': account.company,
+                                'waba_id': waba_id,
+                                'business_id': business_id or '',
+                                'display_phone_number': display or None,
+                                'status': 'connected',
+                                'integration_account': account,
+                            },
+                        )
+                        wa_account.set_access_token(token_data['access_token'])
+                        wa_account.save()
+                if waba_list:
+                    first_waba = waba_list[0]
+                    first_phones = first_waba.get('phone_numbers') or []
+                    if first_phones:
+                        account.metadata['waba_id'] = first_waba.get('waba_id')
+                        account.metadata['phone_number_id'] = first_phones[0].get('id')
+                        account.phone_number = first_phones[0].get('display_phone_number')
+        except Exception as e:
+            logger.warning("WhatsApp WABA/phone fetch failed: %s", e)
+
+    account.save()
+    IntegrationLog.objects.create(
+        account=account,
+        action='oauth_connect',
+        status='success',
+        message='Account connected successfully',
+    )
 
 
 class IntegrationAccountViewSet(viewsets.ModelViewSet):
@@ -139,9 +214,76 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             request.session[f'oauth_state_{account.id}'] = state
             request.session[f'oauth_account_id_{state}'] = account.id
             auth_url = oauth_handler.get_authorization_url(state)
-            return success_response(data={'authorization_url': auth_url, 'state': state})
+            data = {'authorization_url': auth_url, 'state': state}
+            if account.platform == 'whatsapp':
+                cfg = getattr(settings, 'WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID', '') or ''
+                app_id = getattr(settings, 'WHATSAPP_CLIENT_ID', '') or ''
+                data['embedded_signup'] = {
+                    'enabled': bool(cfg and app_id),
+                    'app_id': app_id,
+                    'config_id': cfg,
+                    'graph_api_version': 'v18.0',
+                }
+            return success_response(data=data)
         except Exception as e:
             return error_response(str(e), code='bad_request')
+
+    @action(detail=True, methods=['post'], url_path='whatsapp/embedded-signup/complete')
+    def whatsapp_embedded_signup_complete(self, request, pk=None):
+        """
+        Complete WhatsApp connection after Meta Embedded Signup (FB.login returns authResponse.code).
+        Does not use OAuth state — caller must be authenticated and own this integration account.
+        """
+        account = self.get_object()
+        if account.platform != 'whatsapp':
+            return error_response(
+                'This action is only for WhatsApp integration accounts.',
+                code='bad_request',
+            )
+        ser = WhatsAppEmbeddedSignupCompleteSerializer(data=request.data)
+        if not ser.is_valid():
+            return validation_error_response(ser.errors)
+        code = ser.validated_data['code']
+        oauth_handler = get_oauth_handler('whatsapp')
+        embedded_redirect = getattr(
+            settings,
+            'WHATSAPP_EMBEDDED_SIGNUP_TOKEN_EXCHANGE_REDIRECT_URI',
+            '',
+        )
+        try:
+            token_data = oauth_handler.exchange_code_for_token(
+                code,
+                redirect_uri=embedded_redirect,
+            )
+        except Exception as e:
+            logger.warning("WhatsApp embedded signup token exchange failed: %s", e)
+            return error_response(
+                'Failed to exchange authorization code for access token.',
+                code='bad_request',
+                details={'error': str(e)},
+            )
+        try:
+            user_info = oauth_handler.get_user_info(token_data['access_token'])
+        except Exception as get_me_err:
+            logger.warning("get_user_info (/me) failed after embedded signup: %s", get_me_err)
+            user_info = {'id': f'meta_fallback_embedded_{account.id}', 'name': account.name or 'Meta User'}
+        try:
+            apply_oauth_token_to_account(account, token_data, user_info)
+        except Exception as e:
+            account.status = 'error'
+            account.error_message = str(e)
+            account.save()
+            IntegrationLog.objects.create(
+                account=account,
+                action='oauth_connect',
+                status='error',
+                message='Failed to connect account (embedded signup)',
+                error_details=str(e),
+            )
+            return error_response(str(e), code='bad_request')
+        return success_response(
+            data={'account_id': account.id, 'connected': True},
+        )
     
     @action(detail=False, methods=['get', 'post'], url_path='oauth/callback/(?P<platform>[^/]+)', permission_classes=[AllowAny])
     def oauth_callback(self, request, platform):
@@ -216,79 +358,8 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             except Exception as get_me_err:
                 logger.warning("get_user_info (/me) failed: %s. Using fallback.", get_me_err)
                 user_info = {'id': f'meta_fallback_{account.id}_{state[:8]}', 'name': account.name or 'Meta User'}
-            account.set_access_token(token_data['access_token'])
-            if 'refresh_token' in token_data:
-                account.set_refresh_token(token_data['refresh_token'])
-            expires_in = token_data.get('expires_in', 0)
-            if expires_in:
-                account.token_expires_at = timezone.now() + timedelta(seconds=expires_in)
-            account.external_account_id = user_info.get('id') or user_info.get('open_id') or str(account.id)
-            account.external_account_name = user_info.get('name') or user_info.get('display_name') or (account.name or 'Meta User')
-            account.status = 'connected'
-            account.error_message = None
-            account.metadata = {
-                'user_info': user_info,
-                'token_type': token_data.get('token_type', 'Bearer'),
-            }
-            # للحصول على الصفحات (Meta)
-            if account.platform == 'meta' and hasattr(oauth_handler, 'get_pages'):
-                try:
-                    pages = oauth_handler.get_pages(token_data['access_token'])
-                    account.metadata['pages'] = pages
-                    # حفظ Page Access Tokens في metadata
-                    for page in pages:
-                        page['access_token'] = page.get('access_token', '')
-                except Exception as e:
-                    # لا نوقف العملية إذا فشل الحصول على الصفحات
-                    pass
-            
-            # للحصول على WhatsApp: WABA + Phone Number IDs وحفظها في جدول WhatsAppAccount
-            if account.platform == 'whatsapp':
-                try:
-                    oauth_handler = get_oauth_handler('whatsapp')
-                    if hasattr(oauth_handler, 'get_waba_and_phone_numbers'):
-                        waba_list = oauth_handler.get_waba_and_phone_numbers(token_data['access_token'])
-                        for item in waba_list:
-                            waba_id = item.get('waba_id')
-                            business_id = item.get('business_id')
-                            for ph in item.get('phone_numbers') or []:
-                                phone_number_id = ph.get('id')
-                                if not phone_number_id:
-                                    continue
-                                display = (ph.get('display_phone_number') or '').strip()
-                                wa_account, created = WhatsAppAccount.objects.update_or_create(
-                                    phone_number_id=phone_number_id,
-                                    defaults={
-                                        'company': account.company,
-                                        'waba_id': waba_id,
-                                        'business_id': business_id or '',
-                                        'display_phone_number': display or None,
-                                        'status': 'connected',
-                                        'integration_account': account,
-                                    },
-                                )
-                                wa_account.set_access_token(token_data['access_token'])
-                                wa_account.save()
-                        if waba_list:
-                            first_waba = waba_list[0]
-                            first_phones = first_waba.get('phone_numbers') or []
-                            if first_phones:
-                                account.metadata['waba_id'] = first_waba.get('waba_id')
-                                account.metadata['phone_number_id'] = first_phones[0].get('id')
-                                account.phone_number = first_phones[0].get('display_phone_number')
-                except Exception as e:
-                    logger.warning("WhatsApp WABA/phone fetch failed: %s", e)
-            
-            account.save()
-            
-            # تسجيل العملية
-            IntegrationLog.objects.create(
-                account=account,
-                action='oauth_connect',
-                status='success',
-                message='Account connected successfully',
-            )
-            
+            apply_oauth_token_to_account(account, token_data, user_info)
+
             OAuthState.objects.filter(state=state).delete()
             cache.delete(f'oauth_state_{state}')
             request.session.pop(f'oauth_state_{account.id}', None)

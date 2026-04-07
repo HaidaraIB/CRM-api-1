@@ -479,6 +479,14 @@ WHATSAPP_WEBHOOK_ALLOWED_IPS = (
     [s.strip() for s in _wa_ips.split(",") if s.strip()] if _wa_ips else None
 )
 
+# WhatsApp Embedded Signup (Facebook Login for Business + FB JS SDK — see WHATSAPP_EMBEDDED_SIGNUP.md)
+WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID = os.getenv("WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID", "").strip()
+# Token exchange for FB.login "code": Meta often expects empty redirect_uri; override if Graph returns an error.
+WHATSAPP_EMBEDDED_SIGNUP_TOKEN_EXCHANGE_REDIRECT_URI = os.getenv(
+    "WHATSAPP_EMBEDDED_SIGNUP_TOKEN_EXCHANGE_REDIRECT_URI",
+    "",
+).strip()
+
 # TikTok Lead Gen (no OAuth, webhook only)
 TIKTOK_LEADGEN_COMPANY_ID = os.getenv("TIKTOK_LEADGEN_COMPANY_ID", "")
 TIKTOK_LEADGEN_ADVERTISER_MAPPING = os.getenv("TIKTOK_LEADGEN_ADVERTISER_MAPPING", "{}")
