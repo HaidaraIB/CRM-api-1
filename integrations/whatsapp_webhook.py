@@ -187,7 +187,11 @@ def process_whatsapp_message(message, phone_number_id):
         
         if not wa_account:
             logger.warning(
-                "No WhatsAppAccount found for phone_number_id=%s (must match Meta webhook metadata)",
+                "No WhatsAppAccount found for phone_number_id=%s. "
+                "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "
+                "Meta dashboard 'Test' events often use a sample ID (e.g. 123456123) — send a real message to your business "
+                "number instead, or compare with phone_number_id in your successful outbound send logs / "
+                "python manage.py whatsapp_debug_check",
                 phone_number_id,
             )
             return
