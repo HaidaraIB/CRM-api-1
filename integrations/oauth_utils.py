@@ -317,46 +317,68 @@ class MetaOAuth(OAuthBase):
 class WhatsAppOAuth(OAuthBase):
     """
     OAuth لـ WhatsApp Business API
-    
-    ملاحظة: WhatsApp Business API يتطلب:
-    1. حساب Business Manager في Meta
-    2. WhatsApp Business Account
-    3. Phone Number ID
+
+    نستخدم WHATSAPP_CLIENT_ID/WHATSAPP_CLIENT_SECRET مباشرةً
+    حتى لا يتم فتح OAuth على تطبيق Meta آخر بالخطأ.
     """
     
     def __init__(self):
         super().__init__('WHATSAPP')
-        # WhatsApp يستخدم نفس OAuth لـ Meta
-        self.meta_oauth = MetaOAuth()
+        self.auth_url = 'https://www.facebook.com/v18.0/dialog/oauth'
+        self.token_url = 'https://graph.facebook.com/v18.0/oauth/access_token'
+        self.graph_api_url = 'https://graph.facebook.com/v18.0'
     
     def get_authorization_url(self, state):
-        """
-        استخدام Meta OAuth لـ WhatsApp.
-        الصلاحيات المطلوبة:
-        - business_management: للوصول إلى /me/businesses و owned_whatsapp_business_accounts
-        - whatsapp_business_management, whatsapp_business_messaging: تحتاج إضافة منتج WhatsApp في تطبيق Meta
-        """
-        return self.meta_oauth.get_authorization_url(
-            state,
-            scopes=[
-                'public_profile',
-                'business_management',
-                'whatsapp_business_management',
-                'whatsapp_business_messaging',
-            ]
-        )
+        scopes = [
+            'public_profile',
+            'business_management',
+            'whatsapp_business_management',
+            'whatsapp_business_messaging',
+        ]
+        params = {
+            'client_id': self.client_id,
+            'redirect_uri': self.redirect_uri,
+            'state': state,
+            'scope': ','.join(scopes),
+            'response_type': 'code',
+        }
+        return f"{self.auth_url}?{urlencode(params)}"
     
     def exchange_code_for_token(self, code):
-        """استخدام Meta OAuth"""
-        return self.meta_oauth.exchange_code_for_token(code)
+        params = {
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'redirect_uri': self.redirect_uri,
+            'code': code,
+        }
+        response = requests.post(self.token_url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        return {
+            'access_token': data.get('access_token'),
+            'token_type': data.get('token_type', 'Bearer'),
+            'expires_in': data.get('expires_in', 5184000),
+        }
     
-    def refresh_token(self, refresh_token):
-        """استخدام Meta OAuth"""
-        return self.meta_oauth.refresh_token(refresh_token)
+    def refresh_token(self, access_token):
+        url = f"{self.graph_api_url}/oauth/access_token"
+        params = {
+            'grant_type': 'fb_exchange_token',
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'fb_exchange_token': access_token,
+        }
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        return {
+            'access_token': data.get('access_token'),
+            'expires_in': data.get('expires_in', 5184000),
+        }
     
     def get_user_info(self, access_token):
         """الحصول على معلومات المستخدم/Business"""
-        url = "https://graph.facebook.com/v18.0/me"
+        url = f"{self.graph_api_url}/me"
         params = {
             'access_token': access_token,
             'fields': 'id,name',

@@ -22,9 +22,8 @@ logger = logging.getLogger(__name__)
 
 def verify_whatsapp_webhook_signature(request):
     """
-    التحقق من توقيع WhatsApp Webhook
-    
-    WhatsApp يستخدم X-Hub-Signature-256 (نفس Meta)
+    التحقق من توقيع WhatsApp Webhook.
+    الأولوية لـ WHATSAPP_CLIENT_SECRET، مع fallback إلى META_CLIENT_SECRET.
     """
     signature = request.headers.get('X-Hub-Signature-256', '')
     if not signature:
@@ -35,10 +34,12 @@ def verify_whatsapp_webhook_signature(request):
     
     received_signature = signature[7:]
     
-    # WhatsApp يستخدم نفس App Secret مثل Meta
-    app_secret = getattr(settings, 'META_CLIENT_SECRET', '')
+    app_secret = (
+        getattr(settings, 'WHATSAPP_CLIENT_SECRET', '')
+        or getattr(settings, 'META_CLIENT_SECRET', '')
+    )
     if not app_secret:
-        logger.warning("META_CLIENT_SECRET not set in settings")
+        logger.warning("Neither WHATSAPP_CLIENT_SECRET nor META_CLIENT_SECRET is set")
         return False
     
     expected_signature = hmac.new(
