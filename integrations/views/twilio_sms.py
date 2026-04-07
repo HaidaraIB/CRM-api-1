@@ -209,7 +209,7 @@ class LeadSMSMessageViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         qs = LeadSMSMessage.objects.filter(client__company=user.company).order_by('-created_at')
         client_id = self.request.query_params.get('client')
-        if client_id:
+        if client_id and str(client_id).isdigit():
             qs = qs.filter(client_id=client_id)
         return qs
 
@@ -226,7 +226,7 @@ class LeadWhatsAppMessageViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         qs = LeadWhatsAppMessage.objects.filter(client__company=user.company).order_by('-created_at')
         client_id = self.request.query_params.get('client')
-        if client_id:
+        if client_id and str(client_id).isdigit():
             qs = qs.filter(client_id=client_id)
         return qs
 
