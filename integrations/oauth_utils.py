@@ -63,34 +63,42 @@ class MetaOAuth(OAuthBase):
 
     def get_authorization_url(self, state, scopes=None):
         """
-        إنشاء رابط التفويض لـ Meta
-        
-        Scopes المستخدمة (يجب أن تكون مضافة في Facebook App وموافق عليها):
-        - pages_show_list: قائمة الصفحات
-        - pages_read_engagement: قراءة تفاعل الصفحة (مطلوب لـ Page Access Token)
-        - pages_manage_metadata: مطلوب لـ subscribed_apps / webhooks على مستوى الصفحة
-        - pages_manage_ads: إدارة إعلانات الصفحة (مطلوب لـ Lead Forms / leadgen_forms)
-        - business_management: إدارة Business
-        - leads_retrieval: جلب الليدز من Lead Forms
+        إنشاء رابط التفويض لـ Meta.
+
+        إن وُجد META_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID في الإعدادات، يُستخدم Facebook Login for Business:
+        يُمرَّر config_id وoverride_default_response_type والصلاحيات تأتي من إعدادات الـ Configuration في لوحة ميتا
+        (لا تُضاف scope يدوياً في الرابط).
+
+        وإلا يُستخدم OAuth الكلاسيكي مع قائمة scope أدناه.
         """
-        if scopes is None:
-            scopes = [
-                'pages_show_list',
-                'pages_read_engagement',
-                'pages_manage_metadata',
-                'pages_manage_ads',
-                'business_management',
-                'leads_retrieval',
-            ]
-        
+        config_id = getattr(
+            settings, "META_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID", ""
+        )
+        if isinstance(config_id, str):
+            config_id = config_id.strip()
+
         params = {
-            'client_id': self.client_id,
-            'redirect_uri': self.redirect_uri,
-            'state': state,
-            'scope': ','.join(scopes),
-            'response_type': 'code',
+            "client_id": self.client_id,
+            "redirect_uri": self.redirect_uri,
+            "state": state,
+            "response_type": "code",
         }
-        
+
+        if config_id:
+            params["config_id"] = config_id
+            params["override_default_response_type"] = "true"
+        else:
+            if scopes is None:
+                scopes = [
+                    "pages_show_list",
+                    "pages_read_engagement",
+                    "pages_manage_metadata",
+                    "pages_manage_ads",
+                    "business_management",
+                    "leads_retrieval",
+                ]
+            params["scope"] = ",".join(scopes)
+
         return f"{self.auth_url}?{urlencode(params)}"
     
     def exchange_code_for_token(self, code, redirect_uri=None):

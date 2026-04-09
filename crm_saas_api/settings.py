@@ -462,6 +462,12 @@ META_REDIRECT_URI = f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/me
 # Meta Webhook Verification Token (strip: trailing spaces in .env break Meta verify)
 META_WEBHOOK_VERIFY_TOKEN = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "").strip()
 
+# Facebook Login for Business: Configurations → copy Configuration ID. When set, Meta OAuth uses
+# config_id + override_default_response_type (permissions come from that config, not ?scope=).
+META_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID = os.getenv(
+    "META_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID", ""
+).strip()
+
 # WhatsApp Business API (uses Meta OAuth)
 WHATSAPP_CLIENT_ID = os.getenv("WHATSAPP_CLIENT_ID", META_CLIENT_ID)
 WHATSAPP_CLIENT_SECRET = os.getenv("WHATSAPP_CLIENT_SECRET", META_CLIENT_SECRET)
