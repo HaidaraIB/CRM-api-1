@@ -13,6 +13,7 @@ from .views import (
     send_lead_sms_view,
     LeadSMSMessageViewSet,
     LeadWhatsAppMessageViewSet,
+    integration_policy_view,
 )
 from .whatsapp_webhook import whatsapp_webhook
 
@@ -26,6 +27,7 @@ router.register(r'templates', MessageTemplateViewSet, basename='message-template
 urlpatterns = [
     path('', include(router.urls)),
     path('whatsapp/send/', whatsapp_send_message, name='whatsapp_send'),
+    path('policy/', integration_policy_view, name='integration_policy'),
     path('whatsapp/limits/', whatsapp_limits, name='whatsapp_limits'),
     path('whatsapp/conversations/', whatsapp_conversations_list, name='whatsapp_conversations'),
     path('webhooks/meta/', meta_webhook, name='meta_webhook'),

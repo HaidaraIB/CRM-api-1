@@ -260,6 +260,23 @@ class DealViewSet(viewsets.ModelViewSet):
             return DealListSerializer
         return DealSerializer
 
+    def perform_create(self, serializer):
+        user = self.request.user
+        company = getattr(user, "company", None)
+        if company and not user.is_super_admin():
+            from subscriptions.entitlements import require_quota
+
+            current_deals = Deal.objects.filter(company=company).count()
+            require_quota(
+                company,
+                "max_deals",
+                current_count=current_deals,
+                requested_delta=1,
+                message="You have reached your plan deals limit. Please upgrade your plan to add more deals.",
+                error_key="plan_quota_max_deals_exceeded",
+            )
+        serializer.save()
+
 
 class TaskViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Task instances (CRUD)."""

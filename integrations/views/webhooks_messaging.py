@@ -26,6 +26,12 @@ from ..models import (
     WhatsAppAccount, OAuthState, TwilioSettings,
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
 )
+from ..policy import (
+    INTEGRATION_POLICY_PLATFORMS,
+    get_effective_integration_policy,
+    get_plan_integration_access,
+)
+from settings.models import SystemSettings
 from ..oauth_utils import get_oauth_handler, MetaOAuth
 from ..serializers import (
     IntegrationAccountSerializer,
@@ -42,6 +48,46 @@ from ..serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _integration_gate(company, platform: str):
+    plan_gate = get_plan_integration_access(company, platform)
+    if not plan_gate["enabled"]:
+        return {
+            "enabled": False,
+            "message": plan_gate["message"],
+            "scope": "plan",
+        }
+    effective = get_effective_integration_policy(
+        SystemSettings.get_settings().integration_policies or {},
+        company_id=company.id,
+        platform=platform,
+    )
+    return effective
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def integration_policy_view(request):
+    company = request.user.company
+    settings_obj = SystemSettings.get_settings()
+    policies = settings_obj.integration_policies or {}
+    data = {}
+    for platform in INTEGRATION_POLICY_PLATFORMS:
+        plan_gate = get_plan_integration_access(company, platform)
+        if not plan_gate["enabled"]:
+            data[platform] = {
+                "enabled": False,
+                "message": plan_gate["message"],
+                "scope": "plan",
+            }
+            continue
+        data[platform] = get_effective_integration_policy(
+            policies,
+            company_id=company.id,
+            platform=platform,
+        )
+    return success_response(data=data)
 
 
 def _redact_phone_e164(phone: str) -> str:
@@ -61,14 +107,11 @@ def whatsapp_send_message(request):
     Body: { "phone_number_id": "optional", "to": "971501234567", "message": "نص الرسالة", "client_id": "optional" }
     """
     company = request.user.company
-    # Plan gating: feature + monthly usage
-    from subscriptions.entitlements import require_feature, require_monthly_usage, increment_monthly_usage
-    require_feature(
-        company,
-        "whatsapp_enabled",
-        message="WhatsApp is not available in your current plan. Please upgrade your plan.",
-        error_key="plan_feature_whatsapp_disabled",
-    )
+    gate = _integration_gate(company, "whatsapp")
+    if not gate["enabled"]:
+        return error_response(gate["message"], code="integration_disabled", status_code=403)
+    # Plan gating: monthly usage only (integration access handled by integration gate).
+    from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
     require_monthly_usage(
         company,
         "monthly_whatsapp_messages",
@@ -335,6 +378,9 @@ def tiktok_leadgen_webhook(request):
         company = Company.objects.get(id=company_id)
     except Company.DoesNotExist:
         logger.warning("TikTok Lead Gen webhook: company_id=%s not found", company_id)
+        return HttpResponse('OK', status=200)
+    if not _integration_gate(company, "tiktok")["enabled"]:
+        logger.info("TikTok Lead Gen webhook ignored (integration disabled) company_id=%s", company_id)
         return HttpResponse('OK', status=200)
     # Enforce plan quota for leads created via webhook
     try:
@@ -619,6 +665,14 @@ def meta_webhook(request):
                                 )
                                 # لا يمكننا إنشاء IntegrationLog بدون account
                                 # لكن يمكننا تسجيل الخطأ في Django logs
+                                continue
+                            gate = _integration_gate(account.company, "meta")
+                            if not gate["enabled"]:
+                                logger.info(
+                                    "META_WEBHOOK ignored (integration disabled) company_id=%s form_id=%s",
+                                    account.company_id,
+                                    form_id,
+                                )
                                 continue
                             
                             # جلب بيانات الليد من Meta API

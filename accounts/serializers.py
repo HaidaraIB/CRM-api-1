@@ -189,6 +189,7 @@ class UserSerializer(serializers.ModelSerializer):
                     "plan_id": ent.plan_id,
                     "plan_name": ent.plan_name,
                     "quotas": {
+                        "max_employees": ent.max_employees,
                         "max_users": ent.max_users,
                         "max_clients": ent.max_clients,
                         **(ent.extra_limits or {}),

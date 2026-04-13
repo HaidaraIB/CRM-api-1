@@ -85,8 +85,46 @@ class CallMethodAdmin(admin.ModelAdmin):
 
 @admin.register(SystemSettings)
 class SystemSettingsAdmin(admin.ModelAdmin):
-    list_display = ['id', 'usd_to_iqd_rate', 'backup_schedule', 'updated_at']
-    list_filter = ['backup_schedule']
-    readonly_fields = ['created_at', 'updated_at']
+    list_display = [
+        "id",
+        "usd_to_iqd_rate",
+        "backup_schedule",
+        "mobile_minimum_version_android",
+        "mobile_minimum_version_ios",
+        "updated_at",
+    ]
+    list_filter = ["backup_schedule"]
+    readonly_fields = ["created_at", "updated_at"]
+
+    fieldsets = (
+        (
+            "General",
+            {
+                "fields": ("usd_to_iqd_rate", "backup_schedule"),
+            },
+        ),
+        (
+            "Mobile app — forced update",
+            {
+                "description": "Leave minimum version empty for an OS to allow any version. "
+                "Set minimum semver and store URLs when you want old builds to block until update.",
+                "fields": (
+                    "mobile_minimum_version_android",
+                    "mobile_minimum_build_android",
+                    "mobile_store_url_android",
+                    "mobile_minimum_version_ios",
+                    "mobile_minimum_build_ios",
+                    "mobile_store_url_ios",
+                ),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("created_at", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
 
 

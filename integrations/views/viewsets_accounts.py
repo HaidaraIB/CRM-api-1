@@ -40,6 +40,8 @@ from ..serializers import (
     LeadWhatsAppMessageSerializer,
     MessageTemplateSerializer,
 )
+from ..policy import get_effective_integration_policy, get_plan_integration_access
+from settings.models import SystemSettings
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +153,25 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
     """
     
     permission_classes = [IsAuthenticated, HasActiveSubscription]
+
+    def _assert_platform_enabled(self, platform: str):
+        company = self.request.user.company
+        plan_gate = get_plan_integration_access(company, platform)
+        if not plan_gate["enabled"]:
+            return error_response(
+                plan_gate["message"],
+                code="plan_integration_not_included",
+                status_code=403,
+            )
+        policies = SystemSettings.get_settings().integration_policies or {}
+        effective = get_effective_integration_policy(
+            policies,
+            company_id=company.id,
+            platform=platform,
+        )
+        if not effective["enabled"]:
+            return error_response(effective["message"], code="integration_disabled", status_code=403)
+        return None
     
     def get_queryset(self):
         """الحصول على حسابات الشركة فقط"""
@@ -179,6 +200,13 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             return IntegrationAccountDetailSerializer
         return IntegrationAccountSerializer
     
+    def create(self, request, *args, **kwargs):
+        platform = request.data.get("platform")
+        blocked = self._assert_platform_enabled(platform)
+        if blocked is not None:
+            return blocked
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         """إنشاء حساب تكامل جديد"""
         serializer.save(
@@ -200,6 +228,9 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
     def connect(self, request, pk=None):
         """بدء عملية OAuth لربط الحساب (Meta / WhatsApp). TikTok = Lead Gen فقط."""
         account = self.get_object()
+        blocked = self._assert_platform_enabled(account.platform)
+        if blocked is not None:
+            return blocked
         if account.platform == 'tiktok':
             return error_response(
                 'TikTok is Lead Gen only. Use the webhook URL in Integrations → TikTok.',
@@ -509,6 +540,9 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
     def sync(self, request, pk=None):
         """مزامنة البيانات مع المنصة"""
         account = self.get_object()
+        blocked = self._assert_platform_enabled(account.platform)
+        if blocked is not None:
+            return blocked
         
         if account.status != 'connected':
             return error_response('Account is not connected', code='bad_request')

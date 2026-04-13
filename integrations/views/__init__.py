@@ -11,13 +11,19 @@ from .twilio_sms import (
     twilio_settings_view,
 )
 from .viewsets_accounts import IntegrationAccountViewSet, IntegrationLogViewSet
-from .webhooks_messaging import meta_webhook, tiktok_leadgen_webhook, whatsapp_send_message
+from .webhooks_messaging import (
+    integration_policy_view,
+    meta_webhook,
+    tiktok_leadgen_webhook,
+    whatsapp_send_message,
+)
 
 __all__ = [
     "IntegrationAccountViewSet",
     "IntegrationLogViewSet",
     "LeadSMSMessageViewSet",
     "LeadWhatsAppMessageViewSet",
+    "integration_policy_view",
     "MessageTemplateViewSet",
     "meta_webhook",
     "send_lead_sms_view",

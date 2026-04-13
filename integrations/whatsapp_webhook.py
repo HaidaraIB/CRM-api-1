@@ -16,6 +16,8 @@ import hmac
 import hashlib
 import logging
 from django.conf import settings
+from settings.models import SystemSettings
+from .policy import get_effective_integration_policy, get_plan_integration_access
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +204,26 @@ def process_whatsapp_message(message, phone_number_id):
             wa_account.company_id,
         )
         company = wa_account.company
+        gate = get_effective_integration_policy(
+            SystemSettings.get_settings().integration_policies or {},
+            company_id=company.id,
+            platform="whatsapp",
+        )
+        plan_gate = get_plan_integration_access(company, "whatsapp")
+        if not plan_gate["enabled"]:
+            logger.info(
+                "WhatsApp inbound ignored (integration not in plan) company_id=%s phone_number_id=%s",
+                company.id,
+                phone_number_id,
+            )
+            return
+        if not gate["enabled"]:
+            logger.info(
+                "WhatsApp inbound ignored (integration disabled) company_id=%s phone_number_id=%s",
+                company.id,
+                phone_number_id,
+            )
+            return
         account = wa_account.integration_account
         
         # البحث عن Client موجود برقم الهاتف

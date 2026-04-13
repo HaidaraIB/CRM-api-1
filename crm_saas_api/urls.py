@@ -69,6 +69,7 @@ from settings.views import (
     SystemSettingsViewSet,
     PlatformTwilioSettingsViewSet,
 )
+from settings.views_public import MobileAppVersionPublicView
 from real_estate.views import (
     DeveloperViewSet,
     ProjectViewSet,
@@ -198,6 +199,11 @@ v1_patterns = [
     path("auth/verify-2fa/", verify_two_factor_auth, name="verify_two_factor_auth"),
     path("public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
     path("public/payment-gateways/", PublicPaymentGatewayListView.as_view(), name="public_payment_gateway_list"),
+    path(
+        "public/mobile-app-version/",
+        MobileAppVersionPublicView.as_view(),
+        name="public_mobile_app_version",
+    ),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     path("integrations/", include(integrations_urls)),

@@ -39,9 +39,25 @@ from ..serializers import (
     LeadWhatsAppMessageSerializer,
     MessageTemplateSerializer,
 )
+from ..policy import get_effective_integration_policy, get_plan_integration_access
+from settings.models import SystemSettings
 
 logger = logging.getLogger(__name__)
 from ..services.twilio_text import strip_ansi, twilio_error_to_key
+
+
+def _integration_gate(company, platform: str):
+    plan_gate = get_plan_integration_access(company, platform)
+    if not plan_gate["enabled"]:
+        return error_response(plan_gate["message"], code="plan_integration_not_included", status_code=403)
+    effective = get_effective_integration_policy(
+        SystemSettings.get_settings().integration_policies or {},
+        company_id=company.id,
+        platform=platform,
+    )
+    if not effective["enabled"]:
+        return error_response(effective["message"], code="integration_disabled", status_code=403)
+    return None
 
 @api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
@@ -51,6 +67,9 @@ def twilio_settings_view(request):
     PUT: إنشاء أو تحديث إعدادات Twilio. نستخدم Twilio حصرياً لإرسال SMS.
     """
     company = request.user.company
+    blocked = _integration_gate(company, "twilio")
+    if blocked is not None:
+        return blocked
     if request.method == 'GET':
         try:
             twilio_settings = TwilioSettings.objects.get(company=company)
@@ -100,14 +119,11 @@ def send_lead_sms_view(request):
     body = data['body']
 
     company = request.user.company
-    # Plan gating: feature + monthly usage
-    from subscriptions.entitlements import require_feature, require_monthly_usage, increment_monthly_usage
-    require_feature(
-        company,
-        "sms_enabled",
-        message="SMS is not available in your current plan. Please upgrade your plan.",
-        error_key="plan_feature_sms_disabled",
-    )
+    blocked = _integration_gate(company, "twilio")
+    if blocked is not None:
+        return blocked
+    # Plan gating: monthly usage only (integration access handled by integration gate).
+    from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
     require_monthly_usage(
         company,
         "monthly_sms_messages",

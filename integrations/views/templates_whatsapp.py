@@ -15,6 +15,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
@@ -39,8 +40,24 @@ from ..serializers import (
     LeadWhatsAppMessageSerializer,
     MessageTemplateSerializer,
 )
+from settings.models import SystemSettings
+from ..policy import get_effective_integration_policy, get_plan_integration_access
 
 logger = logging.getLogger(__name__)
+
+
+def _integration_gate(company, platform: str):
+    plan_gate = get_plan_integration_access(company, platform)
+    if not plan_gate["enabled"]:
+        return error_response(plan_gate["message"], code="plan_integration_not_included", status_code=403)
+    effective = get_effective_integration_policy(
+        SystemSettings.get_settings().integration_policies or {},
+        company_id=company.id,
+        platform=platform,
+    )
+    if not effective["enabled"]:
+        return error_response(effective["message"], code="integration_disabled", status_code=403)
+    return None
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_conversations_list(request):
@@ -51,6 +68,9 @@ def whatsapp_conversations_list(request):
     from django.db.models import Max
     from crm.models import Client
     company = request.user.company
+    blocked = _integration_gate(company, "whatsapp")
+    if blocked is not None:
+        return blocked
     # عملاء لديهم على الأقل رسالة واتساب، مرتبون بآخر رسالة
     sub = LeadWhatsAppMessage.objects.filter(client__company=company).values('client_id').annotate(
         last_at=Max('created_at')
@@ -108,9 +128,15 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
     serializer_class = MessageTemplateSerializer
 
     def get_queryset(self):
+        blocked = _integration_gate(self.request.user.company, "whatsapp")
+        if blocked is not None:
+            return MessageTemplate.objects.none()
         return MessageTemplate.objects.filter(company=self.request.user.company).order_by('-updated_at')
 
     def perform_create(self, serializer):
+        blocked = _integration_gate(self.request.user.company, "whatsapp")
+        if blocked is not None:
+            raise PermissionDenied(detail={"error": "Integration is not available for your current plan.", "error_key": "plan_integration_not_included"})
         serializer.save(company=self.request.user.company)
 
     @action(detail=True, methods=['post'], url_path='submit-to-whatsapp')
@@ -121,6 +147,9 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         Body (optional): { "language": "en_US" }
         """
         template = self.get_object()
+        blocked = _integration_gate(request.user.company, "whatsapp")
+        if blocked is not None:
+            return blocked
         if (template.channel_type or '').lower() not in ('whatsapp', 'whatsapp_api'):
             return error_response(
                 'Only WhatsApp templates can be submitted to Meta.',
@@ -234,6 +263,9 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         POST /api/integrations/templates/sync-whatsapp/
         """
         company = request.user.company
+        blocked = _integration_gate(company, "whatsapp")
+        if blocked is not None:
+            return blocked
         wa = WhatsAppAccount.objects.filter(company=company, status='connected').first()
         if not wa:
             return error_response(
@@ -297,6 +329,9 @@ def whatsapp_limits(request):
     Returns: { messaging_limit_tier, quality_rating, ... }
     """
     company = request.user.company
+    blocked = _integration_gate(company, "whatsapp")
+    if blocked is not None:
+        return blocked
     wa = WhatsAppAccount.objects.filter(company=company, status='connected').first()
     if not wa:
         return error_response(

@@ -60,6 +60,8 @@ class CompanyEntitlements:
     plan_id: Optional[int]
     plan_name: Optional[str]
     # quotas
+    max_employees: Optional[int]
+    # Legacy alias kept for backward compatibility in API payloads.
     max_users: Optional[int]
     max_clients: Optional[int]
     extra_limits: dict[str, Any]
@@ -87,6 +89,7 @@ def build_company_entitlements(company) -> CompanyEntitlements:
         return CompanyEntitlements(
             plan_id=None,
             plan_name=None,
+            max_employees=None,
             max_users=None,
             max_clients=None,
             extra_limits={},
@@ -96,7 +99,7 @@ def build_company_entitlements(company) -> CompanyEntitlements:
 
     plan = sub.plan
     # Legacy quotas
-    max_users = _parse_unlimited_int(getattr(plan, "users", None))
+    max_employees = _parse_unlimited_int(getattr(plan, "users", None))
     max_clients = _parse_unlimited_int(getattr(plan, "clients", None))
 
     # Merge features with defaults
@@ -114,15 +117,18 @@ def build_company_entitlements(company) -> CompanyEntitlements:
     extra_limits = getattr(plan, "limits", None) or {}
 
     # Allow JSON limits to override legacy keys if explicitly provided
-    if "max_users" in extra_limits:
-        max_users = _parse_unlimited_int(extra_limits.get("max_users"))
+    if "max_employees" in extra_limits:
+        max_employees = _parse_unlimited_int(extra_limits.get("max_employees"))
+    elif "max_users" in extra_limits:
+        max_employees = _parse_unlimited_int(extra_limits.get("max_users"))
     if "max_clients" in extra_limits:
         max_clients = _parse_unlimited_int(extra_limits.get("max_clients"))
 
     return CompanyEntitlements(
         plan_id=plan.id,
         plan_name=plan.name,
-        max_users=max_users,
+        max_employees=max_employees,
+        max_users=max_employees,
         max_clients=max_clients,
         extra_limits=extra_limits if isinstance(extra_limits, dict) else {},
         features=features,
@@ -148,8 +154,8 @@ def require_feature(company, feature_key: str, *, message: str, error_key: str):
 def require_quota(company, quota_key: str, current_count: int, requested_delta: int = 1, *, message: str, error_key: str):
     ent = build_company_entitlements(company)
     limit = None
-    if quota_key == "max_users":
-        limit = ent.max_users
+    if quota_key in {"max_employees", "max_users"}:
+        limit = ent.max_employees
     elif quota_key == "max_clients":
         limit = ent.max_clients
     else:

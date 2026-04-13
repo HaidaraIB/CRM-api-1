@@ -9,24 +9,20 @@ from __future__ import annotations
 
 # Feature flags (boolean)
 FEATURE_KEYS = (
-    # Integrations / messaging
-    "whatsapp_enabled",
-    "sms_enabled",
-    # Platform/system modules
-    "backups_enabled",
-    "lead_import_enabled",
+    # Per-plan integration inclusion toggles
+    "integration_meta",
+    "integration_tiktok",
+    "integration_whatsapp",
+    "integration_twilio",
 )
 
 # Quotas (integer or "unlimited"/None)
 QUOTA_KEYS = (
+    "max_employees",
+    # Legacy alias
     "max_users",
     "max_clients",
-    # Optional expansions (kept here for forward-compat; may not be enforced yet)
     "max_deals",
-    "max_tasks",
-    "max_integration_accounts",
-    "max_whatsapp_numbers",
-    "max_message_templates",
 )
 
 # Usage limits (monthly counters)
@@ -38,11 +34,11 @@ USAGE_KEYS_MONTHLY = (
 
 
 DEFAULT_FEATURES = {
-    # By default, keep current behavior: everything that exists stays enabled
-    "whatsapp_enabled": True,
-    "sms_enabled": True,
-    "backups_enabled": True,
-    "lead_import_enabled": True,
+    # Keep default behavior permissive for existing plans.
+    "integration_meta": True,
+    "integration_tiktok": True,
+    "integration_whatsapp": True,
+    "integration_twilio": True,
 }
 
 # Default usage limits: None means unlimited (keeps current behavior)

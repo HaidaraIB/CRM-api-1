@@ -12,6 +12,11 @@ from .models import (
     SystemSettings,
     PlatformTwilioSettings,
 )
+from integrations.policy import (
+    INTEGRATION_POLICY_DEFAULTS,
+    INTEGRATION_POLICY_PLATFORMS,
+    apply_integration_policy_side_effects,
+)
 
 
 @extend_schema_serializer(component_name="Channel")
@@ -315,15 +320,63 @@ class SystemAuditLogSerializer(serializers.ModelSerializer):
 class SystemSettingsSerializer(serializers.ModelSerializer):
     """Serializer for System Settings"""
 
+    integration_policies = serializers.JSONField(required=False)
+
     class Meta:
         model = SystemSettings
         fields = [
             "id",
             "usd_to_iqd_rate",
             "backup_schedule",
+            "mobile_minimum_version_android",
+            "mobile_minimum_version_ios",
+            "mobile_minimum_build_android",
+            "mobile_minimum_build_ios",
+            "mobile_store_url_android",
+            "mobile_store_url_ios",
+            "integration_policies",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_integration_policies(self, value):
+        if value in (None, ""):
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("integration_policies must be a JSON object.")
+        normalized = {}
+        for platform in INTEGRATION_POLICY_PLATFORMS:
+            raw = value.get(platform) or {}
+            if not isinstance(raw, dict):
+                raw = {}
+            global_enabled = raw.get("global_enabled", INTEGRATION_POLICY_DEFAULTS["global_enabled"])
+            global_message = (raw.get("global_message") or "").strip()
+            company_overrides_raw = raw.get("company_overrides") or {}
+            company_overrides = {}
+            if isinstance(company_overrides_raw, dict):
+                for company_id, company_policy in company_overrides_raw.items():
+                    if not isinstance(company_policy, dict):
+                        continue
+                    company_overrides[str(company_id)] = {
+                        "enabled": bool(company_policy.get("enabled", True)),
+                        "message": (company_policy.get("message") or "").strip(),
+                    }
+            normalized[platform] = {
+                "global_enabled": bool(global_enabled),
+                "global_message": global_message,
+                "company_overrides": company_overrides,
+            }
+        return normalized
+
+    def update(self, instance, validated_data):
+        previous_policies = instance.integration_policies or {}
+        instance = super().update(instance, validated_data)
+        if "integration_policies" in validated_data:
+            apply_integration_policy_side_effects(
+                previous_policies=previous_policies,
+                new_policies=instance.integration_policies or {},
+            )
+        return instance
 
 

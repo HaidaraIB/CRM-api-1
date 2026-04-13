@@ -282,6 +282,50 @@ class SystemSettings(models.Model):
         help_text="Backup schedule: daily, weekly, or monthly",
     )
 
+    # Mobile app minimum versions (semver x.y.z). Empty = do not enforce for that OS.
+    mobile_minimum_version_android = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Minimum Android app version (e.g. 1.2.1). Empty disables enforcement.",
+    )
+    mobile_minimum_version_ios = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Minimum iOS app version (e.g. 1.2.1). Empty disables enforcement.",
+    )
+    mobile_minimum_build_android = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Optional: when installed version equals minimum, require at least this build (Android versionCode).",
+    )
+    mobile_minimum_build_ios = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Optional: when installed version equals minimum, require at least this build (iOS CFBundleVersion).",
+    )
+    mobile_store_url_android = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="Play Store URL or market:// link for forced update.",
+    )
+    mobile_store_url_ios = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="App Store URL for forced update.",
+    )
+    integration_policies = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Integration gating policies by platform. "
+            "Schema: {platform: {global_enabled, global_message, company_overrides{company_id:{enabled,message}}}}"
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

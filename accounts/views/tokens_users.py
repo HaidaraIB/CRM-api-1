@@ -99,14 +99,15 @@ class UserViewSet(viewsets.ModelViewSet):
 
         if company and not request_user.is_super_admin():
             from subscriptions.entitlements import require_quota
-            current_users = User.objects.filter(company=company).count()
+            owner_id = getattr(company, "owner_id", None)
+            current_users = User.objects.filter(company=company).exclude(id=owner_id).count()
             require_quota(
                 company,
-                "max_users",
+                "max_employees",
                 current_count=current_users,
                 requested_delta=1,
-                message="You have reached your plan user limit. Please upgrade your plan to add more users.",
-                error_key="plan_quota_max_users_exceeded",
+                message="You have reached your plan employee limit. Please upgrade your plan to add more users.",
+                error_key="plan_quota_max_employees_exceeded",
             )
 
         # Set company in the serializer's validated_data if not already set
