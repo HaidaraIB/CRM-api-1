@@ -161,11 +161,60 @@ def whatsapp_webhook(request):
             return HttpResponse('Internal Server Error', status=500)
 
 
+def process_platform_admin_inbound(message):
+    """
+    Inbound to the platform WhatsApp number: map sender to a company owner for admin-panel thread.
+    """
+    from accounts.models import User, Role
+    from companies.models import AdminTenantWhatsAppMessage
+    from accounts.platform_whatsapp import normalize_phone_digits
+
+    from_number = message.get("from")
+    message_id = message.get("id")
+    message_type = message.get("type")
+    if message_type == "text":
+        text_body = message.get("text", {}).get("body", "")
+    else:
+        text_body = f"[{message_type} message]"
+
+    digits = normalize_phone_digits(from_number or "")
+    if not digits:
+        return
+
+    qs = User.objects.filter(role=Role.ADMIN.value, company__isnull=False).select_related("company")
+    for user in qs.iterator(chunk_size=500):
+        if normalize_phone_digits(user.phone or "") != digits:
+            continue
+        company = user.company
+        if company.owner_id != user.id:
+            continue
+        AdminTenantWhatsAppMessage.objects.create(
+            company=company,
+            direction=AdminTenantWhatsAppMessage.DIRECTION_INBOUND,
+            body=(text_body or "")[:65535],
+            whatsapp_message_id=message_id,
+        )
+        logger.info(
+            "Platform WhatsApp inbound matched company_id=%s",
+            company.id,
+        )
+        return
+    logger.info(
+        "Platform WhatsApp inbound: no tenant owner matched for ...%s",
+        digits[-4:] if len(digits) >= 4 else "****",
+    )
+
+
 def process_whatsapp_message(message, phone_number_id):
     """
     معالجة رسالة WhatsApp واردة.
     Multi-tenant: نستخرج phone_number_id → نبحث في WhatsAppAccount → نحصل على tenant (company).
     """
+    platform_pid = getattr(settings, "PLATFORM_WHATSAPP_PHONE_NUMBER_ID", "") or ""
+    if platform_pid and str(phone_number_id) == str(platform_pid):
+        process_platform_admin_inbound(message)
+        return
+
     from_number = message.get('from')
     message_id = message.get('id')
     message_type = message.get('type')

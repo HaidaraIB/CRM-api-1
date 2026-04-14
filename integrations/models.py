@@ -18,8 +18,8 @@ class IntegrationPlatform(models.TextChoices):
 
 class IntegrationAccount(models.Model):
     """
-    نموذج لحسابات التكامل المتصلة
-    كل شركة يمكنها ربط حسابات متعددة من نفس المنصة أو منصات مختلفة
+    نموذج لحسابات التكامل المتصلة.
+    At most one account per (company, platform); different platforms are independent.
     """
     company = models.ForeignKey(
         Company,

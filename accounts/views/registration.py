@@ -43,6 +43,25 @@ from ..utils import (
 import logging
 
 logger = logging.getLogger(__name__)
+PHONE_OTP_REQUIRED_CACHE_KEY = "platform_whatsapp_otp_required_override"
+
+
+def _request_can_manage_settings(request) -> bool:
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return False
+    if getattr(user, "is_superuser", False) or user.is_super_admin():
+        return True
+    try:
+        la = user.limited_admin_profile
+        return bool(la.is_active and la.can_manage_settings)
+    except Exception:
+        return False
+
+
+def _effective_phone_otp_required() -> bool:
+    # Source of truth is runtime admin toggle only; default is disabled.
+    return bool(cache.get(PHONE_OTP_REQUIRED_CACHE_KEY, False))
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -59,7 +78,7 @@ def register_company(request):
     }
     Response: { access, refresh, user, company, subscription? }
     """
-    serializer = RegisterCompanySerializer(data=request.data)
+    serializer = RegisterCompanySerializer(data=request.data, context={"request": request})
 
     if serializer.is_valid():
         result = serializer.save()
@@ -89,6 +108,7 @@ def register_company(request):
                 ),
                 "role": owner.role,
                 "email_verified": owner.email_verified,
+                "phone_verified": getattr(owner, "phone_verified", False),
                 "company": company.id,
                 "company_name": company.name,
                 "company_specialization": company.specialization,
@@ -137,5 +157,29 @@ def register_company(request):
         return success_response(data=response_data, status_code=status.HTTP_201_CREATED)
 
     return validation_error_response(serializer.errors)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def phone_otp_requirement_settings(request):
+    if not _request_can_manage_settings(request):
+        return error_response("Permission denied", "permission_denied", status.HTTP_403_FORBIDDEN)
+
+    if request.method == "GET":
+        return success_response(
+            data={
+                "phone_otp_required": _effective_phone_otp_required(),
+            }
+        )
+
+    value = request.data.get("phone_otp_required", None)
+    if value is None:
+        return validation_error_response({"phone_otp_required": ["This field is required."]})
+    normalized = value
+    if isinstance(value, str):
+        normalized = value.strip().lower() in ("1", "true", "yes", "on")
+    normalized = bool(normalized)
+    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, normalized, timeout=None)
+    return success_response(data={"phone_otp_required": normalized})
 
 

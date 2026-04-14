@@ -7,6 +7,8 @@ from .views import (
     meta_webhook,
     tiktok_leadgen_webhook,
     whatsapp_send_message,
+    whatsapp_send_template,
+    whatsapp_session_window,
     whatsapp_conversations_list,
     whatsapp_limits,
     twilio_settings_view,
@@ -27,6 +29,8 @@ router.register(r'templates', MessageTemplateViewSet, basename='message-template
 urlpatterns = [
     path('', include(router.urls)),
     path('whatsapp/send/', whatsapp_send_message, name='whatsapp_send'),
+    path('whatsapp/send-template/', whatsapp_send_template, name='whatsapp_send_template'),
+    path('whatsapp/session-window/', whatsapp_session_window, name='whatsapp_session_window'),
     path('policy/', integration_policy_view, name='integration_policy'),
     path('whatsapp/limits/', whatsapp_limits, name='whatsapp_limits'),
     path('whatsapp/conversations/', whatsapp_conversations_list, name='whatsapp_conversations'),

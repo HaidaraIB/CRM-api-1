@@ -71,7 +71,18 @@ class IntegrationAccountCreateSerializer(serializers.ModelSerializer):
     def validate(self, data):
         """التحقق من البيانات حسب المنصة"""
         platform = data.get('platform')
-        
+        request = self.context.get('request')
+        if request and getattr(request.user, 'is_authenticated', False):
+            company = getattr(request.user, 'company', None)
+            if company and platform:
+                if IntegrationAccount.objects.filter(company=company, platform=platform).exists():
+                    raise serializers.ValidationError({
+                        'platform': (
+                            'Only one integration account per platform is allowed for your company. '
+                            'Remove the existing account first.'
+                        )
+                    })
+
         if platform == 'whatsapp':
             if not data.get('phone_number'):
                 raise serializers.ValidationError({
@@ -82,7 +93,7 @@ class IntegrationAccountCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     'account_link': 'رابط الحساب مطلوب'
                 })
-        
+
         return data
 
 

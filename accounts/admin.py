@@ -1,6 +1,15 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Role, EmailVerification, LimitedAdmin, SupervisorPermission, PasswordReset, TwoFactorAuth
+from .models import (
+    User,
+    Role,
+    EmailVerification,
+    PhoneRegistrationChallenge,
+    LimitedAdmin,
+    SupervisorPermission,
+    PasswordReset,
+    TwoFactorAuth,
+)
 from companies.models import Company
 
 
@@ -17,6 +26,7 @@ class UserAdmin(BaseUserAdmin):
         "role",
         "company",
         "email_verified",
+        "phone_verified",
         "is_active",
         "is_staff",
         "date_joined",
@@ -39,7 +49,7 @@ class UserAdmin(BaseUserAdmin):
     ordering = ["-date_joined"]
 
     fieldsets = BaseUserAdmin.fieldsets + (
-        ("Additional Information", {"fields": ("role", "company", "phone", "email_verified")}),
+        ("Additional Information", {"fields": ("role", "company", "phone", "email_verified", "phone_verified")}),
     )
 
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
@@ -89,6 +99,12 @@ class UserAdmin(BaseUserAdmin):
             if (new_role != Role.ADMIN.value or not new_company) and old_company.owner == user_obj:
                 old_company.owner = None
                 old_company.save(update_fields=['owner'])
+
+
+@admin.register(PhoneRegistrationChallenge)
+class PhoneRegistrationChallengeAdmin(admin.ModelAdmin):
+    list_display = ["phone_normalized", "expires_at", "attempts", "consumed_at", "created_at"]
+    search_fields = ["phone_normalized"]
 
 
 @admin.register(EmailVerification)

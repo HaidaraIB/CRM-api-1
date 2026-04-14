@@ -75,6 +75,7 @@ class UserSerializer(serializers.ModelSerializer):
             "is_staff",
             "is_superuser",
             "email_verified",
+            "phone_verified",
             "date_joined",
             "last_login",
             "is_me",
@@ -83,7 +84,7 @@ class UserSerializer(serializers.ModelSerializer):
             "limited_admin",
             "supervisor_permissions",
         ]
-        read_only_fields = ["id", "date_joined", "last_login", "email_verified", "fcm_token"]
+        read_only_fields = ["id", "date_joined", "last_login", "email_verified", "phone_verified", "fcm_token"]
         extra_kwargs = {
             "email": {"required": True},
         }
@@ -348,6 +349,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             "company_specialization": self.user.company.specialization if self.user.company else None,
             "is_active": self.user.is_active,
             "email_verified": self.user.email_verified,
+            "phone_verified": getattr(self.user, "phone_verified", False),
             "is_superuser": self.user.is_superuser,
             "language": getattr(self.user, "language", None) or "ar",
         }
@@ -424,6 +426,7 @@ def build_user_auth_payload(user, request=None):
         "company_specialization": user.company.specialization if user.company else None,
         "is_active": user.is_active,
         "email_verified": user.email_verified,
+        "phone_verified": getattr(user, "phone_verified", False),
         "is_superuser": user.is_superuser,
         "language": getattr(user, "language", None) or "ar",
     }
@@ -552,12 +555,70 @@ class RegisterCompanySerializer(serializers.Serializer):
         child=serializers.CharField(),
         required=True
     )
+    phone_verification_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
     plan_id = serializers.IntegerField(required=False, allow_null=True)
     billing_cycle = serializers.ChoiceField(
         choices=['monthly', 'yearly'],
         required=False,
         default='monthly'
     )
+
+    def _request_can_skip_phone_verification(self, request):
+        if not request:
+            return False
+        u = request.user
+        if not u or not u.is_authenticated:
+            return False
+        if getattr(u, "is_superuser", False) or u.is_super_admin():
+            return True
+        try:
+            la = u.limited_admin_profile
+            return la.is_active and la.can_manage_tenants
+        except Exception:
+            return False
+
+    def validate(self, attrs):
+        from .phone_otp_utils import (
+            BadSignature,
+            SignatureExpired,
+            unsign_phone_registration_token,
+        )
+        from .platform_whatsapp import normalize_phone_digits
+        from django.core.cache import cache
+
+        request = self.context.get("request")
+        token = (attrs.get("phone_verification_token") or "").strip()
+        owner = attrs.get("owner") or {}
+        phone = normalize_phone_digits(owner.get("phone", ""))
+        if not phone:
+            raise serializers.ValidationError({"owner": ["Phone number is required"]})
+        # Source of truth is runtime admin toggle only; default is disabled.
+        otp_required = bool(cache.get("platform_whatsapp_otp_required_override", False))
+        if not otp_required:
+            attrs["_skip_phone_verification"] = True
+            return attrs
+        if not token:
+            if request and self._request_can_skip_phone_verification(request):
+                attrs["_skip_phone_verification"] = True
+                return attrs
+            raise serializers.ValidationError(
+                {"phone_verification_token": ["WhatsApp verification is required before registration."]}
+            )
+        try:
+            signed_phone = unsign_phone_registration_token(token, max_age=1800)
+        except SignatureExpired:
+            raise serializers.ValidationError(
+                {"phone_verification_token": ["Verification expired. Verify your phone again."]}
+            )
+        except BadSignature:
+            raise serializers.ValidationError(
+                {"phone_verification_token": ["Invalid verification token."]}
+            )
+        if signed_phone != phone:
+            raise serializers.ValidationError(
+                {"phone_verification_token": ["Phone does not match verification."]}
+            )
+        return attrs
 
     def validate_company(self, value):
         """Validate company data"""
@@ -590,12 +651,14 @@ class RegisterCompanySerializer(serializers.Serializer):
         if User.objects.filter(email=value['email']).exists():
             raise serializers.ValidationError("Email already exists")
 
-        phone = value.get('phone', '').strip()
+        from .platform_whatsapp import normalize_phone_digits
+
+        phone = normalize_phone_digits(value.get("phone", "").strip())
         if not phone:
             raise serializers.ValidationError("Phone number is required")
         if User.objects.filter(phone=phone).exists():
             raise serializers.ValidationError("Phone number already exists")
-        value['phone'] = phone
+        value["phone"] = phone
         
         # Validate password
         try:
@@ -607,6 +670,8 @@ class RegisterCompanySerializer(serializers.Serializer):
 
     def create(self, validated_data):
         """Create company, owner user, and subscription"""
+        validated_data.pop("phone_verification_token", None)
+        validated_data.pop("_skip_phone_verification", None)
         company_data = validated_data['company']
         owner_data = validated_data['owner']
         plan_id = validated_data.get('plan_id')
@@ -622,6 +687,8 @@ class RegisterCompanySerializer(serializers.Serializer):
             phone=owner_data['phone'],
             role=Role.ADMIN.value,
         )
+        owner.phone_verified = True
+        owner.save(update_fields=["phone_verified"])
 
         # Create company
         company = Company.objects.create(
@@ -772,10 +839,13 @@ class RegistrationAvailabilitySerializer(serializers.Serializer):
             if User.objects.filter(username__iexact=username.strip()).exists():
                 errors['username'] = "Username already exists"
 
-        phone = attrs.get('phone')
+        phone = attrs.get("phone")
         if phone:
-            if User.objects.filter(phone=phone.strip()).exists():
-                errors['phone'] = "Phone number already exists"
+            from .platform_whatsapp import normalize_phone_digits
+
+            pn = normalize_phone_digits(phone.strip())
+            if pn and User.objects.filter(phone=pn).exists():
+                errors["phone"] = "Phone number already exists"
 
         if errors:
             raise serializers.ValidationError(errors)

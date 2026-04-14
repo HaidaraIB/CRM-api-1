@@ -27,6 +27,10 @@ class User(AbstractUser):
     phone = models.CharField(max_length=20, blank=True, null=True)
     profile_photo = models.ImageField(upload_to="profile_photos/", null=True, blank=True)
     email_verified = models.BooleanField(default=False)
+    phone_verified = models.BooleanField(
+        default=False,
+        help_text="Owner phone verified via WhatsApp OTP before registration (or legacy migration).",
+    )
     fcm_token = models.CharField(max_length=255, blank=True, null=True, help_text="Firebase Cloud Messaging token for push notifications")
     language = models.CharField(max_length=10, default='ar', choices=[('ar', 'Arabic'), ('en', 'English')], help_text="User preferred language for notifications")
 
@@ -139,6 +143,27 @@ class EmailVerification(models.Model):
         self.is_verified = True
         self.verified_at = timezone.now()
         self.save(update_fields=["is_verified", "verified_at"])
+
+
+class PhoneRegistrationChallenge(models.Model):
+    """Pre-registration WhatsApp OTP state (no user row yet)."""
+
+    phone_normalized = models.CharField(max_length=32, db_index=True)
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "phone_registration_challenges"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["phone_normalized", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"phone challenge {self.phone_normalized}"
 
 
 class PasswordReset(models.Model):

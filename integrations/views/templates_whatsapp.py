@@ -93,30 +93,77 @@ def whatsapp_conversations_list(request):
 
 
 def _content_to_meta_body(content):
-    """Convert our placeholders [Customer Name], [Company], etc. to Meta {{1}}, {{2}}, ..."""
+    """Convert our placeholders [Customer Name], [Company], etc. to Meta {{1}}, {{2}}, ...
+
+    Meta requires positional examples as one row: body_text: [["ex1", "ex2", ...]] in the same
+    order as {{1}}, {{2}}, ... (see POST /{waba-id}/message_templates positional parameters).
+    """
     if not content:
         return '', []
-    # Order of placeholders for Meta (one {{n}} per placeholder)
     patterns = [
-        (r'\[\s*Customer Name\s*\]|\[\s*اسم_العميل\s*\]|\[\s*اسم العميل\s*\]', '{{1}}'),
-        (r'\[\s*Company\s*\]|\[\s*الشركة\s*\]|\[\s*شركة\s*\]', '{{2}}'),
-        (r'\[\s*Amount\s*\]|\[\s*المبلغ\s*\]', '{{3}}'),
-        (r'\[\s*Invoice Number\s*\]|\[\s*رقم_الفاتورة\s*\]|\[\s*رقم الفاتورة\s*\]', '{{4}}'),
+        (r'\[\s*Customer Name\s*\]|\[\s*اسم_العميل\s*\]|\[\s*اسم العميل\s*\]', '{{1}}', 'Customer'),
+        (r'\[\s*Company\s*\]|\[\s*الشركة\s*\]|\[\s*شركة\s*\]', '{{2}}', 'Company'),
+        (r'\[\s*Amount\s*\]|\[\s*المبلغ\s*\]', '{{3}}', '100'),
+        (r'\[\s*Invoice Number\s*\]|\[\s*رقم_الفاتورة\s*\]|\[\s*رقم الفاتورة\s*\]', '{{4}}', 'INV-001'),
     ]
     text = content
-    examples = []  # list of lists for body_text: [ ["Customer"], ["Company"], ... ]
-    for i, (pattern, repl) in enumerate(patterns):
+    ordered_examples = []
+    for pattern, repl, sample in patterns:
         if re.search(pattern, text, re.IGNORECASE):
             text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
-            if i == 0:
-                examples.append(['Customer'])
-            elif i == 1:
-                examples.append(['Company'])
-            elif i == 2:
-                examples.append(['100'])
-            else:
-                examples.append(['INV-001'])
-    return text, examples
+            ordered_examples.append(sample)
+    return text, ordered_examples
+
+
+def meta_slug_template_name(name: str, template_id=None) -> str:
+    """Same slug as submit-to-whatsapp; must match when sending template messages."""
+    meta_name = re.sub(r'[^a-z0-9_]', '_', (name or '').lower())[:512]
+    if meta_name:
+        return meta_name
+    return f'template_{template_id}' if template_id is not None else 'template'
+
+
+def whatsapp_template_body_parameter_values_for_client(content: str, client) -> list:
+    """
+    Body parameter strings for Cloud API template send, same order as _content_to_meta_body / submit.
+    client: crm.Client (or compatible with .name, .lead_company_name, .budget).
+    """
+    if not content:
+        return []
+    patterns = [
+        (
+            r'\[\s*Customer Name\s*\]|\[\s*اسم_العميل\s*\]|\[\s*اسم العميل\s*\]',
+            lambda c: (getattr(c, 'name', None) or '').strip(),
+        ),
+        (
+            r'\[\s*Company\s*\]|\[\s*الشركة\s*\]|\[\s*شركة\s*\]',
+            lambda c: (getattr(c, 'lead_company_name', None) or '').strip(),
+        ),
+        (
+            r'\[\s*Amount\s*\]|\[\s*المبلغ\s*\]',
+            lambda c: ''
+            if getattr(c, 'budget', None) is None
+            else str(c.budget).strip(),
+        ),
+        (
+            r'\[\s*Invoice Number\s*\]|\[\s*رقم_الفاتورة\s*\]|\[\s*رقم الفاتورة\s*\]',
+            lambda c: (getattr(c, 'invoice_number', None) or '').strip(),
+        ),
+    ]
+    values = []
+    for pattern, getter in patterns:
+        if re.search(pattern, content, re.IGNORECASE):
+            raw = getter(client) or ''
+            s = str(raw).strip()
+            if not s:
+                s = '-'
+            values.append(s[:1024])
+    return values
+
+
+def count_template_body_placeholders(content: str) -> int:
+    _, samples = _content_to_meta_body(content or '')
+    return len(samples)
 
 
 class MessageTemplateViewSet(viewsets.ModelViewSet):
@@ -169,10 +216,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 'WhatsApp account has no access token.',
                 code='whatsapp_no_access_token',
             )
-        # Meta template name: lowercase, alphanumeric + underscore
-        meta_name = re.sub(r'[^a-z0-9_]', '_', (template.name or '').lower())[:512]
-        if not meta_name:
-            meta_name = f'template_{template.id}'
+        meta_name = meta_slug_template_name(template.name, template.id)
         language = (getattr(template, 'language', None) or request.data.get('language') or 'en_US').strip() or 'en_US'
         category_map = {
             'auth': 'AUTHENTICATION',
@@ -195,7 +239,8 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         # BODY
         body_comp = {'type': 'BODY', 'text': body_text[:1024]}
         if example_values:
-            body_comp['example'] = {'body_text': example_values}
+            # One sample row: all positional {{n}} values in order (not one array per variable).
+            body_comp['example'] = {'body_text': [example_values]}
         components.append(body_comp)
         # FOOTER (optional)
         footer = (getattr(template, 'footer', None) or '').strip()
@@ -226,6 +271,8 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             'category': category,
             'components': components,
         }
+        if example_values:
+            payload['parameter_format'] = 'positional'
         url = f'https://graph.facebook.com/v18.0/{wa.waba_id}/message_templates'
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
         try:

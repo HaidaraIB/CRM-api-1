@@ -493,6 +493,20 @@ WHATSAPP_EMBEDDED_SIGNUP_TOKEN_EXCHANGE_REDIRECT_URI = os.getenv(
     "",
 ).strip()
 
+# Platform WhatsApp (Cloud API) — OTP at signup + admin panel messaging to tenant owners.
+# Separate from per-tenant WhatsAppAccount in integrations.
+PLATFORM_WHATSAPP_PHONE_NUMBER_ID = os.getenv("PLATFORM_WHATSAPP_PHONE_NUMBER_ID", "").strip()
+PLATFORM_WHATSAPP_ACCESS_TOKEN = os.getenv("PLATFORM_WHATSAPP_ACCESS_TOKEN", "").strip()
+PLATFORM_WHATSAPP_GRAPH_API_VERSION = os.getenv("PLATFORM_WHATSAPP_GRAPH_API_VERSION", "v25.0").strip()
+# OTP: approved authentication/copy-code template with one BODY placeholder for the numeric code.
+PLATFORM_WHATSAPP_OTP_TEMPLATE_NAME = os.getenv("PLATFORM_WHATSAPP_OTP_TEMPLATE_NAME", "").strip()
+PLATFORM_WHATSAPP_OTP_TEMPLATE_LANG = os.getenv("PLATFORM_WHATSAPP_OTP_TEMPLATE_LANG", "en").strip()
+# Admin → tenant owner: optional utility template with one BODY placeholder for message text (used outside 24h session).
+PLATFORM_WHATSAPP_ADMIN_TEMPLATE_NAME = os.getenv("PLATFORM_WHATSAPP_ADMIN_TEMPLATE_NAME", "").strip()
+PLATFORM_WHATSAPP_ADMIN_TEMPLATE_LANG = os.getenv("PLATFORM_WHATSAPP_ADMIN_TEMPLATE_LANG", "en").strip()
+# Salt for hashing registration OTP codes (fallback to SECRET_KEY if unset).
+PLATFORM_WHATSAPP_OTP_PEPPER = os.getenv("PLATFORM_WHATSAPP_OTP_PEPPER", "").strip()
+
 # TikTok Lead Gen (no OAuth, webhook only)
 TIKTOK_LEADGEN_COMPANY_ID = os.getenv("TIKTOK_LEADGEN_COMPANY_ID", "")
 TIKTOK_LEADGEN_ADVERTISER_MAPPING = os.getenv("TIKTOK_LEADGEN_ADVERTISER_MAPPING", "{}")

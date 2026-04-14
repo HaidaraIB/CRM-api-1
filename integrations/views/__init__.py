@@ -16,6 +16,8 @@ from .webhooks_messaging import (
     meta_webhook,
     tiktok_leadgen_webhook,
     whatsapp_send_message,
+    whatsapp_send_template,
+    whatsapp_session_window,
 )
 
 __all__ = [
@@ -32,4 +34,6 @@ __all__ = [
     "whatsapp_conversations_list",
     "whatsapp_limits",
     "whatsapp_send_message",
+    "whatsapp_send_template",
+    "whatsapp_session_window",
 ]

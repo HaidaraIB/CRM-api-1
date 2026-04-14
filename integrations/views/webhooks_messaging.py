@@ -7,7 +7,7 @@ from datetime import timedelta
 
 import requests
 from django.conf import settings
-from django.db.models import Q
+from django.db.models import Q, Max
 from django.core.cache import cache
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect
@@ -33,6 +33,11 @@ from ..policy import (
 )
 from settings.models import SystemSettings
 from ..oauth_utils import get_oauth_handler, MetaOAuth
+from .templates_whatsapp import (
+    count_template_body_placeholders,
+    meta_slug_template_name,
+    whatsapp_template_body_parameter_values_for_client,
+)
 from ..serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -246,6 +251,286 @@ def whatsapp_send_message(request):
             )
         except Exception:
             pass
+    return success_response(data=data)
+
+
+# WhatsApp customer service window: ~24h after the user's last inbound message (session messages).
+_WHATSAPP_SESSION_HOURS = 24
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_session_window(request):
+    """
+    Whether the CRM considers the customer service window open for free-form WhatsApp messages.
+    GET /api/integrations/whatsapp/session-window/?client_id=
+    """
+    company = request.user.company
+    gate = _integration_gate(company, "whatsapp")
+    if not gate["enabled"]:
+        return error_response(gate["message"], code="integration_disabled", status_code=403)
+    client_id = request.query_params.get('client_id')
+    if not client_id or not str(client_id).isdigit():
+        return error_response(
+            'client_id query parameter is required',
+            code='bad_request',
+        )
+    last_inbound = (
+        LeadWhatsAppMessage.objects.filter(
+            client_id=int(client_id),
+            client__company=company,
+            direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+        ).aggregate(m=Max('created_at'))['m']
+    )
+    now = timezone.now()
+    if not last_inbound:
+        return success_response(
+            data={
+                'in_session': False,
+                'last_inbound_at': None,
+                'session_expires_at': None,
+                'hours_remaining': None,
+            },
+        )
+    expires_at = last_inbound + timedelta(hours=_WHATSAPP_SESSION_HOURS)
+    in_session = now < expires_at
+    hours_remaining = max(0.0, (expires_at - now).total_seconds() / 3600.0) if in_session else 0.0
+    return success_response(
+        data={
+            'in_session': in_session,
+            'last_inbound_at': last_inbound.isoformat(),
+            'session_expires_at': expires_at.isoformat(),
+            'hours_remaining': round(hours_remaining, 2),
+        },
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_send_template(request):
+    """
+    Send an approved WhatsApp message template (business-initiated / outside session).
+    POST /api/integrations/whatsapp/send-template/
+    Body: {
+      "to": "971501234567",
+      "template_id": 1,
+      "client_id": optional (for DB log + placeholder fill),
+      "phone_number_id": optional,
+      "body_parameters": optional list of strings (override auto-filled placeholders)
+    }
+    """
+    company = request.user.company
+    gate = _integration_gate(company, "whatsapp")
+    if not gate["enabled"]:
+        return error_response(gate["message"], code="integration_disabled", status_code=403)
+    from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
+
+    require_monthly_usage(
+        company,
+        "monthly_whatsapp_messages",
+        requested_delta=1,
+        message="You have reached your monthly WhatsApp messages limit. Please upgrade your plan.",
+        error_key="plan_usage_monthly_whatsapp_exceeded",
+    )
+    to = request.data.get('to')
+    template_id = request.data.get('template_id')
+    client_id = request.data.get('client_id')
+    phone_number_id = request.data.get('phone_number_id')
+    if not to or template_id is None:
+        return error_response(
+            'to and template_id are required',
+            code='bad_request',
+        )
+    try:
+        template_id = int(template_id)
+    except (TypeError, ValueError):
+        return error_response('template_id must be an integer', code='bad_request')
+    to = str(to).replace(' ', '').replace('+', '').strip()
+    if not to.isdigit():
+        return error_response('Invalid "to" phone number', code='bad_request')
+
+    template = MessageTemplate.objects.filter(
+        id=template_id,
+        company=company,
+    ).first()
+    if not template:
+        return error_response('Template not found', code='not_found', status_code=status.HTTP_404_NOT_FOUND)
+    if (template.channel_type or '').lower() not in ('whatsapp', 'whatsapp_api'):
+        return error_response(
+            'Only WhatsApp templates can be sent via this endpoint.',
+            code='bad_request',
+        )
+    meta_st = (template.meta_status or '').upper()
+    if meta_st and meta_st != 'APPROVED':
+        return error_response(
+            'Template must be APPROVED in Meta before sending. Sync status in Template Management.',
+            code='whatsapp_template_not_approved',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    n_placeholders = count_template_body_placeholders(template.content or '')
+    body_parameters = request.data.get('body_parameters')
+    if body_parameters is not None:
+        if not isinstance(body_parameters, list) or not all(
+            isinstance(x, (str, int, float)) or x is None for x in body_parameters
+        ):
+            return error_response(
+                'body_parameters must be a list of strings',
+                code='bad_request',
+            )
+        param_values = [str(x).strip() if x is not None else '' for x in body_parameters]
+        param_values = [p if p else '-' for p in param_values]
+        if n_placeholders > 0 and len(param_values) != n_placeholders:
+            return error_response(
+                f'body_parameters must have {n_placeholders} value(s) for this template.',
+                code='whatsapp_template_parameter_count',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+    else:
+        if n_placeholders > 0:
+            if not client_id:
+                return error_response(
+                    'client_id is required for templates with placeholders (or pass body_parameters).',
+                    code='bad_request',
+                )
+            try:
+                client = company.clients.get(id=int(client_id))
+            except Exception:
+                return error_response('Client not found', code='not_found', status_code=status.HTTP_404_NOT_FOUND)
+            param_values = whatsapp_template_body_parameter_values_for_client(template.content or '', client)
+            if len(param_values) != n_placeholders:
+                return error_response(
+                    'Could not resolve template placeholders for this client.',
+                    code='whatsapp_template_parameter_mismatch',
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            param_values = []
+
+    qs = WhatsAppAccount.objects.filter(company=company, status='connected')
+    if phone_number_id:
+        qs = qs.filter(phone_number_id=phone_number_id)
+    wa_account = qs.first()
+    if not wa_account:
+        return error_response(
+            'No connected WhatsApp number for this company',
+            code='no_connected_whatsapp_number',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    access_token = wa_account.get_access_token()
+    if not access_token:
+        return error_response(
+            'WhatsApp account has no access token',
+            code='whatsapp_no_access_token',
+        )
+
+    language = (getattr(template, 'language', None) or 'en_US').strip() or 'en_US'
+    meta_name = meta_slug_template_name(template.name, template.id)
+    template_block = {
+        'name': meta_name,
+        'language': {'code': language},
+    }
+    if param_values:
+        template_block['components'] = [
+            {
+                'type': 'body',
+                'parameters': [{'type': 'text', 'text': p[:1024]} for p in param_values],
+            }
+        ]
+
+    url = f"https://graph.facebook.com/v18.0/{wa_account.phone_number_id}/messages"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        'messaging_product': 'whatsapp',
+        'recipient_type': 'individual',
+        'to': to,
+        'type': 'template',
+        'template': template_block,
+    }
+    redacted_to = _redact_phone_e164(to)
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+    except requests.RequestException as e:
+        logger.warning(
+            "WhatsApp template send request error: phone_number_id=%s to=%s error=%s",
+            wa_account.phone_number_id,
+            redacted_to,
+            e,
+        )
+        return error_response(
+            "WhatsApp API request failed.",
+            code="bad_request",
+            details={"error": str(e), "graph_http_status": None},
+        )
+
+    graph_status = resp.status_code
+    if graph_status >= 400:
+        try:
+            err_body = resp.json()
+        except Exception:
+            err_body = {'error': getattr(resp, 'text', '') or str(resp)}
+        if isinstance(err_body, dict):
+            err_body['graph_http_status'] = graph_status
+        else:
+            err_body = {'error': str(err_body), 'graph_http_status': graph_status}
+        logger.warning(
+            "WhatsApp template send failed: graph_status=%s phone_number_id=%s to=%s body=%s",
+            graph_status,
+            wa_account.phone_number_id,
+            redacted_to,
+            err_body,
+        )
+        return error_response(
+            "WhatsApp API request failed.",
+            code="bad_request",
+            details=err_body if isinstance(err_body, dict) else {"error": str(err_body)},
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return error_response(
+            "WhatsApp API returned invalid JSON.",
+            code="bad_request",
+            details={"graph_http_status": graph_status},
+        )
+
+    wam_id = (data.get('messages') or [{}])[0].get('id') if isinstance(data.get('messages'), list) else None
+    logger.info(
+        "WhatsApp template send ok: graph_status=%s phone_number_id=%s to=%s wam_id=%s template=%s",
+        graph_status,
+        wa_account.phone_number_id,
+        redacted_to,
+        wam_id,
+        meta_name,
+    )
+
+    increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
+    if wa_account.integration_account_id:
+        IntegrationLog.objects.create(
+            account_id=wa_account.integration_account_id,
+            action='whatsapp_template_sent',
+            status='success',
+            message=f'Template {meta_name} sent to {to}',
+            response_data=data,
+        )
+
+    preview = (template.content or '')[:500]
+    log_body = f'[Template: {meta_name}] {preview}'
+    if client_id:
+        try:
+            client = company.clients.get(id=int(client_id))
+            LeadWhatsAppMessage.objects.create(
+                client=client,
+                phone_number=to,
+                body=log_body[:65535],
+                direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+                whatsapp_message_id=wam_id,
+                created_by=request.user,
+            )
+        except Exception:
+            pass
+
     return success_response(data=data)
 
 

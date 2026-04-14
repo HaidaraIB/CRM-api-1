@@ -28,6 +28,7 @@ from ..qicard_utils import (
     get_qicard_gateway,
 )
 from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
+from ..phone_verification_gate import require_owner_phone_verified
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +56,19 @@ def create_qicard_payment(request):
         )
 
     try:
-        subscription = Subscription.objects.select_related("plan").get(id=subscription_id)
+        subscription = Subscription.objects.select_related("plan", "company__owner").get(
+            id=subscription_id
+        )
     except Subscription.DoesNotExist:
         return error_response(
             "Subscription not found",
             code="not_found",
             status_code=status.HTTP_404_NOT_FOUND,
         )
+
+    gate = require_owner_phone_verified(subscription)
+    if gate is not None:
+        return gate
 
     try:
         target_plan, billing_cycle, amount_dec, intent = resolve_checkout_pricing(

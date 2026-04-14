@@ -45,3 +45,32 @@ class Company(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class AdminTenantWhatsAppMessage(models.Model):
+    """Platform WhatsApp thread: admin panel ↔ company owner (not CRM client leads)."""
+
+    DIRECTION_INBOUND = "inbound"
+    DIRECTION_OUTBOUND = "outbound"
+    DIRECTION_CHOICES = (
+        (DIRECTION_INBOUND, "Inbound"),
+        (DIRECTION_OUTBOUND, "Outbound"),
+    )
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="admin_whatsapp_messages",
+    )
+    direction = models.CharField(max_length=16, choices=DIRECTION_CHOICES)
+    body = models.TextField()
+    whatsapp_message_id = models.CharField(max_length=128, blank=True, null=True)
+    graph_http_status = models.PositiveIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admin_tenant_whatsapp_messages"
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.direction} company={self.company_id}"
