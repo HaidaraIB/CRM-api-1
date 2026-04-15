@@ -133,7 +133,7 @@ def send_email_verification(user, verification, language="en"):
                 "verification_link": verification_link,
                 "expires_at": verification.expires_at,
                 "support_email": smtp_settings.from_email,
-                "brand_color": "#6f3ef0",
+                "brand_color": "#4215aa",
             },
         )
         plain_body = strip_tags(html_content) or text_body
@@ -219,7 +219,7 @@ def send_password_reset_email(user, reset, language="en"):
                 "reset_link": reset_link,
                 "expires_at": reset.expires_at,
                 "support_email": smtp_settings.from_email,
-                "brand_color": "#6f3ef0",
+                "brand_color": "#4215aa",
             },
         )
         plain_body = strip_tags(html_content) or text_body
@@ -290,7 +290,7 @@ def send_two_factor_auth_email(user, two_fa, language="ar"):
                 "code": two_fa.code,
                 "expires_at": two_fa.expires_at,
                 "support_email": smtp_settings.from_email,
-                "brand_color": "#6f3ef0",
+                "brand_color": "#4215aa",
             },
         )
         plain_body = strip_tags(html_content) or text_body
