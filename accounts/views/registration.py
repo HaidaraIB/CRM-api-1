@@ -160,16 +160,20 @@ def register_company(request):
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def phone_otp_requirement_settings(request):
-    if not _request_can_manage_settings(request):
-        return error_response("Permission denied", "permission_denied", status.HTTP_403_FORBIDDEN)
-
     if request.method == "GET":
         return success_response(
             data={
                 "phone_otp_required": _effective_phone_otp_required(),
             }
+        )
+
+    if not _request_can_manage_settings(request):
+        return error_response(
+            "Permission denied",
+            code="permission_denied",
+            status_code=status.HTTP_403_FORBIDDEN,
         )
 
     value = request.data.get("phone_otp_required", None)

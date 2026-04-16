@@ -74,6 +74,7 @@ def create_fib_payment_session(
     subscription_id: str,
     callback_url: str,
     description: str = "",
+    expires_in: int = 900,
 ):
     """
     Create a FIB payment and get QR code and app links.
@@ -128,6 +129,7 @@ def create_fib_payment_session(
         },
         "statusCallbackUrl": callback_url,
         "description": (description or f"Subscription {subscription_id}")[:50],
+        "expiresIn": int(expires_in),
     }
 
     response = requests.post(

@@ -113,6 +113,7 @@ def create_fib_payment(request):
             subscription_id=str(subscription_id),
             callback_url=callback_url,
             description=description,
+            expires_in=900,
         )
     except ValueError as e:
         logger.error("FIB create session error: %s", e)
@@ -188,24 +189,27 @@ def fib_callback(request):
     amount = float(payment.amount)
 
     if fib_status == "PAID":
-        payment.payment_status = PaymentStatus.COMPLETED.value
-        payment.save(update_fields=["payment_status", "updated_at"])
+        payment_was_completed = payment.payment_status == PaymentStatus.COMPLETED.value
+        if not payment_was_completed:
+            payment.payment_status = PaymentStatus.COMPLETED.value
+            payment.save(update_fields=["payment_status", "updated_at"])
 
         pay_usd = float(payment.amount_usd) if payment.amount_usd is not None else float(payment.amount)
-        try:
-            finalize_completed_payment(subscription, payment, pay_usd)
-            subscription.refresh_from_db()
-        except ValueError as err:
-            logger.error("FIB billing apply failed: %s", err, exc_info=True)
-            return error_response(str(err), code="billing_error", status_code=status.HTTP_400_BAD_REQUEST)
+        if not payment_was_completed:
+            try:
+                finalize_completed_payment(subscription, payment, pay_usd)
+                subscription.refresh_from_db()
+            except ValueError as err:
+                logger.error("FIB billing apply failed: %s", err, exc_info=True)
+                return error_response(str(err), code="billing_error", status_code=status.HTTP_400_BAD_REQUEST)
 
-        due = subscription.end_date.date() if subscription.end_date else timezone.now().date()
-        Invoice.objects.create(
-            subscription=subscription,
-            amount=pay_usd,
-            due_date=due,
-            status=InvoiceStatus.PAID.value,
-        )
+            due = subscription.end_date.date() if subscription.end_date else timezone.now().date()
+            Invoice.objects.create(
+                subscription=subscription,
+                amount=pay_usd,
+                due_date=due,
+                status=InvoiceStatus.PAID.value,
+            )
         logger.info(
             "FIB payment PAID: subscription_id=%s, amount_usd=%s, end_date=%s",
             subscription_id,

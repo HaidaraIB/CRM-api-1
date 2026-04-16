@@ -10,6 +10,9 @@ from ..paytabs_utils import verify_paytabs_payment
 from ..stripe_utils import verify_stripe_payment
 from ..zaincash_utils import check_zaincash_payment_status
 from django.utils import timezone
+from ..fib_utils import check_fib_payment_status
+from ..services.billing import finalize_completed_payment
+from ..models import Invoice, InvoiceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +116,44 @@ def check_payment_status(request, subscription_id):
                     except Exception as e:
                         logger.warning(f"Could not verify Stripe payment: {str(e)}")
                         # If payment is completed in DB but verification fails, assume approved
+                        if payment.payment_status == PaymentStatus.COMPLETED.value:
+                            gateway_status = "success"
+                
+                # If it's a FIB payment, check FIB status endpoint
+                elif "fib" in gateway_name or "first iraqi" in gateway_name:
+                    try:
+                        result = check_fib_payment_status(payment.tran_ref)
+                        fib_status = (result.get("status") or "").upper()
+                        gateway_status = fib_status.lower() if fib_status else "pending"
+                        if fib_status == "PAID":
+                            payment_status_value = PaymentStatus.COMPLETED.value
+                            if payment.payment_status != PaymentStatus.COMPLETED.value:
+                                payment.payment_status = PaymentStatus.COMPLETED.value
+                                payment.save(update_fields=["payment_status", "updated_at"])
+
+                                pay_usd = (
+                                    float(payment.amount_usd)
+                                    if getattr(payment, "amount_usd", None) is not None
+                                    else float(payment.amount)
+                                )
+                                finalize_completed_payment(subscription, payment, pay_usd)
+                                subscription.refresh_from_db()
+
+                                due = subscription.end_date.date() if subscription.end_date else timezone.now().date()
+                                Invoice.objects.create(
+                                    subscription=subscription,
+                                    amount=pay_usd,
+                                    due_date=due,
+                                    status=InvoiceStatus.PAID.value,
+                                )
+                            gateway_status = "success"
+                        elif fib_status == "DECLINED":
+                            payment_status_value = PaymentStatus.FAILED.value
+                            if payment.payment_status != PaymentStatus.FAILED.value:
+                                payment.payment_status = PaymentStatus.FAILED.value
+                                payment.save(update_fields=["payment_status", "updated_at"])
+                    except Exception as e:
+                        logger.warning(f"Could not verify FIB payment: {str(e)}")
                         if payment.payment_status == PaymentStatus.COMPLETED.value:
                             gateway_status = "success"
 
