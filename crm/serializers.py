@@ -122,6 +122,9 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
     )
     status_name = serializers.CharField(source="status.name", read_only=True)
     phone_numbers = ClientPhoneNumberSerializer(many=True, read_only=True)
+    last_feedback = serializers.SerializerMethodField()
+    last_stage = serializers.SerializerMethodField()
+    last_feedback_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Client
@@ -321,6 +324,9 @@ class ClientListSerializer(ClientActivitySummaryMixin, serializers.ModelSerializ
     )
     status_name = serializers.CharField(source="status.name", read_only=True)
     phone_numbers = ClientPhoneNumberSerializer(many=True, read_only=True)
+    last_feedback = serializers.SerializerMethodField()
+    last_stage = serializers.SerializerMethodField()
+    last_feedback_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Client
