@@ -42,7 +42,11 @@ class ClientViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset().select_related(
             "company", "assigned_to", "communication_way", "status", "campaign",
             "integration_account",
-        ).prefetch_related("phone_numbers")
+        ).prefetch_related(
+            "phone_numbers",
+            "client_tasks__stage",
+            "client_calls__call_method",
+        )
 
         if user.is_admin():
             return queryset.filter(company=user.company)

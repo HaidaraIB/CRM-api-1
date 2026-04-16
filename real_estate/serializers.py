@@ -86,6 +86,7 @@ class ProjectListSerializer(serializers.ModelSerializer):
 class UnitSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source="project.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
+    code = serializers.CharField(required=False, allow_blank=False)
 
     class Meta:
         model = Unit
@@ -112,7 +113,36 @@ class UnitSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "code", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_code(self, value):
+        normalized_code = value.strip().upper()
+        if not normalized_code:
+            raise serializers.ValidationError("Code cannot be empty.")
+        return normalized_code
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        code = attrs.get("code")
+        if code is None:
+            return attrs
+
+        company = attrs.get("company")
+        if company is None and self.instance is not None:
+            company = self.instance.company
+
+        if company is None:
+            raise serializers.ValidationError({"company": "Company is required when setting a code."})
+
+        queryset = Unit.objects.filter(company=company, code=code)
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError({"code": "A unit with this code already exists in your company."})
+
+        return attrs
 
 
 class UnitListSerializer(serializers.ModelSerializer):

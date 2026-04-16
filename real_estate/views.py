@@ -156,29 +156,27 @@ class UnitViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset().select_related("company", "project", "project__developer")
         return queryset.filter(company=user.company)
 
-    def perform_create(self, serializer):
-        company = serializer.validated_data['company']
+    @staticmethod
+    def _generate_unit_code(company):
         last_unit = Unit.objects.filter(
             company=company,
             code__startswith='UNIT'
         ).order_by('-id').first()
-        
+
         new_num = 1
         if last_unit and last_unit.code:
             try:
-                # Extract the number from the last code
                 code_suffix = last_unit.code.replace('UNIT', '').strip()
                 if code_suffix:
                     last_num = int(code_suffix)
                     new_num = last_num + 1
             except (ValueError, AttributeError):
                 new_num = 1
-        
-        # Ensure uniqueness (handle race conditions)
+
         max_attempts = 1000
         attempt = 0
         new_code = None
-        
+
         while attempt < max_attempts:
             candidate_code = f"UNIT{str(new_num).zfill(3)}"
             if not Unit.objects.filter(company=company, code=candidate_code).exists():
@@ -186,11 +184,16 @@ class UnitViewSet(viewsets.ModelViewSet):
                 break
             new_num += 1
             attempt += 1
-        
+
         if not new_code:
             raise ValueError("Unable to generate unique unit code")
-        
-        serializer.save(code=new_code)
+
+        return new_code
+
+    def perform_create(self, serializer):
+        company = serializer.validated_data['company']
+        code = serializer.validated_data.get("code") or self._generate_unit_code(company)
+        serializer.save(code=code)
 
     def get_serializer_class(self):
         if self.action == "list":

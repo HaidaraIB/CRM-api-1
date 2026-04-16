@@ -3,6 +3,57 @@ from drf_spectacular.utils import extend_schema_serializer
 from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientPhoneNumber, ClientEvent
 
 
+class ClientActivitySummaryMixin:
+    """Expose the latest visible activity for clients across tasks and calls."""
+
+    last_feedback = serializers.SerializerMethodField()
+    last_stage = serializers.SerializerMethodField()
+    last_feedback_at = serializers.SerializerMethodField()
+
+    @staticmethod
+    def _get_latest_activity(client):
+        latest_task = client.client_tasks.order_by("-created_at").first()
+        latest_call = client.client_calls.order_by("-created_at").first()
+
+        latest_task_at = latest_task.created_at if latest_task else None
+        latest_call_at = latest_call.created_at if latest_call else None
+
+        if latest_task_at and latest_call_at:
+            return ("task", latest_task) if latest_task_at >= latest_call_at else ("call", latest_call)
+        if latest_task:
+            return ("task", latest_task)
+        if latest_call:
+            return ("call", latest_call)
+        return (None, None)
+
+    def get_last_feedback(self, obj):
+        activity_type, activity = self._get_latest_activity(obj)
+        if not activity:
+            return None
+        notes = getattr(activity, "notes", None)
+        if notes:
+            return notes
+        if activity_type == "task":
+            stage = getattr(activity, "stage", None)
+            return getattr(stage, "name", None) if stage else None
+        call_method = getattr(activity, "call_method", None)
+        return getattr(call_method, "name", None) if call_method else None
+
+    def get_last_stage(self, obj):
+        activity_type, activity = self._get_latest_activity(obj)
+        if not activity:
+            return None
+        if activity_type == "task":
+            stage = getattr(activity, "stage", None)
+            return getattr(stage, "name", None) if stage else None
+        call_method = getattr(activity, "call_method", None)
+        return getattr(call_method, "name", None) if call_method else None
+
+    def get_last_feedback_at(self, obj):
+        _, activity = self._get_latest_activity(obj)
+        return activity.created_at if activity else None
+
+
 class CamelToSnakeMixin:
     """Mixin that auto-converts camelCase keys to snake_case."""
     camel_to_snake_fields = {}  # {'camelCase': 'snake_case'}
@@ -61,7 +112,7 @@ class ClientPhoneNumberSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class ClientSerializer(serializers.ModelSerializer):
+class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
     assigned_to_username = serializers.CharField(
         source="assigned_to.username", read_only=True
@@ -96,6 +147,9 @@ class ClientSerializer(serializers.ModelSerializer):
             "integration_account",
             "created_at",
             "updated_at",
+            "last_feedback",
+            "last_stage",
+            "last_feedback_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
@@ -255,7 +309,7 @@ class ClientSerializer(serializers.ModelSerializer):
         return instance
 
 
-class ClientListSerializer(serializers.ModelSerializer):
+class ClientListSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
     """Simplified serializer for list views"""
 
     company_name = serializers.CharField(source="company.name", read_only=True)
@@ -291,6 +345,9 @@ class ClientListSerializer(serializers.ModelSerializer):
             "source",
             "integration_account",
             "created_at",
+            "last_feedback",
+            "last_stage",
+            "last_feedback_at",
         ]
 
 
