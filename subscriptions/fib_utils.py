@@ -12,8 +12,8 @@ from settings.models import SystemSettings
 
 logger = logging.getLogger(__name__)
 
-# FIB Sandbox (stage) and production base URLs
-FIB_STAGE_BASE = "https://fib.stage.fib.iq"
+# FIB stage base URL (hyphenated host per FIB support; replaces fib.stage.fib.iq)
+FIB_STAGE_BASE = "https://fib-stage.fib.iq"
 FIB_AUTH_PATH = "/auth/realms/fib-online-shop/protocol/openid-connect/token"
 FIB_PAYMENTS_PATH = "/protected/v1/payments"
 
