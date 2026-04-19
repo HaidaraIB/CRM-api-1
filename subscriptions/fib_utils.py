@@ -147,7 +147,8 @@ def create_fib_payment_session(
             raise
     response.raise_for_status()
 
-    if response.status_code != 202:
+    # FIB public docs mention 202 Accepted; stage/Postman may return 201 Created — both are success.
+    if response.status_code not in (201, 202):
         raise ValueError(f"FIB create payment unexpected status: {response.status_code}")
 
     result = response.json()
