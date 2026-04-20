@@ -172,6 +172,84 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         if not effective["enabled"]:
             return error_response(effective["message"], code="integration_disabled", status_code=403)
         return None
+
+    def _ensure_metadata_dict(self, account: IntegrationAccount) -> dict:
+        if not isinstance(account.metadata, dict):
+            account.metadata = {}
+        return account.metadata
+
+    def _resolve_meta_page_access_token(self, account: IntegrationAccount, page_id: str, meta_oauth: MetaOAuth):
+        metadata = self._ensure_metadata_dict(account)
+        pages = metadata.get('pages', []) or []
+        page_id_str = str(page_id).strip()
+        for page in pages:
+            pid = page.get('id')
+            if pid is not None and str(pid).strip() == page_id_str and page.get('access_token'):
+                return page.get('access_token')
+
+        access_token = account.get_access_token()
+        if not access_token:
+            return None
+
+        page_access_token = None
+        try:
+            fresh_pages = meta_oauth.get_pages(access_token)
+            for p in fresh_pages:
+                if str(p.get('id')).strip() == page_id_str and p.get('access_token'):
+                    page_access_token = p.get('access_token')
+                    break
+            if fresh_pages:
+                metadata['pages'] = fresh_pages
+        except Exception:
+            pass
+
+        if not page_access_token:
+            try:
+                page_access_token = meta_oauth.get_page_access_token(page_id, access_token)
+            except Exception:
+                page_access_token = None
+
+        if page_access_token:
+            pages = metadata.get('pages', []) or []
+            updated = False
+            for page in pages:
+                pid = page.get('id')
+                if pid is not None and str(pid).strip() == page_id_str:
+                    page['access_token'] = page_access_token
+                    updated = True
+                    break
+            if not updated:
+                pages.append({'id': page_id_str, 'name': page_id_str, 'access_token': page_access_token})
+            metadata['pages'] = pages
+            account.save(update_fields=['metadata'])
+
+        return page_access_token
+
+    def _auto_subscribe_meta_page(self, account: IntegrationAccount, page_id: str, meta_oauth: MetaOAuth):
+        page_access_token = self._resolve_meta_page_access_token(account, page_id, meta_oauth)
+        if not page_access_token:
+            return {
+                'success': False,
+                'page_id': str(page_id),
+                'message': 'Could not resolve Page access token',
+            }
+        response_data = meta_oauth.subscribe_page_to_leadgen(page_id, page_access_token)
+        success = bool(response_data.get('success') is True)
+        if not success and isinstance(response_data, dict):
+            # Meta can return "already subscribed" as an error-ish shape on some versions.
+            err_msg = str((response_data.get('error') or {}).get('message') or '').lower()
+            if 'already subscribed' in err_msg:
+                success = True
+        return {
+            'success': success,
+            'page_id': str(page_id),
+            'response': response_data,
+            'message': 'Subscribed to leadgen successfully' if success else (
+                (response_data.get('error') or {}).get('message')
+                if isinstance(response_data, dict)
+                else 'Failed to subscribe page'
+            ),
+        }
     
     def get_queryset(self):
         """الحصول على حسابات الشركة فقط"""
@@ -630,13 +708,37 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                     code='bad_request',
                 )
             pages = oauth_handler.get_pages(access_token)
-            if not account.metadata:
-                account.metadata = {}
-            account.metadata['pages'] = pages
+            metadata = self._ensure_metadata_dict(account)
+            metadata['pages'] = pages
+            subscribe_results = []
             for page in pages:
                 page['access_token'] = page.get('access_token', '')
+                page_id = page.get('id')
+                if not page_id:
+                    continue
+                try:
+                    sub = self._auto_subscribe_meta_page(account, str(page_id), oauth_handler)
+                    subscribe_results.append(sub)
+                    IntegrationLog.objects.create(
+                        account=account,
+                        action='meta_page_subscribed',
+                        status='success' if sub.get('success') else 'error',
+                        message=f"Auto-subscribe page {page_id}: {sub.get('message')}",
+                        response_data=sub.get('response') if isinstance(sub.get('response'), dict) else {'raw': sub},
+                    )
+                except Exception as e:
+                    subscribe_results.append(
+                        {'success': False, 'page_id': str(page_id), 'message': str(e)}
+                    )
+                    IntegrationLog.objects.create(
+                        account=account,
+                        action='meta_page_subscribed',
+                        status='error',
+                        message=f'Auto-subscribe failed for page {page_id}',
+                        error_details=str(e),
+                    )
             account.save()
-            return success_response(data={'pages': pages})
+            return success_response(data={'pages': pages, 'subscribe_results': subscribe_results})
         except Exception as e:
             logger.exception("sync_pages failed for account %s", account.id)
             return error_response(str(e), code='bad_request')
@@ -770,6 +872,8 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'page_id and form_id are required',
                 code='bad_request',
             )
+
+        self._ensure_metadata_dict(account)
         
         # التحقق من وجود الكامبين إذا تم توفيره
         campaign = None
@@ -794,9 +898,30 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             # إزالة الربط إذا لم يتم توفير campaign_id
             account.metadata['form_campaign_mapping'].pop(form_id, None)
         
-        account.metadata['selected_page_id'] = page_id
-        account.metadata['selected_form_id'] = form_id
+        account.metadata['selected_page_id'] = str(page_id)
+        account.metadata['selected_form_id'] = str(form_id)
         account.save()
+
+        subscribe_status = {'success': False, 'page_id': str(page_id), 'message': 'Subscription not attempted'}
+        try:
+            meta_oauth = MetaOAuth()
+            subscribe_status = self._auto_subscribe_meta_page(account, str(page_id), meta_oauth)
+            IntegrationLog.objects.create(
+                account=account,
+                action='meta_page_subscribed',
+                status='success' if subscribe_status.get('success') else 'error',
+                message=f"Select lead form auto-subscribe page {page_id}: {subscribe_status.get('message')}",
+                response_data=subscribe_status.get('response') if isinstance(subscribe_status.get('response'), dict) else {'raw': subscribe_status},
+            )
+        except Exception as e:
+            subscribe_status = {'success': False, 'page_id': str(page_id), 'message': str(e)}
+            IntegrationLog.objects.create(
+                account=account,
+                action='meta_page_subscribed',
+                status='error',
+                message=f'Select lead form auto-subscribe failed for page {page_id}',
+                error_details=str(e),
+            )
         
         IntegrationLog.objects.create(
             account=account,
@@ -816,7 +941,122 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'page_id': page_id,
                 'form_id': form_id,
                 'campaign_id': campaign_id,
+                'subscribe_status': subscribe_status,
             },
+        )
+
+    @action(detail=True, methods=['get'], url_path='meta-health')
+    def meta_health(self, request, pk=None):
+        """Meta health diagnostics for selected account/pages."""
+        account = self.get_object()
+        if account.platform != 'meta':
+            return error_response(
+                'This endpoint is only available for Meta accounts',
+                code='bad_request',
+            )
+
+        metadata = self._ensure_metadata_dict(account)
+        meta_oauth = MetaOAuth()
+        selected_page_id = str(metadata.get('selected_page_id') or '').strip()
+        selected_form_id = str(metadata.get('selected_form_id') or '').strip()
+        should_subscribe = str(request.query_params.get('subscribe', '')).strip() in {'1', 'true', 'True'}
+        requested_page_id = str(request.query_params.get('page_id', '') or '').strip()
+        subscribe_target_page_id = requested_page_id or selected_page_id
+
+        token_data = {'valid': False}
+        token = account.get_access_token()
+        if token:
+            try:
+                debug_data = meta_oauth.debug_token(token)
+                token_data = {
+                    'valid': debug_data.get('is_valid') is True,
+                    'expires_at': debug_data.get('expires_at'),
+                    'scopes': debug_data.get('scopes') or [],
+                    'user_id': debug_data.get('user_id'),
+                }
+            except Exception as e:
+                token_data = {'valid': False, 'error': str(e)}
+
+        pages = metadata.get('pages', []) or []
+        page_rows = []
+        for page in pages:
+            page_id = str(page.get('id') or '').strip()
+            if not page_id:
+                continue
+            page_token = page.get('access_token') or self._resolve_meta_page_access_token(account, page_id, meta_oauth)
+            row = {
+                'id': page_id,
+                'name': str(page.get('name') or page_id),
+                'has_access_token': bool(page_token),
+                'app_installed': False,
+                'leadgen_subscribed': False,
+                'error': None,
+            }
+            if not page_token:
+                row['error'] = 'Missing Page access token'
+            else:
+                app_installed, leadgen_subscribed, raw_data, err = meta_oauth.get_subscribed_apps(page_id, page_token)
+                row['app_installed'] = app_installed
+                row['leadgen_subscribed'] = leadgen_subscribed
+                if err:
+                    row['error'] = err
+                row['subscribed_apps_raw'] = raw_data
+                if should_subscribe and subscribe_target_page_id and page_id == subscribe_target_page_id and not leadgen_subscribed:
+                    sub = self._auto_subscribe_meta_page(account, page_id, meta_oauth)
+                    row['subscribe_attempt'] = sub
+                    if sub.get('success'):
+                        row['leadgen_subscribed'] = True
+                        row['app_installed'] = True
+                    IntegrationLog.objects.create(
+                        account=account,
+                        action='meta_page_subscribed',
+                        status='success' if sub.get('success') else 'error',
+                        message=f"Meta health subscribe page {page_id}: {sub.get('message')}",
+                        response_data=sub.get('response') if isinstance(sub.get('response'), dict) else {'raw': sub},
+                    )
+            page_rows.append(row)
+
+        page_ids = {str((p or {}).get('id')) for p in pages if (p or {}).get('id') is not None}
+        selection = {
+            'selected_page_id': selected_page_id or None,
+            'selected_form_id': selected_form_id or None,
+            'page_in_metadata': selected_page_id in page_ids if selected_page_id else False,
+            'campaign_linked': bool((metadata.get('form_campaign_mapping') or {}).get(selected_form_id)),
+        }
+
+        now = timezone.now()
+        week_ago = now - timedelta(days=7)
+        lead_logs = IntegrationLog.objects.filter(account=account, action='lead_received')
+        recent_activity = {
+            'last_lead_received_at': (
+                lead_logs.order_by('-created_at').values_list('created_at', flat=True).first().isoformat()
+                if lead_logs.exists()
+                else None
+            ),
+            'leads_last_7d': lead_logs.filter(status='success', created_at__gte=week_ago).count(),
+            'errors_last_7d': IntegrationLog.objects.filter(
+                account=account,
+                status='error',
+                created_at__gte=week_ago,
+                action__in=['lead_received', 'meta_page_subscribed', 'oauth_connect'],
+            ).count(),
+        }
+
+        callback_url = f"{getattr(settings, 'API_BASE_URL', '').rstrip('/')}/api/integrations/webhooks/meta/"
+        return success_response(
+            data={
+                'account_id': account.id,
+                'status': account.status,
+                'token': token_data,
+                'webhook': {
+                    'callback_url': callback_url,
+                    'verify_token_set': bool(getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')),
+                    'client_secret_set': bool(getattr(settings, 'META_CLIENT_SECRET', '')),
+                },
+                'selection': selection,
+                'pages': page_rows,
+                'recent_activity': recent_activity,
+            }
         )
 
 

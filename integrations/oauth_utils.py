@@ -264,6 +264,68 @@ class MetaOAuth(OAuthBase):
         response.raise_for_status()
         return response.json()
 
+    def subscribe_page_to_leadgen(self, page_id, page_access_token):
+        """
+        Subscribe this app to leadgen webhooks for a specific Page.
+        Returns parsed JSON on success/failure (does not raise on 4xx by default).
+        """
+        url = f"{self.graph_api_url}/{page_id}/subscribed_apps"
+        params = {
+            'access_token': page_access_token,
+            'subscribed_fields': 'leadgen',
+        }
+        proof = self._appsecret_proof(page_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        response = requests.post(url, params=params)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {'success': False, 'error': {'message': response.text or 'Invalid response from Meta'}}
+        if response.ok:
+            return data
+        if isinstance(data, dict):
+            return data
+        return {'success': False, 'error': {'message': str(data)}}
+
+    def get_subscribed_apps(self, page_id, page_access_token):
+        """
+        Inspect apps subscribed on a Page and determine whether current app is installed for leadgen.
+        Returns tuple: (app_installed, leadgen_subscribed, raw_data, error_message)
+        """
+        url = f"{self.graph_api_url}/{page_id}/subscribed_apps"
+        params = {'access_token': page_access_token}
+        proof = self._appsecret_proof(page_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        response = requests.get(url, params=params)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {'error': {'message': response.text or 'Invalid response from Meta'}}
+        if not response.ok:
+            msg = (
+                data.get('error', {}).get('message')
+                if isinstance(data, dict)
+                else response.text
+            ) or 'Failed to fetch subscribed_apps'
+            return False, False, data, msg
+
+        apps = []
+        if isinstance(data, dict):
+            apps = data.get('data', []) or []
+        app_id = str(self.client_id or '').strip()
+        app_installed = False
+        leadgen_subscribed = False
+        for app in apps:
+            current_id = str(app.get('id') or app.get('app_id') or '').strip()
+            if app_id and current_id == app_id:
+                app_installed = True
+                fields = app.get('subscribed_fields') or []
+                leadgen_subscribed = 'leadgen' in fields
+                break
+        return app_installed, leadgen_subscribed, data, None
+
     def get_app_access_token(self):
         """App access token for server-side API calls (e.g. debug_token)."""
         url = f"{self.graph_api_url}/oauth/access_token"
