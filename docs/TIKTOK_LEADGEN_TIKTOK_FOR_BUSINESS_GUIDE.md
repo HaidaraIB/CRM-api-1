@@ -6,7 +6,7 @@
 
 ## 1. ما الذي ينجزه الـ Backend في الـ CRM؟
 
-- **Endpoint ويب هوك:** `POST {API_BASE_URL}/api/integrations/webhooks/tiktok-leadgen/`  
+- **Endpoint ويب هوك:** `POST {API_BASE_URL}/api/v1/integrations/webhooks/tiktok-leadgen/`  
   يستقبل طلبات TikTok عند كل ليد جديد، يرد دائماً **200 OK**.
 - **تحليل الـ payload:** استخراج `lead_id`, `form_id`, `advertiser_id` وبيانات الليد (الاسم، الهاتف، البريد إن وُجدت) من أشكال متعددة (قائمة key/value أو كائن answers أو حقول مباشرة).
 - **تحديد الشركة:**  
@@ -50,8 +50,8 @@ TIKTOK_LEADGEN_ADVERTISER_MAPPING={"1234567890": "1", "0987654321": "2"}
 
 إذا لم تضبط المتغيرين أعلاه، يمكنك تسجيل ويب هوك مختلف لكل شركة:
 
-- شركة 1: `https://your-api.com/api/integrations/webhooks/tiktok-leadgen/?company_id=1`
-- شركة 2: `https://your-api.com/api/integrations/webhooks/tiktok-leadgen/?company_id=2`
+- شركة 1: `https://your-api.com/api/v1/integrations/webhooks/tiktok-leadgen/?company_id=1`
+- شركة 2: `https://your-api.com/api/v1/integrations/webhooks/tiktok-leadgen/?company_id=2`
 
 (تأكد أن TikTok تسمح بـ query parameters على عنوان الويب هوك؛ إن لم تسمح، استخدم خيار A أو B.)
 
@@ -106,9 +106,9 @@ TIKTOK_LEADGEN_ADVERTISER_MAPPING={"1234567890": "1", "0987654321": "2"}
 1. داخل **Leads Center** ابحث عن قسم **CRM integration** أو **Integrations** أو **Connect CRM**.  
 2. اختر **TikTok Custom API with Webhooks** (أو ما يعادله: تكامل مخصص / Custom / Webhook).  
 3. في حقل **Webhook URL** (أو **Callback URL**) أدخل عنوان الـ CRM بالكامل، مثلاً:  
-   - إنتاج: `https://your-api-domain.com/api/integrations/webhooks/tiktok-leadgen/`  
+   - إنتاج: `https://your-api-domain.com/api/v1/integrations/webhooks/tiktok-leadgen/`  
    - مع شركة محددة (إن دعمته واجهة TikTok):  
-     `https://your-api-domain.com/api/integrations/webhooks/tiktok-leadgen/?company_id=1`  
+     `https://your-api-domain.com/api/v1/integrations/webhooks/tiktok-leadgen/?company_id=1`
 4. احفظ الإعدادات وفعّل الاشتراك/التكامل إن وجد خيار تفعيل.  
 5. تأكد أن **Form subscription** أو خيار “إرسال الليدز إلى ويب هوك” مفعّل للاستمارات التي تريدها.
 

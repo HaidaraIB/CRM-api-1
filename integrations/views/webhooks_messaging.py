@@ -541,8 +541,20 @@ def whatsapp_send_template(request):
 
 def _parse_tiktok_leadgen_payload(body):
     """
-    استخراج lead_id, advertiser_id, name, phone, email من payload TikTok Lead Gen.
-    يدعم أشكالاً متعددة حسب وثائق TikTok Marketing API / شركاء التكامل.
+    استخراج وتطبيع lead payload من TikTok Lead Gen.
+    الناتج القياسي:
+    {
+      source: "tiktok",
+      external_id: lead_id,
+      name: str | None,
+      phone: str | None,
+      email: str | None,
+      custom_fields: object,
+      company_id: str | None,
+      form_id: str | None,
+      advertiser_id: str | None,
+      raw: object
+    }
     """
     if not body:
         return None
@@ -561,58 +573,83 @@ def _parse_tiktok_leadgen_payload(body):
             pass
     if not isinstance(data, dict):
         return None
-    lead_id = data.get('lead_id') or data.get('id') or data.get('leadId')
+    lead_id = data.get('lead_id') or data.get('id') or data.get('leadId') or data.get('external_id')
     form_id = data.get('form_id') or data.get('formId')
     advertiser_id = str(data.get('advertiser_id') or data.get('advertiserId') or '')
-    # استخراج الاسم والهاتف والبريد من list من نوع [{"key":"Full name","value":"x"}] أو من dict
+    # TikTok fields can be inconsistent; normalize by mapper.
     name = None
     phone = None
     email = None
+    custom_fields = {}
+
+    def _normalize_key(k):
+        return str(k or '').strip().lower().replace('-', '_').replace(' ', '_')
+
+    def _extract_val(v):
+        if isinstance(v, list):
+            return str(v[0]).strip() if v else ''
+        return str(v).strip() if v is not None else ''
+
     lead_list = data.get('list') or data.get('answers') or data.get('field_data') or []
     if isinstance(lead_list, list):
         key_map = {}
         for item in lead_list:
             if isinstance(item, dict):
-                k = (item.get('key') or item.get('name') or item.get('label') or '').lower()
-                v = item.get('value') or item.get('values')
-                if isinstance(v, list):
-                    v = v[0] if v else ''
-                if k and v:
-                    key_map[k] = str(v).strip()
-        name = (key_map.get('full name') or key_map.get('full_name') or key_map.get('name') or
-                key_map.get('contact name') or key_map.get('contact_name') or '')
-        phone = (key_map.get('phone') or key_map.get('phone_number') or key_map.get('mobile') or
-                 key_map.get('tel') or key_map.get('contact phone') or '')
-        email = (key_map.get('email') or key_map.get('email_address') or key_map.get('e-mail') or '')
+                raw_key = item.get('key') or item.get('name') or item.get('label') or ''
+                nk = _normalize_key(raw_key)
+                val = _extract_val(item.get('value') if 'value' in item else item.get('values'))
+                if nk and val:
+                    key_map[nk] = val
+        name = key_map.get('full_name') or key_map.get('name')
+        phone = key_map.get('phone_number') or key_map.get('phone')
+        email = key_map.get('email')
+        custom_fields.update(key_map)
     if isinstance(data.get('answers'), dict):
         ans = data['answers']
-        name = name or ans.get('full_name') or ans.get('name') or ans.get('full name') or ''
-        phone = phone or ans.get('phone') or ans.get('phone_number') or ans.get('mobile') or ''
-        email = email or ans.get('email') or ans.get('email_address') or ''
-    name = name or data.get('full_name') or data.get('name') or data.get('full name') or ''
-    phone = phone or data.get('phone') or data.get('phone_number') or data.get('mobile') or ''
-    email = email or data.get('email') or data.get('email_address') or ''
+        normalized_ans = {_normalize_key(k): _extract_val(v) for k, v in ans.items()}
+        name = name or normalized_ans.get('full_name') or normalized_ans.get('name')
+        phone = phone or normalized_ans.get('phone_number') or normalized_ans.get('phone')
+        email = email or normalized_ans.get('email')
+        custom_fields.update({k: v for k, v in normalized_ans.items() if v})
+    flat_map = {_normalize_key(k): _extract_val(v) for k, v in data.items()}
+    name = name or flat_map.get('full_name') or flat_map.get('name')
+    phone = phone or flat_map.get('phone_number') or flat_map.get('phone')
+    email = email or flat_map.get('email')
+    # Keep unknown fields for troubleshooting and future mapping.
+    known_top = {
+        'lead_id', 'leadid', 'id', 'external_id',
+        'form_id', 'formid',
+        'advertiser_id', 'advertiserid',
+        'list', 'answers', 'field_data', 'content', 'data',
+        'full_name', 'name', 'phone_number', 'phone', 'email'
+    }
+    for k, v in flat_map.items():
+        if k not in known_top and v:
+            custom_fields[k] = v
     if not lead_id and not name and not phone and not email:
         return None
     return {
+        'source': 'tiktok',
+        'external_id': str(lead_id) if lead_id else None,
         'lead_id': str(lead_id) if lead_id else None,
         'form_id': str(form_id) if form_id else None,
         'advertiser_id': advertiser_id or None,
-        'name': (name or 'TikTok Lead').strip(),
-        'phone': (phone or '').strip(),
-        'email': (email or '').strip(),
+        'name': (name or '').strip() or None,
+        'phone': (phone or '').strip() or None,
+        'email': (email or '').strip() or None,
+        'custom_fields': custom_fields,
+        'company_id': str(data.get('company_id') or '') or None,
         'raw': data,
     }
 
 
 def _get_company_id_for_tiktok_leadgen(advertiser_id, request):
-    """تحديد company_id من إعدادات التطبيق أو من query param."""
-    company_id = request.GET.get('company_id')
-    if company_id:
-        try:
-            return int(company_id)
-        except (ValueError, TypeError):
-            pass
+    """
+    تحديد company_id بطريقة آمنة:
+    1) advertiser mapping
+    2) default company id
+    3) query param فقط إذا تم تفعيله صراحة عبر الإعدادات
+    """
     mapping = getattr(settings, 'TIKTOK_LEADGEN_ADVERTISER_MAPPING', '{}')
     if isinstance(mapping, str):
         try:
@@ -632,7 +669,87 @@ def _get_company_id_for_tiktok_leadgen(advertiser_id, request):
             return int(default)
         except (ValueError, TypeError):
             pass
+    allow_query = str(
+        getattr(settings, 'TIKTOK_LEADGEN_ALLOW_COMPANY_QUERY_PARAM', 'true')
+    ).lower() in {'1', 'true', 'yes', 'on'}
+    if allow_query:
+        company_id = request.GET.get('company_id')
+        if company_id:
+            try:
+                cid = int(company_id)
+                query_sig = str(request.GET.get('sig') or '').strip()
+                require_sig = str(
+                    getattr(settings, 'TIKTOK_LEADGEN_REQUIRE_SIGNED_COMPANY_QUERY', 'false')
+                ).lower() in {'1', 'true', 'yes', 'on'}
+                expected_sig = _build_tiktok_company_sig(cid)
+                if query_sig:
+                    if expected_sig and hmac.compare_digest(query_sig, expected_sig):
+                        return cid
+                    logger.warning("TikTok Lead Gen webhook: invalid company query signature")
+                    return None
+                if require_sig:
+                    logger.warning("TikTok Lead Gen webhook: missing required company query signature")
+                    return None
+                return cid
+            except (ValueError, TypeError):
+                pass
     return None
+
+
+def _build_tiktok_company_sig(company_id: int) -> str:
+    """
+    HMAC signature for company_id included in webhook URL query.
+    Works with manual CRM integration in TikTok Ads Manager.
+    """
+    raw_secret = (
+        getattr(settings, 'TIKTOK_LEADGEN_URL_SIGNING_SECRET', '')
+        or getattr(settings, 'TIKTOK_LEADGEN_WEBHOOK_SECRET', '')
+        or getattr(settings, 'SECRET_KEY', '')
+    )
+    secret = str(raw_secret or '').strip()
+    if not secret:
+        return ''
+    msg = str(company_id).encode('utf-8')
+    return hmac.new(secret.encode('utf-8'), msg, hashlib.sha256).hexdigest()
+
+
+def _extract_tiktok_signature(request):
+    """
+    Try common signature header names used by webhook providers / proxies.
+    Returns raw header value, possibly prefixed with 'sha256='.
+    """
+    candidates = [
+        'X-Tt-Signature',
+        'X-Tiktok-Signature',
+        'X-TikTok-Signature',
+        'X-Signature',
+    ]
+    for header in candidates:
+        v = request.headers.get(header)
+        if v:
+            return str(v).strip()
+    return ''
+
+
+def _is_tiktok_signature_valid(request):
+    """
+    Optional HMAC verification for TikTok webhook payload.
+    If secret is unset => verification is skipped (backward-compatible).
+    """
+    secret = getattr(settings, 'TIKTOK_LEADGEN_WEBHOOK_SECRET', '') or ''
+    if not secret:
+        return True
+    incoming = _extract_tiktok_signature(request)
+    if not incoming:
+        return False
+    if incoming.startswith('sha256='):
+        incoming = incoming[7:]
+    expected = hmac.new(
+        secret.encode('utf-8'),
+        request.body or b'',
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(incoming, expected)
 
 
 @csrf_exempt
@@ -649,6 +766,9 @@ def tiktok_leadgen_webhook(request):
         body = json.loads(request.body) if request.body else {}
     except json.JSONDecodeError:
         body = {}
+    if not _is_tiktok_signature_valid(request):
+        logger.warning("TikTok Lead Gen webhook: invalid or missing signature")
+        return HttpResponse('Invalid signature', status=403)
     # الرد 200 فوراً حتى لا تعيد TikTok المحاولة
     payload = _parse_tiktok_leadgen_payload(body)
     if not payload:
@@ -667,7 +787,57 @@ def tiktok_leadgen_webhook(request):
     if not _integration_gate(company, "tiktok")["enabled"]:
         logger.info("TikTok Lead Gen webhook ignored (integration disabled) company_id=%s", company_id)
         return HttpResponse('OK', status=200)
-    # Enforce plan quota for leads created via webhook
+    from ..models import IntegrationAccount, IntegrationLog
+    from crm.models import Client, ClientPhoneNumber, ClientEvent
+    from crm.signals import get_least_busy_employee
+    account, _ = IntegrationAccount.objects.get_or_create(
+        company=company,
+        platform='tiktok',
+        external_account_id='leadgen_%s' % company_id,
+        defaults={
+            'name': 'TikTok Lead Gen',
+            'status': 'connected',
+        },
+    )
+    # Successful webhook reception: keep integration healthy and store last receive timestamp.
+    metadata = account.metadata if isinstance(account.metadata, dict) else {}
+    metadata['last_received_at'] = timezone.now().isoformat()
+    account.metadata = metadata
+    account.status = 'connected'
+    account.error_message = None
+    account.last_sync_at = timezone.now()
+    account.save(update_fields=['metadata', 'status', 'error_message', 'last_sync_at'])
+    lead_id = payload.get('lead_id')
+    payload_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                'advertiser_id': payload.get('advertiser_id'),
+                'form_id': payload.get('form_id'),
+                'name': payload.get('name'),
+                'phone': payload.get('phone'),
+                'email': payload.get('email'),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode('utf-8')
+    ).hexdigest()
+    if lead_id:
+        if IntegrationLog.objects.filter(
+            account=account,
+            action='tiktok_lead_received',
+            response_data__lead_id=lead_id,
+        ).exists():
+            logger.info("TikTok Lead Gen: duplicate lead_id=%s ignored", lead_id)
+            return HttpResponse('OK', status=200)
+    else:
+        if IntegrationLog.objects.filter(
+            account=account,
+            action='tiktok_lead_received',
+            response_data__payload_fingerprint=payload_fingerprint,
+        ).exists():
+            logger.info("TikTok Lead Gen: duplicate payload fingerprint ignored")
+            return HttpResponse('OK', status=200)
+    # Enforce plan quota for NEW leads only (after idempotency check).
     try:
         from subscriptions.entitlements import require_quota
         from crm.models import Client as CRMClient
@@ -683,30 +853,9 @@ def tiktok_leadgen_webhook(request):
     except Exception as e:
         logger.warning("TikTok Lead Gen webhook: plan quota blocked lead creation for company_id=%s err=%s", company_id, str(e)[:200])
         return HttpResponse('OK', status=200)
-    from ..models import IntegrationAccount, IntegrationLog
-    from crm.models import Client, ClientPhoneNumber, ClientEvent
-    from crm.signals import get_least_busy_employee
-    account, _ = IntegrationAccount.objects.get_or_create(
-        company=company,
-        platform='tiktok',
-        external_account_id='leadgen_%s' % company_id,
-        defaults={
-            'name': 'TikTok Lead Gen',
-            'status': 'connected',
-        },
-    )
-    lead_id = payload.get('lead_id')
-    if lead_id:
-        if IntegrationLog.objects.filter(
-            account=account,
-            action='tiktok_lead_received',
-            response_data__lead_id=lead_id,
-        ).exists():
-            logger.info("TikTok Lead Gen: duplicate lead_id=%s ignored", lead_id)
-            return HttpResponse('OK', status=200)
     try:
         client = Client.objects.create(
-            name=payload['name'],
+            name=payload.get('name') or 'TikTok Lead',
             priority='medium',
             type='fresh',
             company=company,
@@ -747,12 +896,22 @@ def tiktok_leadgen_webhook(request):
             account=account,
             action='tiktok_lead_received',
             status='success',
-            message='Lead created: %s' % payload['name'],
+            message='Lead created: %s' % (payload.get('name') or 'TikTok Lead'),
             response_data={
+                'normalized_lead': {
+                    'source': payload.get('source'),
+                    'external_id': payload.get('external_id'),
+                    'name': payload.get('name'),
+                    'phone': payload.get('phone'),
+                    'email': payload.get('email'),
+                    'custom_fields': payload.get('custom_fields') or {},
+                    'company_id': str(company_id),
+                },
                 'lead_id': lead_id,
                 'form_id': payload.get('form_id'),
                 'advertiser_id': payload.get('advertiser_id'),
                 'client_id': client.id,
+                'payload_fingerprint': payload_fingerprint,
             },
         )
         logger.info("TikTok Lead Gen: created client id=%s for company_id=%s", client.id, company_id)
@@ -764,7 +923,11 @@ def tiktok_leadgen_webhook(request):
             status='error',
             message='Failed to create client',
             error_details=str(e),
-            response_data={'lead_id': lead_id, 'payload_keys': list(payload.keys())},
+            response_data={
+                'lead_id': lead_id,
+                'payload_fingerprint': payload_fingerprint,
+                'payload_keys': list(payload.keys()),
+            },
         )
     return HttpResponse('OK', status=200)
 

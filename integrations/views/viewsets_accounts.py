@@ -63,6 +63,26 @@ def _build_oauth_callback_frontend_url() -> str:
     return f"{base}/oauth-callback"
 
 
+def _build_tiktok_company_sig(company_id: int) -> str:
+    """
+    Build HMAC signature for company-specific TikTok webhook URL.
+    This lets us verify company_id on manual TikTok webhook integration.
+    """
+    raw_secret = (
+        getattr(settings, 'TIKTOK_LEADGEN_URL_SIGNING_SECRET', '')
+        or getattr(settings, 'TIKTOK_LEADGEN_WEBHOOK_SECRET', '')
+        or getattr(settings, 'SECRET_KEY', '')
+    )
+    secret = str(raw_secret or '').strip()
+    if not secret:
+        return ''
+    return hmac.new(
+        secret.encode('utf-8'),
+        str(company_id).encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def apply_oauth_token_to_account(account, token_data, user_info):
     """
     Persist OAuth access token, IntegrationAccount metadata, Meta pages, and WhatsAppAccount rows.
@@ -674,11 +694,30 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         """
         company = request.user.company
         base = getattr(settings, 'API_BASE_URL', '').rstrip('/')
-        webhook_url = f"{base}/api/integrations/webhooks/tiktok-leadgen/?company_id={company.id}"
+        # Canonical versioned API URL: /api/v1/...
+        if base.endswith('/api/v1'):
+            webhook_base = base
+        elif base.endswith('/api'):
+            webhook_base = f"{base}/v1"
+        else:
+            webhook_base = f"{base}/api/v1"
+        webhook_url = f"{webhook_base}/integrations/webhooks/tiktok-leadgen/?company_id={company.id}"
+        sig = _build_tiktok_company_sig(company.id)
+        if sig:
+            webhook_url = f"{webhook_url}&sig={sig}"
+        account = IntegrationAccount.objects.filter(
+            company=company,
+            platform='tiktok',
+            external_account_id=f'leadgen_{company.id}',
+        ).first()
+        metadata = account.metadata if account and isinstance(account.metadata, dict) else {}
         return success_response(
             data={
                 'webhook_url': webhook_url,
                 'company_id': company.id,
+                'integration_status': (account.status if account else 'disconnected'),
+                'last_received_at': metadata.get('last_received_at'),
+                'last_sync_at': (account.last_sync_at.isoformat() if account and account.last_sync_at else None),
             },
         )
     

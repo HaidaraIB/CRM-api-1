@@ -41,7 +41,7 @@
 
 | الطريقة | المسار | الوصف |
 |---------|--------|--------|
-| GET | `/api/integrations/accounts/tiktok-leadgen-config/` | إرجاع `webhook_url` و `company_id` للشركة الحالية (للعرض في Integrations → TikTok). |
-| POST | `/api/integrations/webhooks/tiktok-leadgen/` | ويب هوك استقبال الليدز من TikTok (يُسجّل في TikTok Ads Manager). |
+| GET | `/api/v1/integrations/accounts/tiktok-leadgen-config/` | إرجاع `webhook_url` و `company_id` للشركة الحالية (للعرض في Integrations → TikTok). |
+| POST | `/api/v1/integrations/webhooks/tiktok-leadgen/` | ويب هوك استقبال الليدز من TikTok (يُسجّل في TikTok Ads Manager). |
 
 لا توجد واجهات OAuth أو بروفايل أو فيديوهات لـ TikTok في هذا المشروع.

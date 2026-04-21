@@ -983,7 +983,7 @@ sudo ufw enable
 ### Webhook URLs:
 - **Meta**: `{API_BASE_URL}/api/integrations/webhooks/meta/`
 - **WhatsApp**: `{API_BASE_URL}/api/integrations/webhooks/whatsapp/`
-- **TikTok Lead Gen**: `{API_BASE_URL}/api/integrations/webhooks/tiktok-leadgen/`
+- **TikTok Lead Gen**: `{API_BASE_URL}/api/v1/integrations/webhooks/tiktok-leadgen/`
 
 ---
 
