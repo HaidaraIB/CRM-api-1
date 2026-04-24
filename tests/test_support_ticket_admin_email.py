@@ -136,6 +136,56 @@ def test_super_admin_notification_sends_to_multiple(smtp_settings_active):
 
 
 @pytest.mark.django_db
+def test_super_admin_notification_skips_excluded_email(smtp_settings_active):
+    owner = User.objects.create_user(
+        username="owner_ex",
+        email="owner_ex@tenant.com",
+        password="x",
+        company=None,
+        role="admin",
+    )
+    company = Company.objects.create(
+        name="Gamma",
+        domain="gamma.example.com",
+        owner=owner,
+    )
+    owner.company = company
+    owner.save(update_fields=["company"])
+
+    User.objects.create_user(
+        username="excluded_sa",
+        email="admin@gmail.com",
+        password="x",
+        company=None,
+        role="admin",
+        is_superuser=True,
+    )
+    User.objects.create_user(
+        username="included_sa",
+        email="keeps@platform.com",
+        password="x",
+        company=None,
+        role="admin",
+        is_superuser=True,
+    )
+
+    ticket = SupportTicket.objects.create(
+        title="Q",
+        description="d",
+        company=company,
+        created_by=owner,
+    )
+
+    with patch("accounts.event_emails._send_event_email", return_value=True) as mock_send:
+        sent = send_support_ticket_new_admin_notifications(owner, ticket)
+
+    assert sent == 1
+    mock_send.assert_called_once()
+    args, _ = mock_send.call_args
+    assert args[0].email == "keeps@platform.com"
+
+
+@pytest.mark.django_db
 def test_super_admin_notification_inactive_smtp_returns_zero(db):
     from settings.models import SMTPSettings
 

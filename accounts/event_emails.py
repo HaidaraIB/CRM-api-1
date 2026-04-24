@@ -12,6 +12,9 @@ from .utils import EMAIL_LANGUAGES, _get_smtp_connection
 
 logger = logging.getLogger(__name__)
 
+# Lowercase. These addresses never receive the "new support ticket" super-admin alert.
+SUPPORT_TICKET_SUPERADMIN_NOTIFY_SKIP_EMAILS = frozenset({"admin@gmail.com"})
+
 
 def _send_event_email(to_user, subject, template_name, context, language="en"):
     """
@@ -139,6 +142,7 @@ def send_support_ticket_new_admin_notifications(creator_user, ticket):
     Email all active Django superusers (platform super admins) about a new ticket.
     Skips any super admin whose email matches the creator so they are not notified twice
     (they already receive send_support_ticket_created_email).
+    Skips addresses in SUPPORT_TICKET_SUPERADMIN_NOTIFY_SKIP_EMAILS.
     """
     from accounts.models import User
 
@@ -166,6 +170,8 @@ def send_support_ticket_new_admin_notifications(creator_user, ticket):
         if not em or em in seen:
             continue
         if em == creator_email:
+            continue
+        if em in SUPPORT_TICKET_SUPERADMIN_NOTIFY_SKIP_EMAILS:
             continue
         seen.add(em)
         lang = (getattr(admin, "language", None) or "en").lower()
