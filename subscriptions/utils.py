@@ -1,10 +1,10 @@
 """
-Utility functions for sending emails via SMTP and push notifications
+Utility functions for sending emails via Resend and push notifications
 """
 
 from django.core.mail import EmailMultiAlternatives
-from django.core.mail.backends.smtp import EmailBackend
 from django.template.loader import render_to_string
+from crm_saas_api.utils import format_platform_from_address, get_platform_email_display_name
 from settings.models import SMTPSettings, PlatformTwilioSettings
 from companies.models import Company
 from accounts.models import User, Role
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_smtp_connection():
-    """Get SMTP connection using platform SMTPSettings singleton."""
+    """Get outbound email connection (Resend) using platform SMTPSettings singleton."""
     from crm_saas_api.utils import get_smtp_connection as _get_smtp
     return _get_smtp()
 
@@ -86,10 +86,10 @@ def send_broadcast_email(broadcast, language=None):
         smtp_settings = SMTPSettings.get_settings()
 
         if not smtp_settings.is_active:
-            logger.warning("SMTP is not active. Cannot send broadcast.")
+            logger.warning("Outbound email is not active. Cannot send broadcast.")
             return {
                 "success": False,
-                "error": "SMTP is not active. Please configure and enable SMTP settings.",
+                "error": "Outbound email is not active. Enable it in platform email settings and set RESEND_API_KEY.",
             }
 
         # Get recipient users (with email) so we can use each user's language
@@ -106,11 +106,8 @@ def send_broadcast_email(broadcast, language=None):
             }
 
         connection = get_smtp_connection()
-        from_email = (
-            f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
-            if smtp_settings.from_name
-            else smtp_settings.from_email
-        )
+        from_email = format_platform_from_address(smtp_settings)
+        display_name = get_platform_email_display_name(smtp_settings)
         default_lang = language if language in ("ar", "en") else "ar"
 
         sent_count = 0
@@ -128,7 +125,7 @@ def send_broadcast_email(broadcast, language=None):
             else:
                 template_name = "subscriptions/broadcast_email.html"
 
-            context = {"broadcast": broadcast, "from_name": smtp_settings.from_name}
+            context = {"broadcast": broadcast, "from_name": display_name}
             html_content = render_to_string(template_name, context)
             plain_text = broadcast.content
 

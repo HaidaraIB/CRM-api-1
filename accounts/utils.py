@@ -1,7 +1,8 @@
 import logging
 from django.core.mail import EmailMultiAlternatives
-from django.core.mail.backends.smtp import EmailBackend
 from django.conf import settings
+
+from crm_saas_api.utils import format_platform_from_address
 from django.utils.translation import gettext_lazy as _
 from django.template.loader import render_to_string
 from django.utils.html import strip_tags
@@ -77,15 +78,11 @@ def send_email_verification(user, verification, language="en"):
     try:
         smtp_settings = SMTPSettings.get_settings()
         if not smtp_settings.is_active:
-            logger.warning("SMTP is disabled; skipping verification email.")
+            logger.warning("Outbound email is disabled; skipping verification email.")
             return False
 
         connection = _get_smtp_connection()
-        from_email = (
-            f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
-            if smtp_settings.from_name
-            else smtp_settings.from_email
-        )
+        from_email = format_platform_from_address(smtp_settings)
 
         frontend_base = _get_frontend_base_url()
         verification_link = (
@@ -161,15 +158,11 @@ def send_password_reset_email(user, reset, language="en"):
     try:
         smtp_settings = SMTPSettings.get_settings()
         if not smtp_settings.is_active:
-            logger.warning("SMTP is disabled; skipping password reset email.")
+            logger.warning("Outbound email is disabled; skipping password reset email.")
             return False
 
         connection = _get_smtp_connection()
-        from_email = (
-            f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
-            if smtp_settings.from_name
-            else smtp_settings.from_email
-        )
+        from_email = format_platform_from_address(smtp_settings)
 
         frontend_base = _get_frontend_base_url()
         reset_link = (
@@ -247,15 +240,11 @@ def send_two_factor_auth_email(user, two_fa, language="ar"):
     try:
         smtp_settings = SMTPSettings.get_settings()
         if not smtp_settings.is_active:
-            logger.warning("SMTP is disabled; skipping 2FA email.")
+            logger.warning("Outbound email is disabled; skipping 2FA email.")
             return False
 
         connection = _get_smtp_connection()
-        from_email = (
-            f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
-            if smtp_settings.from_name
-            else smtp_settings.from_email
-        )
+        from_email = format_platform_from_address(smtp_settings)
 
         greeting_name = user.first_name or user.username or (_("there") if language == "en" else "مرحباً")
         

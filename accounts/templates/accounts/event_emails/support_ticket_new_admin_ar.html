@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        body { background-color: #f4effc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 32px 16px; color: #1f1f2e; direction: rtl; }
+        .wrapper { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 24px; box-shadow: 0 20px 50px rgba(66, 21, 170, 0.15); overflow: hidden; border: 1px solid rgba(66, 21, 170, 0.08); }
+        .header { background: linear-gradient(135deg, #4215aa, #2f0f7a); padding: 32px; color: #fff; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 700; }
+        .content { padding: 32px; line-height: 1.65; }
+        .ticket { padding: 16px 24px; background: rgba(66, 21, 170, 0.08); border-radius: 16px; margin: 16px 0; }
+        .meta { font-size: 14px; color: #4a4560; margin: 8px 0; }
+        .preview { white-space: pre-wrap; font-size: 14px; color: #1f1f2e; margin-top: 12px; }
+        .footer { padding: 24px 32px; font-size: 12px; color: #78738c; background: #fafafc; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="header"><h1>تذكرة دعم جديدة</h1></div>
+        <div class="content">
+            <p>مرحباً {{ greeting_name }}،</p>
+            <p>قام مستخدم بإنشاء تذكرة دعم جديدة.</p>
+            <div class="ticket">
+                <strong>تذكرة #{{ ticket_id }}</strong><br>{{ ticket_title }}
+                <p class="meta"><strong>الشركة:</strong> {{ company_name }}</p>
+                <p class="meta"><strong>مقدم الطلب:</strong> {{ creator_line }}</p>
+                {% if description_preview %}
+                <p class="meta"><strong>الوصف:</strong></p>
+                <div class="preview">{{ description_preview }}</div>
+                {% endif %}
+            </div>
+            <p>يمكنك المراجعة والرد من لوحة الإدارة أو قائمة تذاكر الدعم.</p>
+        </div>
+        <div class="footer">تم الإرسال بواسطة LOOP CRM · {{ support_email }}</div>
+    </div>
+</body>
+</html>

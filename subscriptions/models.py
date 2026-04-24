@@ -23,17 +23,6 @@ class BroadcastType(Enum):
         return [(i.value, i.name) for i in cls]
 
 
-class InvoiceStatus(Enum):
-    DRAFT = "draft"
-    ISSUED = "issued"
-    PAID = "paid"
-    CANCELED = "canceled"
-
-    @classmethod
-    def choices(cls):
-        return [(i.value, i.name) for i in cls]
-
-
 class PaymentStatus(Enum):
     PENDING = "pending"
     COMPLETED = "completed"
@@ -270,17 +259,50 @@ class Payment(models.Model):
         return f"Payment #{self.id} - {self.subscription.company.name} - {self.amount} {self.currency}"
 
 
+class InvoiceSequence(models.Model):
+    """Per-year counter for INV-YYYY-NNNNN invoice numbers."""
+
+    year = models.PositiveIntegerField(unique=True)
+    last_number = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "invoice_sequences"
+
+    def __str__(self):
+        return f"{self.year}: {self.last_number}"
+
+
 class Invoice(models.Model):
+    """
+    Read-only billing artifact for SaaS: one invoice per Payment (auto-created).
+    Status is always the linked payment's payment_status; legacy rows use legacy_payment_status.
+    """
+
+    payment = models.OneToOneField(
+        Payment,
+        on_delete=models.CASCADE,
+        related_name="invoice",
+        null=True,
+        blank=True,
+    )
     subscription = models.ForeignKey(
         Subscription, on_delete=models.CASCADE, related_name="invoices"
     )
-    invoice_number = models.CharField(max_length=255, unique=True)
+    invoice_number = models.CharField(max_length=64, unique=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    due_date = models.DateField()
-    status = models.CharField(
-        max_length=20,
-        choices=InvoiceStatus.choices(),
-        default=InvoiceStatus.DRAFT.value,
+    currency = models.CharField(max_length=10, default="USD")
+    company_name = models.CharField(max_length=255, default="")
+    plan_name = models.CharField(max_length=255, default="")
+    line_description = models.CharField(max_length=512, blank=True, default="")
+    billing_cycle = models.CharField(max_length=10, blank=True, default="")
+    due_date = models.DateField(null=True, blank=True)
+    last_emailed_at = models.DateTimeField(null=True, blank=True)
+    legacy_payment_status = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Only for historical invoices without a Payment row; mirrors PaymentStatus.",
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -291,7 +313,17 @@ class Invoice(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Invoice {self.invoice_number} - {self.subscription.company.name} ({self.status})"
+        ps = (
+            self.payment.payment_status
+            if self.payment_id
+            else (self.legacy_payment_status or "unknown")
+        )
+        return f"Invoice {self.invoice_number} ({ps})"
+
+    def effective_payment_status(self) -> str:
+        if self.payment_id:
+            return self.payment.payment_status or ""
+        return self.legacy_payment_status or PaymentStatus.COMPLETED.value
 
 
 class Broadcast(models.Model):

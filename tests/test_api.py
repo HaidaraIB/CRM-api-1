@@ -58,6 +58,115 @@ class TestClientCRUD:
 
 
 @pytest.mark.django_db
+class TestDataEntryClient:
+    """Data entry role: list all company leads, create with auto-assign, no detail/edit."""
+
+    def test_data_entry_lists_all_company_clients(
+        self, authenticated_data_entry, company, employee_user
+    ):
+        from crm.models import Client
+
+        Client.objects.create(
+            name="A",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=employee_user,
+        )
+        Client.objects.create(
+            name="B",
+            company=company,
+            priority="high",
+            type="fresh",
+            assigned_to=None,
+        )
+        response = authenticated_data_entry.get("/api/v1/clients/")
+        assert response.status_code == status.HTTP_200_OK
+        assert api_body(response)["count"] == 2
+
+    def test_data_entry_retrieve_forbidden(
+        self, authenticated_data_entry, company, employee_user
+    ):
+        from crm.models import Client
+
+        client = Client.objects.create(
+            name="X",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=employee_user,
+        )
+        response = authenticated_data_entry.get(f"/api/v1/clients/{client.id}/")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_data_entry_patch_forbidden(
+        self, authenticated_data_entry, company, employee_user
+    ):
+        from crm.models import Client
+
+        client = Client.objects.create(
+            name="X",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=employee_user,
+        )
+        response = authenticated_data_entry.patch(
+            f"/api/v1/clients/{client.id}/",
+            {"name": "Y"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_data_entry_create_assigns_to_employee(
+        self, authenticated_data_entry, company, employee_user
+    ):
+        data = {
+            "name": "Intake Lead",
+            "priority": "high",
+            "type": "fresh",
+            "company": company.id,
+        }
+        response = authenticated_data_entry.post("/api/v1/clients/", data, format="json")
+        assert response.status_code == status.HTTP_201_CREATED
+        from crm.models import Client
+
+        lead = Client.objects.get(id=api_body(response)["id"])
+        assert lead.assigned_to_id == employee_user.id
+
+    def test_data_entry_create_assigns_to_owner_when_no_sales_employee(
+        self, authenticated_data_entry, company, employee_user, owner_user
+    ):
+        from accounts.models import User
+        from crm.models import Client
+
+        User.objects.filter(id=employee_user.id).delete()
+        data = {
+            "name": "No Emp",
+            "priority": "low",
+            "type": "cold",
+            "company": company.id,
+        }
+        response = authenticated_data_entry.post("/api/v1/clients/", data, format="json")
+        assert response.status_code == status.HTTP_201_CREATED
+        lead = Client.objects.get(id=api_body(response)["id"])
+        assert lead.assigned_to_id == owner_user.id
+
+    def test_data_entry_bulk_assign_forbidden(self, authenticated_data_entry, company):
+        from crm.models import Client
+
+        c = Client.objects.create(
+            name="Z", company=company, priority="low", type="cold"
+        )
+        response = authenticated_data_entry.post(
+            "/api/v1/clients/bulk_assign/",
+            {"client_ids": [c.id], "user_id": None},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
 class TestDealCRUD:
     """Test basic CRUD operations on the Deal endpoint."""
 

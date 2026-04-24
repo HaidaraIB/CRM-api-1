@@ -10,7 +10,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
 from django.contrib.contenttypes.models import ContentType
-from crm.models import ClientCall
+from crm.models import ClientCall, ClientVisit
 from notifications.services import NotificationService
 from notifications.models import NotificationType, ReminderDispatchLog
 from accounts.event_emails import send_followup_reminder_email
@@ -57,16 +57,26 @@ class Command(BaseCommand):
             client__assigned_to__isnull=False,
         ).select_related('client', 'client__assigned_to')
 
-        if not calls.exists():
+        # Find ClientVisits with upcoming visit dates in the next window
+        visits = ClientVisit.objects.filter(
+            upcoming_visit_date__gte=reminder_start,
+            upcoming_visit_date__lt=reminder_end,
+            client__assigned_to__isnull=False,
+        ).select_related('client', 'client__assigned_to')
+
+        if not calls.exists() and not visits.exists():
             self.stdout.write(
-                self.style.SUCCESS(f'No call reminders found in the next {minutes_before} minutes.')
+                self.style.SUCCESS(
+                    f'No call/visit reminders found in the next {minutes_before} minutes.'
+                )
             )
             return
 
         sent_count = 0
         skipped_count = 0
         dedup_skipped = 0
-        ct = ContentType.objects.get_for_model(ClientCall)
+        call_ct = ContentType.objects.get_for_model(ClientCall)
+        visit_ct = ContentType.objects.get_for_model(ClientVisit)
 
         for call in calls:
             lead = call.client
@@ -79,7 +89,7 @@ class Command(BaseCommand):
             log_row, created = ReminderDispatchLog.objects.get_or_create(
                 user=user,
                 notification_type=NotificationType.CALL_REMINDER,
-                content_type=ct,
+                content_type=call_ct,
                 object_id=str(call.id),
                 scheduled_for=scheduled_for,
                 minutes_before=minutes_before,
@@ -134,6 +144,82 @@ class Command(BaseCommand):
                     logger.error(f"Error sending reminder for call {call.id}: {e}")
                     self.stdout.write(
                         self.style.ERROR(f'Error sending reminder for call {call.id}: {e}')
+                    )
+                    log_row.last_error = str(e)
+                    skipped_count += 1
+                finally:
+                    log_row.save(update_fields=["push_sent", "email_sent", "last_error", "updated_at"])
+
+        for visit in visits:
+            lead = visit.client
+            if not lead.assigned_to:
+                skipped_count += 1
+                continue
+            user = lead.assigned_to
+            scheduled_for = visit.upcoming_visit_date
+
+            log_row, created = ReminderDispatchLog.objects.get_or_create(
+                user=user,
+                notification_type=NotificationType.VISIT_REMINDER,
+                content_type=visit_ct,
+                object_id=str(visit.id),
+                scheduled_for=scheduled_for,
+                minutes_before=minutes_before,
+                defaults={"push_sent": False, "email_sent": False},
+            )
+            if not created and log_row.push_sent and log_row.email_sent:
+                dedup_skipped += 1
+                continue
+
+            if dry_run:
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f'[DRY RUN] Would send reminder to {user.username} '
+                        f'for visit {visit.id} - Reminder at {visit.upcoming_visit_date}'
+                    )
+                )
+            else:
+                try:
+                    minutes_remaining = int((visit.upcoming_visit_date - now).total_seconds() / 60)
+                    user_lang = getattr(user, "language", "ar") or "ar"
+
+                    NotificationService.send_notification(
+                        user=user,
+                        notification_type=NotificationType.VISIT_REMINDER,
+                        data={
+                            'visit_id': visit.id,
+                            'lead_id': lead.id,
+                            'lead_name': lead.name,
+                            'minutes_remaining': minutes_remaining,
+                            'minutes_before': minutes_before,
+                            'reminder_kind': 'visit',
+                            'reminder_time': scheduled_for.isoformat() if scheduled_for else None,
+                        },
+                        lead_source=getattr(lead, 'source', None),
+                    )
+                    log_row.push_sent = True
+
+                    email_ok = send_followup_reminder_email(
+                        user,
+                        reminder_kind="visit",
+                        title=f"Visit follow-up: {lead.name}",
+                        lead_name=lead.name,
+                        scheduled_for=scheduled_for,
+                        minutes_before=minutes_before,
+                        language=user_lang,
+                    )
+                    if email_ok:
+                        log_row.email_sent = True
+                    sent_count += 1
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            f'Sent reminder to {user.username} for visit {visit.id}'
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending reminder for visit {visit.id}: {e}")
+                    self.stdout.write(
+                        self.style.ERROR(f'Error sending reminder for visit {visit.id}: {e}')
                     )
                     log_row.last_error = str(e)
                     skipped_count += 1

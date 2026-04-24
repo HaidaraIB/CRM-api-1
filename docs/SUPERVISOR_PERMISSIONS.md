@@ -73,3 +73,23 @@ So: a supervisor with **only** `can_manage_leads` can open Leads and Activities,
 - **Leads permission** → Leads + Activities UI works: client-tasks, client-calls, and **read-only** access to channels, stages, statuses, call-methods.
 - **Settings permission** → Full read/write on those settings.
 - All other permissions align with the feature name (clients, deals, tasks, users, products, services, real estate).
+
+## Data entry role (`data_entry`)
+
+The **data entry** company role is for **lead intake only**. It is **not** a supervisor permission flag; it is a fourth `User.role` value alongside `admin`, `supervisor`, and `employee`.
+
+### API behavior (CRM-api-1)
+
+- **Clients / leads**
+  - **List (GET collection)**: Same company-wide scope as an admin list (all clients in the company), not “my leads”.
+  - **Create (POST)**: Allowed. `assigned_to` cannot be set manually by this role; the server strips it and assigns an active **`employee`** via **least-busy** balancing when possible. If there is no active employee, the lead is assigned to the **company owner** (`Company.owner`) so intake never blocks on an empty sales team.
+  - **Retrieve / update / delete (detail)**: Not allowed (`403`). Object-level permission denies non-create access so deep links to a single lead cannot be used for edits.
+  - **Bulk assign / assign-unassigned**: Not allowed (`403`).
+- **Client tasks, client calls, client events, campaigns**: No access (empty queryset or `403` as implemented) so intake users do not hit activity or campaign APIs.
+- **Settings (channels, stages, statuses, call-methods, etc.)**: **GET only**, same pattern as **employee** (read-only filter metadata).
+- **Users**: Sees **only their own** user row (same as employee); cannot enumerate staff for assignment.
+
+### UI behavior (CRM-project / crm_mobile)
+
+- Only **All Leads**, **create lead**, **import**, and **filters** (plus **profile** / **support** where enabled). No dashboard, pipeline tabs, lead detail navigation, bulk actions, assign, export (where hidden), or activity actions.
+- **`is_employee()` / sales “employee” semantics** must **not** include `data_entry`; auto-assignment targets **`employee`** role only.

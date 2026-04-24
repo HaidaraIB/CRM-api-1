@@ -7,7 +7,9 @@ from .models import (
     SystemBackup,
     SystemAuditLog,
     CallMethod,
+    VisitType,
     SystemSettings,
+    BillingSettings,
 )
 
 
@@ -29,7 +31,7 @@ class LeadStageAdmin(admin.ModelAdmin):
 
 @admin.register(LeadStatus)
 class LeadStatusAdmin(admin.ModelAdmin):
-    list_display = ['name', 'category', 'is_default', 'is_hidden', 'company', 'is_active', 'created_at']
+    list_display = ['name', 'automation_key', 'category', 'is_default', 'is_hidden', 'company', 'is_active', 'created_at']
     list_filter = ['category', 'is_default', 'is_hidden', 'is_active', 'created_at']
     search_fields = ['name', 'description']
     readonly_fields = ['created_at', 'updated_at']
@@ -37,21 +39,26 @@ class LeadStatusAdmin(admin.ModelAdmin):
 
 @admin.register(SMTPSettings)
 class SMTPSettingsAdmin(admin.ModelAdmin):
-    list_display = ['host', 'port', 'from_email', 'is_active', 'updated_at']
-    list_filter = ['is_active', 'use_tls', 'use_ssl']
-    search_fields = ['host', 'from_email', 'username']
-    readonly_fields = ['created_at', 'updated_at']
-    
+    list_display = ["from_email", "is_active", "updated_at"]
+    list_filter = ["is_active"]
+    search_fields = ["from_email", "host"]
+    readonly_fields = ["created_at", "updated_at"]
+
     fieldsets = (
-        ('SMTP Server', {
-            'fields': ('host', 'port', 'use_tls', 'use_ssl')
-        }),
-        ('Authentication', {
-            'fields': ('username', 'password')
-        }),
-        ('Email Settings', {
-            'fields': ('from_email', 'from_name', 'is_active')
-        }),
+        (
+            "Resend outbound email",
+            {
+                "description": "Set RESEND_API_KEY on the server. Verify your sending domain in the Resend dashboard.",
+                "fields": ("from_email", "from_name", "is_active"),
+            },
+        ),
+        (
+            "Legacy (unused for sending)",
+            {
+                "classes": ("collapse",),
+                "fields": ("host", "port", "use_tls", "use_ssl", "username", "password"),
+            },
+        ),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
@@ -78,6 +85,14 @@ class SystemAuditLogAdmin(admin.ModelAdmin):
 @admin.register(CallMethod)
 class CallMethodAdmin(admin.ModelAdmin):
     list_display = ['name', 'color', 'company', 'is_active', 'created_at', 'updated_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['name', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(VisitType)
+class VisitTypeAdmin(admin.ModelAdmin):
+    list_display = ['name', 'color', 'company', 'is_active', 'is_default', 'created_at', 'updated_at']
     list_filter = ['is_active', 'created_at']
     search_fields = ['name', 'description']
     readonly_fields = ['created_at', 'updated_at']
@@ -125,6 +140,18 @@ class SystemSettingsAdmin(admin.ModelAdmin):
                 "classes": ("collapse",),
             },
         ),
+    )
+
+
+@admin.register(BillingSettings)
+class BillingSettingsAdmin(admin.ModelAdmin):
+    list_display = ["id", "issuer_name", "issuer_email", "updated_at"]
+    readonly_fields = ["created_at", "updated_at"]
+
+    fieldsets = (
+        ("Issuer", {"fields": ("issuer_name", "issuer_address", "issuer_email", "issuer_phone", "issuer_tax_id", "logo")}),
+        ("Invoice copy", {"fields": ("footer_text", "payment_instructions")}),
+        ("Timestamps", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
 
 

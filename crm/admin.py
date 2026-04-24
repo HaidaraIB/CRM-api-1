@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber, ClientEvent, ClientCall
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientPhoneNumber, ClientEvent, ClientCall, ClientVisit
 
 
 class ClientPhoneNumberInline(admin.TabularInline):
@@ -339,6 +339,26 @@ class ClientCallAdmin(admin.ModelAdmin):
     ordering = ["-created_at"]
     readonly_fields = ["created_at", "updated_at"]
     raw_id_fields = ["client", "call_method", "created_by"]
+
+
+@admin.register(ClientVisit)
+class ClientVisitAdmin(admin.ModelAdmin):
+    """Admin configuration for ClientVisit model"""
+
+    list_display = [
+        "id",
+        "client",
+        "visit_type",
+        "visit_datetime",
+        "upcoming_visit_date",
+        "created_by",
+        "created_at",
+    ]
+    list_filter = ["visit_type", "created_at", "created_by"]
+    search_fields = ["client__name", "summary"]
+    ordering = ["-created_at"]
+    readonly_fields = ["created_at", "updated_at"]
+    raw_id_fields = ["client", "visit_type", "created_by"]
 
 
 @admin.register(Campaign)

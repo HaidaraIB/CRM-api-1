@@ -262,46 +262,85 @@ class PaymentListSerializer(serializers.ModelSerializer):
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
-    company_name = serializers.CharField(
-        source="subscription.company.name", read_only=True
-    )
-    plan_name = serializers.CharField(source="subscription.plan.name", read_only=True)
+    """Invoice is read-only; status comes from the linked payment."""
+
+    payment_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Invoice
         fields = [
             "id",
+            "payment",
+            "payment_status",
             "subscription",
-            "company_name",
-            "plan_name",
             "invoice_number",
             "amount",
+            "currency",
+            "company_name",
+            "plan_name",
+            "line_description",
+            "billing_cycle",
             "due_date",
-            "status",
+            "last_emailed_at",
+            "legacy_payment_status",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "payment",
+            "subscription",
+            "invoice_number",
+            "amount",
+            "currency",
+            "company_name",
+            "plan_name",
+            "line_description",
+            "billing_cycle",
+            "due_date",
+            "last_emailed_at",
+            "legacy_payment_status",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_payment_status(self, obj):
+        return obj.effective_payment_status()
 
 
 class InvoiceListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
 
-    company_name = serializers.CharField(
-        source="subscription.company.name", read_only=True
-    )
+    payment_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Invoice
         fields = [
             "id",
+            "payment",
             "invoice_number",
             "company_name",
             "amount",
+            "currency",
+            "payment_status",
             "due_date",
-            "status",
+            "last_emailed_at",
             "created_at",
         ]
+        read_only_fields = [
+            "id",
+            "payment",
+            "invoice_number",
+            "company_name",
+            "amount",
+            "currency",
+            "due_date",
+            "last_emailed_at",
+            "created_at",
+        ]
+
+    def get_payment_status(self, obj):
+        return obj.effective_payment_status()
 
 
 def _validate_broadcast_target(value):

@@ -99,6 +99,10 @@ class IsAdminOrReadOnlyForEmployee(permissions.BasePermission):
         if perm and request.user.supervisor_has_permission(perm):
             return True
 
+        # Data entry: read-only on views using this class (same as employee)
+        if request.user.is_data_entry():
+            return request.method in permissions.SAFE_METHODS
+
         # Employee can only do GET requests
         if request.user.is_employee():
             return request.method in permissions.SAFE_METHODS
@@ -135,6 +139,8 @@ class IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee(permissions.BasePerm
             if request.user.supervisor_has_permission("manage_leads") and request.method in permissions.SAFE_METHODS:
                 return True
             return False
+        if request.user.is_data_entry():
+            return request.method in permissions.SAFE_METHODS
         if request.user.is_employee():
             return request.method in permissions.SAFE_METHODS
         return False
@@ -176,6 +182,9 @@ class CanAccessClient(permissions.BasePermission):
         if hasattr(obj, "company"):
             if not request.user.can_access_company_data(obj.company):
                 return False
+
+        if request.user.is_data_entry():
+            return False
 
         if request.user.is_employee():
             if hasattr(obj, "assigned_to"):

@@ -5,6 +5,7 @@ All emails are sent in the recipient's language (ar/en) using HTML templates.
 import logging
 from django.core.mail import EmailMultiAlternatives
 from django.utils.html import strip_tags
+from crm_saas_api.utils import format_platform_from_address
 from settings.models import SMTPSettings
 
 from .utils import EMAIL_LANGUAGES, _get_smtp_connection
@@ -27,15 +28,11 @@ def _send_event_email(to_user, subject, template_name, context, language="en"):
 
     smtp_settings = SMTPSettings.get_settings()
     if not smtp_settings.is_active:
-        logger.warning("SMTP is not active; skipping event email.")
+        logger.warning("Outbound email is not active; skipping event email.")
         return False
 
     connection = _get_smtp_connection()
-    from_email = (
-        f"{smtp_settings.from_name} <{smtp_settings.from_email}>"
-        if smtp_settings.from_name
-        else smtp_settings.from_email
-    )
+    from_email = format_platform_from_address(smtp_settings)
     email = EmailMultiAlternatives(
         subject=subject,
         body=plain_body,
@@ -128,6 +125,71 @@ def send_support_ticket_created_email(user, ticket, language="en"):
         "support_email": SMTPSettings.get_settings().from_email,
     }
     return _send_event_email(user, subject, "support_ticket_created", context, language)
+
+
+def _support_ticket_description_preview(ticket, max_len=400):
+    text = (getattr(ticket, "description", None) or "").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "…"
+
+
+def send_support_ticket_new_admin_notifications(creator_user, ticket):
+    """
+    Email all active Django superusers (platform super admins) about a new ticket.
+    Skips any super admin whose email matches the creator so they are not notified twice
+    (they already receive send_support_ticket_created_email).
+    """
+    from accounts.models import User
+
+    smtp_settings = SMTPSettings.get_settings()
+    if not smtp_settings.is_active:
+        logger.warning(
+            "Outbound email is not active; skipping super-admin support ticket notifications."
+        )
+        return 0
+
+    creator_email = (getattr(creator_user, "email", None) or "").strip().lower()
+    company = getattr(ticket, "company", None)
+    company_name = getattr(company, "name", "") or "—"
+    preview = _support_ticket_description_preview(ticket)
+    creator_display = creator_user.get_full_name().strip() or creator_user.username
+    creator_line = f"{creator_display} <{creator_user.email}>"
+
+    admins = User.objects.filter(is_superuser=True, is_active=True).exclude(
+        email=""
+    )
+    sent = 0
+    seen = set()
+    for admin in admins:
+        em = (admin.email or "").strip().lower()
+        if not em or em in seen:
+            continue
+        if em == creator_email:
+            continue
+        seen.add(em)
+        lang = (getattr(admin, "language", None) or "en").lower()
+        if lang not in EMAIL_LANGUAGES:
+            lang = "en"
+        if lang == "ar":
+            subject = f"تذكرة دعم جديدة #{ticket.id} - LOOP CRM"
+        else:
+            subject = f"New support ticket #{ticket.id} - LOOP CRM"
+        context = {
+            "greeting_name": admin.first_name or admin.username
+            or ("مرحباً" if lang == "ar" else "there"),
+            "ticket_title": ticket.title,
+            "ticket_id": ticket.id,
+            "company_name": company_name,
+            "creator_line": creator_line,
+            "description_preview": preview,
+            "support_email": smtp_settings.from_email,
+        }
+        if _send_event_email(
+            admin, subject, "support_ticket_new_admin", context, lang
+        ):
+            sent += 1
+    return sent
 
 
 def send_followup_reminder_email(

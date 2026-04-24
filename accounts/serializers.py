@@ -110,6 +110,12 @@ class UserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+    def validate_role(self, value):
+        valid_roles = {r.value for r in Role}
+        if value not in valid_roles:
+            raise serializers.ValidationError("Invalid role.")
+        return value
+
     @extend_schema_field(serializers.BooleanField())
     def get_is_me(self, obj):
         """Check if this user is the current user"""
@@ -697,6 +703,11 @@ class RegisterCompanySerializer(serializers.Serializer):
             specialization=company_data['specialization'],
             owner=owner,
         )
+
+        if company_data["specialization"] in ("real_estate", "services"):
+            from settings.lead_status_automation import ensure_visited_lead_status
+
+            ensure_visited_lead_status(company)
 
         # Link company to owner
         owner.company = company

@@ -15,8 +15,6 @@ from ..models import (
     Subscription,
     Payment,
     PaymentStatus,
-    Invoice,
-    InvoiceStatus,
 )
 from ..serializers import CreateFibPaymentSerializer
 from ..fib_utils import get_fib_gateway, create_fib_payment_session
@@ -203,13 +201,6 @@ def fib_callback(request):
                 logger.error("FIB billing apply failed: %s", err, exc_info=True)
                 return error_response(str(err), code="billing_error", status_code=status.HTTP_400_BAD_REQUEST)
 
-            due = subscription.end_date.date() if subscription.end_date else timezone.now().date()
-            Invoice.objects.create(
-                subscription=subscription,
-                amount=pay_usd,
-                due_date=due,
-                status=InvoiceStatus.PAID.value,
-            )
         logger.info(
             "FIB payment PAID: subscription_id=%s, amount_usd=%s, end_date=%s",
             subscription_id,

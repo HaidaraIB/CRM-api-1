@@ -6,11 +6,13 @@ from .models import (
     LeadStage,
     LeadStatus,
     CallMethod,
+    VisitType,
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
     SystemSettings,
     PlatformTwilioSettings,
+    BillingSettings,
 )
 from integrations.policy import (
     INTEGRATION_POLICY_DEFAULTS,
@@ -122,10 +124,11 @@ class LeadStatusSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "automation_key",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at", "automation_key"]
 
 
 class LeadStatusListSerializer(serializers.ModelSerializer):
@@ -145,8 +148,10 @@ class LeadStatusListSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "is_active",
+            "automation_key",
             "created_at",
         ]
+        read_only_fields = ["automation_key"]
 
 
 @extend_schema_serializer(component_name="CallMethod")
@@ -189,9 +194,48 @@ class CallMethodListSerializer(serializers.ModelSerializer):
         ]
 
 
+@extend_schema_serializer(component_name="VisitType")
+class VisitTypeSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = VisitType
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
+            "company",
+            "company_name",
+            "is_active",
+            "is_default",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class VisitTypeListSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = VisitType
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
+            "company",
+            "company_name",
+            "is_active",
+            "is_default",
+            "created_at",
+        ]
+
+
 @extend_schema_serializer(component_name="SMTPSettings")
 class SMTPSettingsSerializer(serializers.ModelSerializer):
-    """Serializer for SMTP Settings"""
+    """Serializer for platform outbound email (Resend). Legacy SMTP fields are kept for API compatibility."""
     password = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
@@ -211,10 +255,17 @@ class SMTPSettingsSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {
+            "from_name": {
+                "help_text": "Inbox display name. Leave blank to use LOOP CRM (override with PLATFORM_EMAIL_SENDER_DISPLAY_NAME).",
+                "required": False,
+                "allow_blank": True,
+            },
+        }
 
     def validate(self, data):
-        """Validate SMTP settings"""
-        if data.get('use_tls') and data.get('use_ssl'):
+        """Validate stored settings (legacy TLS/SSL mutual exclusion)."""
+        if data.get("use_tls") and data.get("use_ssl"):
             raise serializers.ValidationError("Cannot use both TLS and SSL. Choose one.")
         return data
 
@@ -379,4 +430,37 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
             )
         return instance
 
+
+class BillingSettingsSerializer(serializers.ModelSerializer):
+    logo_url = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = BillingSettings
+        fields = [
+            "id",
+            "issuer_name",
+            "issuer_address",
+            "issuer_email",
+            "issuer_phone",
+            "issuer_tax_id",
+            "footer_text",
+            "payment_instructions",
+            "logo",
+            "logo_url",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "logo_url", "created_at", "updated_at"]
+
+    def get_logo_url(self, obj):
+        if not obj.logo:
+            return None
+        request = self.context.get("request")
+        try:
+            url = obj.logo.url
+        except Exception:
+            return None
+        if request:
+            return request.build_absolute_uri(url)
+        return url
 

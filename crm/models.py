@@ -461,6 +461,51 @@ class ClientCall(models.Model):
         return f"{self.client.name} - {call_method_name}"
 
 
+class ClientVisit(models.Model):
+    """Site / office visit log for real_estate and services companies."""
+
+    client = models.ForeignKey(
+        Client, on_delete=models.CASCADE, related_name="client_visits"
+    )
+    visit_type = models.ForeignKey(
+        "settings.VisitType",
+        on_delete=models.SET_NULL,
+        related_name="client_visits",
+        blank=True,
+        null=True,
+        help_text="Visit type from company settings",
+    )
+    summary = models.TextField(blank=True, null=True)
+    visit_datetime = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When the visit occurred",
+    )
+    upcoming_visit_date = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="Optional scheduled next visit",
+    )
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="created_client_visits",
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "crm_client_visit"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        vt = self.visit_type.name if self.visit_type else "No type"
+        return f"{self.client.name} - {vt}"
+
+
 class Campaign(models.Model):
     code = models.CharField(max_length=50)
     name = models.CharField(max_length=255)

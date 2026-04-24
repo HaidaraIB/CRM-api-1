@@ -19,7 +19,6 @@ from ..models import (
     Payment,
     PaymentStatus,
     PaymentGateway,
-    InvoiceStatus,
 )
 from ..serializers import CreateQicardPaymentSerializer
 from ..qicard_utils import (

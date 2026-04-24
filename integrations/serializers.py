@@ -167,6 +167,8 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
             'auth_token_masked',
             'sender_id',
             'is_enabled',
+            'lead_created_sms_enabled',
+            'lead_created_sms_template',
             'created_at',
             'updated_at',
         ]

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>{{ invoice.invoice_number }}</title>
+  <!--[if mso]>
+  <style type="text/css">body, table, td { font-family: Arial, sans-serif !important; }</style>
+  <![endif]-->
+</head>
+<body style="margin:0;padding:0;background-color:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#f3f4f6;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width:600px;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+          <tr>
+            <td style="padding:28px 32px 20px 32px;border-bottom:3px solid #4f46e5;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td valign="top" style="text-align:left;">
+                    <p style="margin:0 0 4px 0;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#6b7280;">{{ label_invoice }}</p>
+                    <h1 style="margin:0;font-size:24px;font-weight:700;color:#111827;line-height:1.2;">{{ invoice.invoice_number }}</h1>
+                    <p style="margin:10px 0 0 0;font-size:13px;color:#4b5563;">{{ label_for }} <strong style="color:#111827;">{{ company_name }}</strong></p>
+                    <p style="margin:6px 0 0 0;font-size:12px;color:#6b7280;">{{ from_name }}</p>
+                  </td>
+                  <td valign="top" style="text-align:right;width:140px;">
+                    <p style="margin:0;font-size:11px;color:#6b7280;">{{ label_issue_date }}</p>
+                    <p style="margin:4px 0 0 0;font-size:13px;font-weight:600;color:#111827;">{{ invoice_view.issue_date_str }}</p>
+                    {% if invoice_view.due_date_str %}
+                    <p style="margin:12px 0 0 0;font-size:11px;color:#6b7280;">{{ label_due_date }}</p>
+                    <p style="margin:4px 0 0 0;font-size:13px;font-weight:600;color:#111827;">{{ invoice_view.due_date_str }}</p>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 32px;">
+              <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#374151;">{{ greeting }}</p>
+              <p style="margin:0 0 24px 0;font-size:14px;line-height:1.65;color:#4b5563;">{{ intro_prefix }}<strong>{{ invoice.invoice_number }}</strong>{{ intro_suffix }}</p>
+
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;">
+                <tr>
+                  <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;">
+                    <p style="margin:0 0 4px 0;font-size:11px;font-weight:600;text-transform:uppercase;color:#6b7280;">{{ label_company }}</p>
+                    <p style="margin:0;font-size:15px;font-weight:600;color:#111827;">{{ company_name }}</p>
+                  </td>
+                </tr>
+                {% if invoice.line_description %}
+                <tr>
+                  <td style="padding:14px 18px;border-bottom:1px solid #e5e7eb;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="font-size:11px;color:#6b7280;width:42%;">{{ label_description }}</td>
+                        <td style="font-size:14px;color:#374151;text-align:right;">{{ invoice.line_description }}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                {% endif %}
+                <tr>
+                  <td style="padding:14px 18px;border-bottom:1px solid #e5e7eb;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="font-size:11px;color:#6b7280;width:42%;">{{ label_status }}</td>
+                        <td style="text-align:right;">
+                          <span style="display:inline-block;padding:4px 12px;font-size:12px;font-weight:600;border-radius:4px;background-color:{{ invoice_view.status_bg }};color:{{ invoice_view.status_fg }};">{{ payment_status_label }}</span>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:16px 18px;border-bottom:1px solid #e5e7eb;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="font-size:11px;color:#6b7280;">{{ label_subtotal }}</td>
+                        <td style="font-size:14px;color:#111827;text-align:right;font-weight:500;">{{ invoice_view.subtotal_display }}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:18px 18px;background:#f3f4f6;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="font-size:12px;font-weight:600;text-transform:uppercase;color:#4f46e5;">{{ label_total }}</td>
+                        <td style="font-size:22px;font-weight:700;color:#4f46e5;text-align:right;">{{ invoice_view.total_display }}</td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-top:24px;border:1px solid #d1fae5;border-radius:6px;background:#ecfdf5;">
+                <tr>
+                  <td style="padding:16px 18px;">
+                    <p style="margin:0;font-size:13px;font-weight:600;color:#047857;">{{ attachment_title }}</p>
+                    <p style="margin:6px 0 0 0;font-size:12px;line-height:1.55;color:#065f46;">{{ attachment_prefix }}<strong>{{ invoice.invoice_number }}.pdf</strong>{{ attachment_suffix }}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:24px 0 0 0;font-size:13px;line-height:1.6;color:#6b7280;">{{ closing }}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 28px 32px;text-align:center;border-top:1px solid #e5e7eb;">
+              <p style="margin:16px 0 0 0;font-size:11px;color:#9ca3af;line-height:1.5;">© {% now "Y" %} {{ footer_rights }}</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

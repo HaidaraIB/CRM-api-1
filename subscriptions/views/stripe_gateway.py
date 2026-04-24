@@ -17,7 +17,6 @@ from ..models import (
     PaymentStatus,
     PaymentGateway,
     PaymentGatewayStatus,
-    InvoiceStatus,
 )
 from ..serializers import CreateStripePaymentSerializer
 from ..stripe_utils import verify_stripe_payment, create_stripe_payment_session

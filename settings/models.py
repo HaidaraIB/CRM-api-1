@@ -91,6 +91,12 @@ class LeadStatus(models.Model):
         "companies.Company", on_delete=models.CASCADE, related_name="lead_statuses"
     )
     is_active = models.BooleanField(default=True)
+    automation_key = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="Reserved key for system automation (e.g. visited). Display name may differ.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -99,6 +105,13 @@ class LeadStatus(models.Model):
         db_table = "settings_lead_status"
         ordering = ["-is_default", "name"]
         unique_together = ["name", "company"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company", "automation_key"],
+                condition=models.Q(automation_key__isnull=False),
+                name="uniq_leadstatus_company_automation_key_when_set",
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -106,42 +119,51 @@ class LeadStatus(models.Model):
 
 class SMTPSettings(models.Model):
     """
-    SMTP configuration for sending emails.
-    Only one instance should exist (singleton pattern).
+    Platform outbound email settings (Resend). Only one row (singleton).
+
+    Sending uses the Resend HTTP API; set RESEND_API_KEY in the server environment.
+    Host/port/username/password are legacy DB columns and are not used for transport.
     """
 
     host = models.CharField(
-        max_length=255, help_text="SMTP server host (e.g., smtp.gmail.com)"
+        max_length=255,
+        help_text="Legacy field (unused). Resend is configured via RESEND_API_KEY.",
     )
     port = models.IntegerField(
         default=587,
-        help_text="SMTP server port (587 for TLS, 465 for SSL, 25 for plain)",
+        help_text="Legacy field (unused).",
     )
-    use_tls = models.BooleanField(default=True, help_text="Use TLS encryption")
-    use_ssl = models.BooleanField(default=False, help_text="Use SSL encryption")
+    use_tls = models.BooleanField(default=True, help_text="Legacy field (unused).")
+    use_ssl = models.BooleanField(default=False, help_text="Legacy field (unused).")
     username = models.CharField(
-        max_length=255, help_text="SMTP username (usually email address)"
+        max_length=255,
+        help_text="Legacy field (unused).",
     )
     password = models.CharField(
-        max_length=255, help_text="SMTP password (leave empty to keep current)"
+        max_length=255,
+        help_text="Legacy field (unused).",
     )
-    from_email = models.EmailField(help_text="Default 'from' email address")
+    from_email = models.EmailField(
+        help_text="Default 'from' address (must match a domain verified in Resend)"
+    )
     from_name = models.CharField(
-        max_length=255, blank=True, help_text="Default 'from' name"
+        max_length=255, blank=True, help_text="Default 'from' display name"
     )
-    is_active = models.BooleanField(default=False, help_text="Enable/disable SMTP")
+    is_active = models.BooleanField(
+        default=False, help_text="Enable/disable outbound email (Resend)"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "settings_smtp_settings"
-        verbose_name = "SMTP Settings"
-        verbose_name_plural = "SMTP Settings"
+        verbose_name = "Outbound email (Resend)"
+        verbose_name_plural = "Outbound email (Resend)"
         ordering = ["-updated_at"]
 
     def __str__(self):
-        return f"SMTP: {self.host}:{self.port}"
+        return f"Email: {self.from_email} (active={self.is_active})"
 
     @classmethod
     def get_settings(cls):
@@ -251,6 +273,30 @@ class CallMethod(models.Model):
 
     class Meta:
         db_table = "settings_call_method"
+        ordering = ["-is_default", "name"]
+        unique_together = ["name", "company"]
+
+    def __str__(self):
+        return self.name
+
+
+class VisitType(models.Model):
+    """Configurable visit categories for real_estate / services (parallel to CallMethod)."""
+
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    color = models.CharField(max_length=7, default="#808080")
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="visit_types"
+    )
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_visit_type"
         ordering = ["-is_default", "name"]
         unique_together = ["name", "company"]
 
@@ -405,5 +451,41 @@ class PlatformTwilioSettings(models.Model):
     @classmethod
     def get_settings(cls):
         """Get the singleton instance."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class BillingSettings(models.Model):
+    """
+    Platform issuer details and logo for SaaS subscription invoices (PDF / email).
+    Singleton (pk=1).
+    """
+
+    issuer_name = models.CharField(max_length=255, blank=True, default="")
+    issuer_address = models.TextField(blank=True, default="")
+    issuer_email = models.EmailField(blank=True, default="")
+    issuer_phone = models.CharField(max_length=64, blank=True, default="")
+    issuer_tax_id = models.CharField(max_length=64, blank=True, default="")
+    footer_text = models.TextField(blank=True, default="")
+    payment_instructions = models.TextField(blank=True, default="")
+    logo = models.ImageField(upload_to="billing/", blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_billing_settings"
+        verbose_name = "Billing settings (invoices)"
+        verbose_name_plural = "Billing settings (invoices)"
+
+    def __str__(self):
+        return "Billing settings"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_settings(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj

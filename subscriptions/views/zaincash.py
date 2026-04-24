@@ -20,8 +20,6 @@ from ..models import (
     PaymentGateway,
     PaymentStatus,
     PaymentGatewayStatus,
-    Invoice,
-    InvoiceStatus,
 )
 from ..serializers import CreateZaincashPaymentSerializer
 from ..zaincash_utils import verify_zaincash_payment, create_zaincash_payment_session
@@ -610,14 +608,6 @@ def zaincash_return(request):
                         f"{frontend_url}/payment/success?subscription_id={subscription_id}"
                         f"&status=failed&message={str(err)}"
                     )
-
-            due = subscription.end_date.date() if subscription.end_date else timezone.now().date()
-            Invoice.objects.create(
-                subscription=subscription,
-                amount=amount_usd,
-                due_date=due,
-                status=InvoiceStatus.PAID.value,
-            )
 
             logger.info(
                 "Zain Cash payment completed for subscription %s, amount: %s %s (≈%s USD), billing_cycle: %s",

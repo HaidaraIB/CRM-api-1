@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
+from .models import Plan, Subscription, Payment, Invoice, InvoiceSequence, Broadcast, PaymentGateway
 
 
 @admin.register(Plan)
@@ -214,29 +214,38 @@ class PaymentAdmin(admin.ModelAdmin):
     )
 
 
+@admin.register(InvoiceSequence)
+class InvoiceSequenceAdmin(admin.ModelAdmin):
+    list_display = ["year", "last_number", "updated_at"]
+    ordering = ["-year"]
+
+
 @admin.register(Invoice)
 class InvoiceAdmin(admin.ModelAdmin):
     """Admin configuration for Invoice model"""
 
     list_display = [
         "invoice_number",
+        "payment",
         "subscription",
         "amount",
+        "currency",
         "due_date",
-        "status",
         "created_at",
     ]
     list_filter = [
-        "status",
+        "currency",
         "due_date",
         "created_at",
     ]
     search_fields = [
         "invoice_number",
+        "company_name",
+        "plan_name",
         "subscription__company__name",
     ]
     ordering = ["-created_at"]
-    readonly_fields = ["created_at", "updated_at"]
+    readonly_fields = ["created_at", "updated_at", "payment", "subscription"]
 
 
 @admin.register(Broadcast)

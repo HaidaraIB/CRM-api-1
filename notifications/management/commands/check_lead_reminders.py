@@ -111,7 +111,7 @@ class Command(BaseCommand):
                     )
                     log_row.push_sent = True
 
-                    # Email (best-effort; respects SMTP enabled)
+                    # Email (best-effort; respects outbound email enabled)
                     email_ok = send_followup_reminder_email(
                         user,
                         reminder_kind="lead",

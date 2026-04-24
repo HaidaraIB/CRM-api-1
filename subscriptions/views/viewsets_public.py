@@ -1,6 +1,7 @@
 import logging
 from datetime import timedelta
 
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import viewsets, filters, generics, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -21,7 +22,6 @@ from ..models import (
     Broadcast,
     PaymentGateway,
     BroadcastStatus,
-    InvoiceStatus,
     PaymentGatewayStatus,
 )
 from ..serializers import (
@@ -407,18 +407,30 @@ class PaymentViewSet(viewsets.ModelViewSet):
         return PaymentSerializer
 
 
-class InvoiceViewSet(viewsets.ModelViewSet):
+class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    ViewSet for managing Invoice instances.
-    Provides CRUD operations: Create, Read, Update, Delete
-    Only Super Admin can manage invoices
+    Read-only invoices (auto-created per Payment). PDF download and email actions only.
     """
 
-    queryset = Invoice.objects.all()
+    queryset = Invoice.objects.select_related(
+        "payment",
+        "payment__target_plan",
+        "subscription",
+        "subscription__company",
+        "subscription__company__owner",
+        "subscription__plan",
+    ).all()
     permission_classes = [IsAuthenticated, CanManagePayments]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["invoice_number", "subscription__company__name", "status"]
-    ordering_fields = ["created_at", "due_date", "amount"]
+    search_fields = [
+        "invoice_number",
+        "company_name",
+        "plan_name",
+        "subscription__company__name",
+        "payment__payment_status",
+        "legacy_payment_status",
+    ]
+    ordering_fields = ["created_at", "due_date", "amount", "invoice_number"]
     ordering = ["-created_at"]
 
     def get_serializer_class(self):
@@ -426,13 +438,27 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return InvoiceListSerializer
         return InvoiceSerializer
 
-    @action(detail=True, methods=["post"])
-    def mark_paid(self, request, pk=None):
-        """Mark an invoice as paid"""
+    @action(detail=True, methods=["get"], url_path="pdf")
+    def pdf(self, request, pk=None):
+        from subscriptions.invoicing import render_invoice_pdf_bytes
+
         invoice = self.get_object()
-        invoice.status = InvoiceStatus.PAID.value
-        invoice.save()
-        return success_response(data={"status": "Invoice marked as paid"})
+        data = render_invoice_pdf_bytes(invoice)
+        resp = HttpResponse(data, content_type="application/pdf")
+        resp["Content-Disposition"] = f'attachment; filename="{invoice.invoice_number}.pdf"'
+        return resp
+
+    @action(detail=True, methods=["post"], url_path="send-email")
+    def send_email(self, request, pk=None):
+        from subscriptions.invoicing import send_invoice_email
+
+        invoice = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        to_email = data.get("to")
+        ok, msg = send_invoice_email(invoice, to_email=to_email, language=None)
+        if not ok:
+            return error_response(msg, code="email_failed", status_code=status.HTTP_400_BAD_REQUEST)
+        return success_response(data={"status": "sent", "message": msg})
 
 
 class BroadcastViewSet(viewsets.ModelViewSet):

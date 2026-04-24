@@ -3,7 +3,7 @@ from django.db.models import Count
 from django.dispatch import receiver
 from django.utils import timezone
 from .models import Client, ClientTask, Deal
-from accounts.models import User
+from accounts.models import User, Role
 from notifications.services import NotificationService
 from notifications.models import NotificationType
 import logging
@@ -17,7 +17,7 @@ def get_least_busy_employee(company):
     """
     return User.objects.filter(
         company=company,
-        role='employee',
+        role=Role.EMPLOYEE.value,
         is_active=True
     ).annotate(
         client_count=Count('assigned_clients')
@@ -71,6 +71,33 @@ def update_last_contacted_from_call(sender, instance, created, **kwargs):
         # Use update to avoid triggering signals again
         from crm.models import Client
         Client.objects.filter(pk=instance.client.pk).update(last_contacted_at=timezone.now())
+
+
+@receiver(post_save, sender='crm.ClientVisit')
+def on_client_visit_post_save(sender, instance, created, **kwargs):
+    """
+    After a visit is logged: bump last_contacted_at and set lead status to Visited
+    for real_estate / services companies.
+    """
+    if not created or not instance.client_id:
+        return
+    from crm.models import Client
+    from settings.lead_status_automation import (
+        ensure_visited_lead_status,
+        get_visited_lead_status,
+    )
+
+    Client.objects.filter(pk=instance.client.pk).update(last_contacted_at=timezone.now())
+
+    client = instance.client
+    company = getattr(client, "company", None)
+    spec = getattr(company, "specialization", None) if company else None
+    if spec not in ("real_estate", "services"):
+        return
+
+    visited = get_visited_lead_status(company) or ensure_visited_lead_status(company)
+    if visited:
+        Client.objects.filter(pk=client.pk).update(status_id=visited.pk)
 
 
 # ==================== Notification Signals ====================
@@ -272,4 +299,16 @@ def notify_deal_closed(sender, instance, **kwargs):
             pass
         except Exception as e:
             logger.error(f"Error in notify_deal_closed: {e}")
+
+
+@receiver(post_save, sender=Client)
+def schedule_welcome_sms_on_new_client(sender, instance, created, **kwargs):
+    """Queue automated welcome SMS after DB commit (phones may be added in the same request)."""
+    if not created:
+        return
+    if not instance.company_id:
+        return
+    from integrations.services.lead_created_sms import schedule_lead_created_welcome_sms
+
+    schedule_lead_created_welcome_sms(instance.pk)
 

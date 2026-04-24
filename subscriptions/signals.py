@@ -9,6 +9,17 @@ from .models import Payment, PaymentStatus, Subscription
 
 logger = logging.getLogger(__name__)
 
+
+@receiver(post_save, sender=Payment)
+def create_invoice_for_payment(sender, instance, **kwargs):
+    """Every payment row gets exactly one read-only invoice (idempotent)."""
+    try:
+        from subscriptions.invoicing import ensure_invoice_for_payment
+
+        ensure_invoice_for_payment(instance)
+    except Exception:
+        logger.exception("create_invoice_for_payment failed for payment_id=%s", getattr(instance, "pk", None))
+
 # Store previous payment_status in pre_save so post_save can detect transition to COMPLETED
 _previous_payment_status = {}
 

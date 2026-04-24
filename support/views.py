@@ -89,10 +89,13 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
             company=self.request.user.company,
         )
         # Send confirmation email in the user's current language (from X-Language header or DB)
-        try:
-            from accounts.event_emails import send_support_ticket_created_email
-            from accounts.utils import get_email_language_for_user
+        from accounts.event_emails import (
+            send_support_ticket_created_email,
+            send_support_ticket_new_admin_notifications,
+        )
+        from accounts.utils import get_email_language_for_user
 
+        try:
             language = get_email_language_for_user(
                 self.request.user, self.request, default="en"
             )
@@ -102,4 +105,10 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.exception(
                 "Failed to send support ticket created email: %s", e
+            )
+        try:
+            send_support_ticket_new_admin_notifications(self.request.user, instance)
+        except Exception as e:
+            logger.exception(
+                "Failed to send super-admin support ticket notification: %s", e
             )

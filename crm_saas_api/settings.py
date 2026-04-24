@@ -325,6 +325,7 @@ STATICFILES_DIRS = [BASE_DIR / "static"] if (BASE_DIR / "static").exists() else 
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+(MEDIA_ROOT / "fonts").mkdir(parents=True, exist_ok=True)
 
 # Backups directory
 BACKUP_ROOT = Path(MEDIA_ROOT / "backups")
@@ -361,6 +362,14 @@ else:
 
 FRONTEND_APP_URL = os.getenv("FRONTEND_APP_URL")
 EMAIL_VERIFICATION_EXPIRY_HOURS = 48
+
+# Resend (https://resend.com/) — required when platform outbound email is enabled
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+
+# Shown in the inbox "From" name when SMTPSettings.from_name is empty (override via env if needed)
+PLATFORM_EMAIL_SENDER_DISPLAY_NAME = (
+    os.getenv("PLATFORM_EMAIL_SENDER_DISPLAY_NAME", "LOOP CRM").strip() or "LOOP CRM"
+)
 
 # ============================================================================
 # Django REST Framework Settings

@@ -8,7 +8,7 @@ from accounts.permissions import (
     IsAdminOrSupervisorLeadsOrReadOnlyForEmployee,
 )
 from crm_saas_api.responses import success_response, error_response
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientEvent
+from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientVisit, ClientEvent
 from accounts.models import User
 from .serializers import (
     ClientSerializer,
@@ -23,6 +23,8 @@ from .serializers import (
     ClientTaskListSerializer,
     ClientCallSerializer,
     ClientCallListSerializer,
+    ClientVisitSerializer,
+    ClientVisitListSerializer,
     ClientEventSerializer,
 )
 
@@ -46,12 +48,16 @@ class ClientViewSet(viewsets.ModelViewSet):
             "phone_numbers",
             "client_tasks__stage",
             "client_calls__call_method",
+            "client_visits__visit_type",
         )
 
         if user.is_admin():
             return queryset.filter(company=user.company)
 
         if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            return queryset.filter(company=user.company)
+
+        if user.is_data_entry():
             return queryset.filter(company=user.company)
 
         if user.is_employee():
@@ -81,6 +87,18 @@ class ClientViewSet(viewsets.ModelViewSet):
                 error_key="plan_quota_max_clients_exceeded",
             )
         serializer.save(company=company)
+        client = serializer.instance
+        if user.is_data_entry() and company and client and not client.assigned_to:
+            from crm.signals import get_least_busy_employee
+            from django.utils import timezone as dj_tz
+
+            assignee = get_least_busy_employee(company)
+            if not assignee:
+                assignee = company.owner
+            if assignee:
+                client.assigned_to = assignee
+                client.assigned_at = dj_tz.now()
+                client.save(update_fields=["assigned_to", "assigned_at"])
 
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):
@@ -412,6 +430,46 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return ClientTaskListSerializer
         return ClientTaskSerializer
+
+
+class ClientVisitViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing ClientVisit instances (real_estate / services)."""
+
+    queryset = ClientVisit.objects.all()
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["summary", "visit_type__name", "client__name"]
+    ordering_fields = ["created_at", "visit_datetime", "visit_type__name"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset().select_related(
+            "client", "client__company", "visit_type", "created_by",
+        )
+
+        if user.is_admin():
+            queryset = queryset.filter(client__company=user.company)
+        elif user.is_employee():
+            queryset = queryset.filter(client__assigned_to=user)
+        elif user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            queryset = queryset.filter(client__company=user.company)
+        else:
+            queryset = queryset.none()
+
+        client_id = self.request.query_params.get("client", None)
+        if client_id:
+            queryset = queryset.filter(client_id=client_id)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ClientVisitListSerializer
+        return ClientVisitSerializer
 
 
 class ClientCallViewSet(viewsets.ModelViewSet):

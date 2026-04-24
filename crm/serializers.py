@@ -1,10 +1,20 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_serializer
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientPhoneNumber, ClientEvent
+from .models import (
+    Client,
+    Deal,
+    Task,
+    Campaign,
+    ClientTask,
+    ClientCall,
+    ClientVisit,
+    ClientPhoneNumber,
+    ClientEvent,
+)
 
 
 class ClientActivitySummaryMixin:
-    """Expose the latest visible activity for clients across tasks and calls."""
+    """Expose the latest visible activity for clients across tasks, calls, and visits."""
 
     last_feedback = serializers.SerializerMethodField()
     last_stage = serializers.SerializerMethodField()
@@ -14,22 +24,31 @@ class ClientActivitySummaryMixin:
     def _get_latest_activity(client):
         latest_task = client.client_tasks.order_by("-created_at").first()
         latest_call = client.client_calls.order_by("-created_at").first()
+        latest_visit = client.client_visits.order_by("-created_at").first()
 
-        latest_task_at = latest_task.created_at if latest_task else None
-        latest_call_at = latest_call.created_at if latest_call else None
-
-        if latest_task_at and latest_call_at:
-            return ("task", latest_task) if latest_task_at >= latest_call_at else ("call", latest_call)
+        candidates = []
         if latest_task:
-            return ("task", latest_task)
+            candidates.append(("task", latest_task, latest_task.created_at))
         if latest_call:
-            return ("call", latest_call)
-        return (None, None)
+            candidates.append(("call", latest_call, latest_call.created_at))
+        if latest_visit:
+            candidates.append(("visit", latest_visit, latest_visit.created_at))
+        if not candidates:
+            return (None, None)
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        kind, obj, _ = candidates[0]
+        return (kind, obj)
 
     def get_last_feedback(self, obj):
         activity_type, activity = self._get_latest_activity(obj)
         if not activity:
             return None
+        if activity_type == "visit":
+            summary = getattr(activity, "summary", None)
+            if summary:
+                return summary
+            visit_type = getattr(activity, "visit_type", None)
+            return getattr(visit_type, "name", None) if visit_type else None
         notes = getattr(activity, "notes", None)
         if notes:
             return notes
@@ -46,6 +65,9 @@ class ClientActivitySummaryMixin:
         if activity_type == "task":
             stage = getattr(activity, "stage", None)
             return getattr(stage, "name", None) if stage else None
+        if activity_type == "visit":
+            visit_type = getattr(activity, "visit_type", None)
+            return getattr(visit_type, "name", None) if visit_type else None
         call_method = getattr(activity, "call_method", None)
         return getattr(call_method, "name", None) if call_method else None
 
@@ -187,6 +209,18 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
                     "Status must belong to the same company as the client."
                 )
         return value
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        if request and request.user.is_authenticated and request.user.is_data_entry():
+            attrs.pop("assigned_to", None)
+            company = getattr(request.user, "company", None)
+            if not company:
+                raise serializers.ValidationError(
+                    {"company": "Data entry users must belong to a company."}
+                )
+            # Assignment (least-busy employee, else company owner) runs in ClientViewSet.perform_create.
+        return attrs
 
     def create(self, validated_data):
         """Create client and handle phone numbers"""
@@ -712,6 +746,101 @@ class ClientCallSerializer(serializers.ModelSerializer):
                     "Call method must belong to the same company as the client."
                 )
         return value
+
+
+@extend_schema_serializer(component_name="ClientVisit")
+class ClientVisitSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
+    visit_type_name = serializers.CharField(source="visit_type.name", read_only=True)
+
+    class Meta:
+        model = ClientVisit
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "visit_type",
+            "visit_type_name",
+            "summary",
+            "visit_datetime",
+            "upcoming_visit_date",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate(self, data):
+        request = self.context.get("request")
+        company = getattr(getattr(request, "user", None), "company", None)
+        if company and getattr(company, "specialization", None) not in (
+            "real_estate",
+            "services",
+        ):
+            raise serializers.ValidationError(
+                "Visits are only available for real estate and services companies."
+            )
+        if self.instance is None:
+            if not data.get("visit_datetime"):
+                raise serializers.ValidationError(
+                    {"visit_datetime": "This field is required."}
+                )
+            if not data.get("visit_type"):
+                raise serializers.ValidationError(
+                    {"visit_type": "This field is required."}
+                )
+            summary = data.get("summary")
+            if summary is None or str(summary).strip() == "":
+                raise serializers.ValidationError(
+                    {"summary": "This field is required."}
+                )
+        return data
+
+    def validate_visit_type(self, value):
+        if value:
+            client = None
+            if self.instance and self.instance.client_id:
+                client = self.instance.client
+            elif hasattr(self, "initial_data"):
+                client_id = self.initial_data.get("client")
+                if client_id:
+                    try:
+                        client = Client.objects.get(pk=client_id)
+                    except Client.DoesNotExist:
+                        pass
+            if client and value.company_id != client.company_id:
+                raise serializers.ValidationError(
+                    "Visit type must belong to the same company as the client."
+                )
+        return value
+
+
+class ClientVisitListSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
+    visit_type_name = serializers.CharField(source="visit_type.name", read_only=True)
+
+    class Meta:
+        model = ClientVisit
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "visit_type",
+            "visit_type_name",
+            "summary",
+            "visit_datetime",
+            "upcoming_visit_date",
+            "created_by",
+            "created_by_username",
+            "created_at",
+        ]
 
 
 class ClientCallListSerializer(serializers.ModelSerializer):

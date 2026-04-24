@@ -43,6 +43,7 @@ from ..policy import get_effective_integration_policy, get_plan_integration_acce
 from settings.models import SystemSettings
 
 logger = logging.getLogger(__name__)
+from ..services.twilio_phone import normalize_phone_to_e164
 from ..services.twilio_text import strip_ansi, twilio_error_to_key
 
 
@@ -81,6 +82,8 @@ def twilio_settings_view(request):
                     'auth_token_masked': None,
                     'sender_id': '',
                     'is_enabled': False,
+                    'lead_created_sms_enabled': False,
+                    'lead_created_sms_template': "Hello [first_name], we'll contact you soon!",
                 },
             )
         serializer = TwilioSettingsSerializer(twilio_settings)
@@ -164,12 +167,7 @@ def send_lead_sms_view(request):
         from twilio.rest import Client as TwilioClient
         from twilio.base.exceptions import TwilioRestException
         twilio_client = TwilioClient(account_sid, auth_token)
-        # Normalize phone to E.164 (same as Digital Marketing Manager: 07... -> +964..., then ensure +)
-        to = phone_number.strip().replace(' ', '').replace('-', '')
-        if to.startswith('07') and len(to) >= 10:
-            to = '+964' + to[1:]
-        elif not to.startswith('+'):
-            to = '+' + to
+        to = normalize_phone_to_e164(phone_number)
         message = twilio_client.messages.create(
             body=body,
             from_=from_value,

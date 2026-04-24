@@ -205,6 +205,16 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             'body': '{minutes_remaining} minutes remaining for follow-up call with {lead_name}'
         }
     },
+    'visit_reminder': {
+        'ar': {
+            'title': 'تذكير زيارة',
+            'body': 'تبقى {minutes_remaining} دقيقة على موعد الزيارة القادمة مع {lead_name}'
+        },
+        'en': {
+            'title': 'Visit Reminder',
+            'body': '{minutes_remaining} minutes remaining for upcoming visit with {lead_name}'
+        }
+    },
     'task_completed': {
         'ar': {
             'title': 'مهمة مكتملة',

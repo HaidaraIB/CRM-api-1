@@ -1,37 +1,58 @@
 """
 Shared utilities used across multiple Django apps.
-Centralises duplicated logic (SMTP connections, code generation, etc.).
+Centralises duplicated logic (outbound email connections, code generation, etc.).
 """
-from django.core.mail.backends.smtp import EmailBackend
+from django.conf import settings as django_settings
+
+from crm_saas_api.email_exceptions import OutboundEmailNotConfiguredError, SMTPNotActiveError
+from crm_saas_api.resend_email_backend import ResendEmailBackend
 
 
-class SMTPNotActiveError(RuntimeError):
-    """Raised when SMTP settings are not active."""
-    pass
+def get_platform_email_display_name(smtp_settings):
+    """
+    Display name for the From header and templates.
+    Uses SMTPSettings.from_name when set; otherwise PLATFORM_EMAIL_SENDER_DISPLAY_NAME.
+    """
+    custom = (smtp_settings.from_name or "").strip()
+    if custom:
+        return custom
+    fallback = getattr(
+        django_settings, "PLATFORM_EMAIL_SENDER_DISPLAY_NAME", "LOOP CRM"
+    ) or "LOOP CRM"
+    return str(fallback).strip() or "LOOP CRM"
+
+
+def format_platform_from_address(smtp_settings):
+    """RFC 5322 From line: ``Display Name <addr@domain>`` for Resend / Django mail."""
+    name = get_platform_email_display_name(smtp_settings)
+    return f"{name} <{smtp_settings.from_email}>"
 
 
 def get_smtp_connection():
     """
-    Build and return an SMTP EmailBackend from the platform SMTPSettings singleton.
-    Raises SMTPNotActiveError if SMTP is not configured / active.
+    Build and return a Resend-backed email backend from platform settings.
+
+    Uses ``SMTPSettings`` for the enable switch and from-address branding; the
+    Resend API key must be set as ``RESEND_API_KEY`` in the environment / Django settings.
+
+    Raises OutboundEmailNotConfiguredError (alias ``SMTPNotActiveError``) when email
+    is disabled or Resend is not configured.
     """
     from settings.models import SMTPSettings
 
     smtp_settings = SMTPSettings.get_settings()
     if not smtp_settings.is_active:
-        raise SMTPNotActiveError(
-            "SMTP is not active. Please configure and enable SMTP settings."
+        raise OutboundEmailNotConfiguredError(
+            "Outbound email is disabled. Enable it in platform email settings and set RESEND_API_KEY."
         )
 
-    return EmailBackend(
-        host=smtp_settings.host,
-        port=smtp_settings.port,
-        username=smtp_settings.username,
-        password=smtp_settings.password,
-        use_tls=smtp_settings.use_tls,
-        use_ssl=smtp_settings.use_ssl,
-        fail_silently=False,
-    )
+    api_key = (getattr(django_settings, "RESEND_API_KEY", None) or "").strip()
+    if not api_key:
+        raise OutboundEmailNotConfiguredError(
+            "RESEND_API_KEY is not set. Add it to the environment to send email via Resend."
+        )
+
+    return ResendEmailBackend(api_key=api_key, fail_silently=False)
 
 
 def generate_sequential_code(model_class, company, prefix, max_attempts=1000):

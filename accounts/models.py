@@ -12,6 +12,7 @@ class Role(Enum):
     ADMIN = "admin"
     SUPERVISOR = "supervisor"
     EMPLOYEE = "employee"
+    DATA_ENTRY = "data_entry"
 
     @classmethod
     def choices(cls):
@@ -45,6 +46,9 @@ class User(AbstractUser):
 
     def is_employee(self):
         return self.role == Role.EMPLOYEE.value
+
+    def is_data_entry(self):
+        return self.role == Role.DATA_ENTRY.value
 
     def is_supervisor(self):
         return self.role == Role.SUPERVISOR.value

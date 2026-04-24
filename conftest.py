@@ -187,3 +187,25 @@ def authenticated_employee(api_client, employee_user, subscription):
     """APIClient authenticated as employee with an active subscription."""
     api_client.force_authenticate(user=employee_user)
     return api_client
+
+
+@pytest.fixture
+def data_entry_user(company, db):
+    from accounts.models import User
+
+    return User.objects.create_user(
+        username="data_entry_user",
+        email="dataentry@test.com",
+        password="testpass123",
+        first_name="Data",
+        last_name="Entry",
+        company=company,
+        role="data_entry",
+    )
+
+
+@pytest.fixture
+def authenticated_data_entry(api_client, data_entry_user, subscription):
+    """APIClient authenticated as data_entry with an active subscription."""
+    api_client.force_authenticate(user=data_entry_user)
+    return api_client

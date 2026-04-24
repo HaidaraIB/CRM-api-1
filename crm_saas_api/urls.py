@@ -60,6 +60,7 @@ from crm.views import (
     CampaignViewSet,
     ClientTaskViewSet,
     ClientCallViewSet,
+    ClientVisitViewSet,
     ClientEventViewSet,
 )
 from settings.views import (
@@ -67,10 +68,12 @@ from settings.views import (
     LeadStageViewSet,
     LeadStatusViewSet,
     CallMethodViewSet,
+    VisitTypeViewSet,
     SystemBackupViewSet,
     SystemAuditLogViewSet,
     SystemSettingsViewSet,
     PlatformTwilioSettingsViewSet,
+    BillingSettingsViewSet,
 )
 from settings.views_public import MobileAppVersionPublicView
 from real_estate.views import (
@@ -117,6 +120,7 @@ router.register(r"companies", CompanyViewSet, basename="company")
 router.register(r"clients", ClientViewSet, basename="client")
 router.register(r"client-tasks", ClientTaskViewSet, basename="clienttask")
 router.register(r"client-calls", ClientCallViewSet, basename="clientcall")
+router.register(r"client-visits", ClientVisitViewSet, basename="clientvisit")
 router.register(r"client-events", ClientEventViewSet, basename="clientevent")
 
 router.register(r"deals", DealViewSet, basename="deal")
@@ -127,6 +131,7 @@ router.register(r"settings/channels", ChannelViewSet, basename="channel")
 router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
 router.register(r"settings/call-methods", CallMethodViewSet, basename="callmethod")
+router.register(r"settings/visit-types", VisitTypeViewSet, basename="visittype")
 router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup")
 router.register(
     r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog"
@@ -136,6 +141,9 @@ router.register(
 )
 router.register(
     r"settings/platform-twilio", PlatformTwilioSettingsViewSet, basename="platformtwiliosettings"
+)
+router.register(
+    r"settings/billing", BillingSettingsViewSet, basename="billingsettings"
 )
 
 router.register(r"developers", DeveloperViewSet, basename="developer")

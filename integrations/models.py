@@ -363,6 +363,18 @@ class TwilioSettings(models.Model):
         default=False,
         help_text="الربط مفعل",
     )
+    lead_created_sms_enabled = models.BooleanField(
+        default=False,
+        help_text="Send an automated SMS when a new lead (Client) is created.",
+    )
+    lead_created_sms_template = models.TextField(
+        blank=True,
+        default="Hello [first_name], we'll contact you soon!",
+        help_text=(
+            "SMS body template for new leads. Placeholders: [name], [first_name], [phone], "
+            "[lead_company_name], [status], [company_name], [budget], [priority], [type], [source]."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

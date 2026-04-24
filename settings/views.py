@@ -20,11 +20,13 @@ from .models import (
     LeadStage,
     LeadStatus,
     CallMethod,
+    VisitType,
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
     SystemSettings,
     PlatformTwilioSettings,
+    BillingSettings,
 )
 from .serializers import (
     ChannelSerializer,
@@ -35,11 +37,14 @@ from .serializers import (
     LeadStatusListSerializer,
     CallMethodSerializer,
     CallMethodListSerializer,
+    VisitTypeSerializer,
+    VisitTypeListSerializer,
     SMTPSettingsSerializer,
     PlatformTwilioSettingsSerializer,
     SystemBackupSerializer,
     SystemAuditLogSerializer,
     SystemSettingsSerializer,
+    BillingSettingsSerializer,
 )
 from .services import create_database_backup, restore_database_backup, delete_backup
 
@@ -194,10 +199,46 @@ class CallMethodViewSet(viewsets.ModelViewSet):
         return CallMethodSerializer
 
 
+class VisitTypeViewSet(viewsets.ModelViewSet):
+    """
+    Admin/supervisor with can_manage_settings: full access; supervisor with can_manage_leads: read-only; employees: read-only.
+    """
+
+    queryset = VisitType.objects.all()
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "description"]
+    ordering_fields = ["is_default", "name", "created_at"]
+    ordering = ["-is_default", "name"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        return queryset.filter(company=user.company)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(company=user.company)
+
+    def perform_update(self, serializer):
+        if serializer.validated_data.get("is_default", False):
+            VisitType.objects.filter(
+                company=self.request.user.company,
+                is_default=True,
+            ).exclude(id=serializer.instance.id).update(is_default=False)
+        serializer.save()
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return VisitTypeListSerializer
+        return VisitTypeSerializer
+
+
 class SMTPSettingsViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing SMTP Settings.
-    Only SuperAdmin can manage SMTP settings.
+    ViewSet for managing platform outbound email (Resend): from address, name, enable flag.
+    Only SuperAdmin can manage these settings. API key is configured via RESEND_API_KEY on the server.
     Singleton pattern - only one instance exists.
     """
     queryset = SMTPSettings.objects.all()
@@ -360,5 +401,37 @@ class SystemSettingsViewSet(viewsets.ModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         """Override retrieve to always return singleton"""
         instance = SystemSettings.get_settings()
+        serializer = self.get_serializer(instance)
+        return success_response(data=serializer.data)
+
+
+class BillingSettingsViewSet(viewsets.ModelViewSet):
+    """
+    Singleton billing / invoice branding (issuer, logo, footer). GET and PATCH/PUT.
+    """
+
+    queryset = BillingSettings.objects.filter(pk=1)
+    permission_classes = [IsAuthenticated, CanManageSettings]
+    serializer_class = BillingSettingsSerializer
+    http_method_names = ["get", "put", "patch", "head", "options"]
+
+    def get_queryset(self):
+        return BillingSettings.objects.filter(pk=1)
+
+    def get_object(self):
+        return BillingSettings.get_settings()
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx["request"] = self.request
+        return ctx
+
+    def list(self, request, *args, **kwargs):
+        instance = BillingSettings.get_settings()
+        serializer = self.get_serializer(instance)
+        return success_response(data=serializer.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = BillingSettings.get_settings()
         serializer = self.get_serializer(instance)
         return success_response(data=serializer.data)
