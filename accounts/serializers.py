@@ -114,6 +114,17 @@ class UserSerializer(serializers.ModelSerializer):
         valid_roles = {r.value for r in Role}
         if value not in valid_roles:
             raise serializers.ValidationError("Invalid role.")
+        if value == Role.SUPER_ADMIN.value:
+            instance = getattr(self, "instance", None)
+            target_is_superuser = bool(getattr(instance, "is_superuser", False))
+            incoming_is_superuser = self.initial_data.get("is_superuser")
+            if incoming_is_superuser is not None:
+                if isinstance(incoming_is_superuser, bool):
+                    target_is_superuser = incoming_is_superuser
+                else:
+                    target_is_superuser = str(incoming_is_superuser).strip().lower() in {"1", "true", "yes", "on"}
+            if not target_is_superuser:
+                raise serializers.ValidationError("SUPER_ADMIN role is only allowed for superusers.")
         return value
 
     @extend_schema_field(serializers.BooleanField())

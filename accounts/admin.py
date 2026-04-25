@@ -56,6 +56,25 @@ class UserAdmin(BaseUserAdmin):
         ("Additional Information", {"fields": ("role", "company", "email", "phone")}),
     )
 
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        form = super().get_form(request, obj, change=change, **kwargs)
+        role_field = form.base_fields.get("role")
+        if role_field:
+            base_choices = list(role_field.choices)
+            is_super_admin_value = Role.SUPER_ADMIN.value
+
+            if obj and obj.is_superuser:
+                if not any(value == is_super_admin_value for value, _ in base_choices):
+                    base_choices.append((is_super_admin_value, Role.SUPER_ADMIN.name))
+                role_field.choices = base_choices
+            else:
+                role_field.choices = [
+                    (value, label)
+                    for value, label in base_choices
+                    if value != is_super_admin_value
+                ]
+        return form
+
     def save_model(self, request, obj, form, change):
         """Override save to automatically update company owner if user is admin"""
         old_company = None

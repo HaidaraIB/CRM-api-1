@@ -9,6 +9,7 @@ import secrets
 
 
 class Role(Enum):
+    SUPER_ADMIN = "super_admin"
     ADMIN = "admin"
     SUPERVISOR = "supervisor"
     EMPLOYEE = "employee"
