@@ -3,6 +3,7 @@ from pathlib import Path
 
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from crm_saas_api.responses import error_response, success_response
@@ -413,6 +414,7 @@ class BillingSettingsViewSet(viewsets.ModelViewSet):
     queryset = BillingSettings.objects.filter(pk=1)
     permission_classes = [IsAuthenticated, CanManageSettings]
     serializer_class = BillingSettingsSerializer
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     http_method_names = ["get", "put", "patch", "head", "options"]
 
     def get_queryset(self):
