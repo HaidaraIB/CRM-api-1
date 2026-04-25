@@ -69,6 +69,13 @@ class User(AbstractUser):
         return False
 
     def can_access_company_data(self, company):
+        return self.can_access_tenant_company_data(company)
+
+    def can_access_tenant_company_data(self, company):
+        """
+        Tenant CRM access is always company-scoped.
+        `is_superuser` is reserved for platform/admin-panel capabilities.
+        """
         return self.company == company
 
     def supervisor_has_permission(self, permission_name: str) -> bool:

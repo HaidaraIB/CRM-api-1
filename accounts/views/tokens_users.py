@@ -71,12 +71,9 @@ class UserViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        # Super Admin can access all users
-        if user.is_super_admin():
-            return queryset
-
-        # Admin can access users in their company
-        if user.is_admin() and user.company:
+        # Tenant user visibility is always company-scoped.
+        # `is_superuser` only controls access to the platform/admin panel.
+        if user.company and user.is_admin():
             return queryset.filter(company=user.company)
 
         # Supervisor with can_manage_users: full company users; can_manage_leads: list only (for Activities filter)
