@@ -4,7 +4,9 @@ Subscription invoice PDF (ReportLab Platypus only).
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from io import BytesIO
+from pathlib import Path
 from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
@@ -12,12 +14,20 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from subscriptions.invoicing.branding import IssuerBranding
 from subscriptions.invoicing.view_model import InvoiceView
 
 logger = logging.getLogger(__name__)
+
+_FONT_DIR = Path(__file__).resolve().parent / "fonts"
+_NOTO_REGISTERED = False
+_use_unicode_invoice_font: ContextVar[bool] = ContextVar(
+    "use_unicode_invoice_font", default=False
+)
 
 _SLATE = colors.HexColor("#374151")
 _SLATE_LIGHT = colors.HexColor("#6b7280")
@@ -26,13 +36,86 @@ _BORDER = colors.HexColor("#e5e7eb")
 _BG_MUTED = colors.HexColor("#f9fafb")
 
 
+def _has_arabic_script(s: str) -> bool:
+    for c in s:
+        o = ord(c)
+        if 0x0600 <= o <= 0x06FF or 0x0750 <= o <= 0x077F or 0x08A0 <= o <= 0x08FF or 0xFB50 <= o <= 0xFDFF:
+            return True
+    return False
+
+
+def _needs_arabic_pdf_font(invoice, branding: IssuerBranding) -> bool:
+    parts = [
+        getattr(invoice, "company_name", "") or "",
+        getattr(invoice, "line_description", "") or "",
+        getattr(invoice, "plan_name", "") or "",
+        branding.issuer_name,
+        branding.issuer_address,
+        branding.footer_text,
+        branding.payment_instructions,
+    ]
+    return any(_has_arabic_script(p) for p in parts)
+
+
+def _invoice_pdf_font_names() -> tuple[str, str]:
+    """
+    (regular, bold) for Paragraph styles.
+    Helvetica for Latin-only invoices (smaller PDF, better text extraction).
+    Bundled Noto Sans Arabic when any field contains Arabic script.
+    """
+    global _NOTO_REGISTERED
+    if not _use_unicode_invoice_font.get():
+        return ("Helvetica", "Helvetica-Bold")
+
+    reg_path = _FONT_DIR / "NotoSansArabic-Regular.ttf"
+    bold_path = _FONT_DIR / "NotoSansArabic-Bold.ttf"
+    fallback = ("Helvetica", "Helvetica-Bold")
+    if not reg_path.is_file():
+        logger.warning("Invoice PDF font missing (Arabic will show boxes): %s", reg_path)
+        return fallback
+    if not _NOTO_REGISTERED:
+        try:
+            rn = "InvNotoArabic"
+            pdfmetrics.registerFont(TTFont(rn, str(reg_path), asciiReadable=True))
+            if bold_path.is_file():
+                bn = "InvNotoArabic-Bold"
+                pdfmetrics.registerFont(TTFont(bn, str(bold_path), asciiReadable=True))
+            _NOTO_REGISTERED = True
+        except Exception as e:
+            logger.warning("Invoice PDF font registration failed: %s", e)
+            return fallback
+    bn = "InvNotoArabic-Bold" if bold_path.is_file() else "InvNotoArabic"
+    return ("InvNotoArabic", bn)
+
+
+def _shape_mixed_text(s: str) -> str:
+    """Reshape + bidi for Arabic segments so PDF order matches natural reading."""
+    if not s or not _has_arabic_script(s):
+        return s
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+
+        return "\n".join(
+            get_display(arabic_reshaper.reshape(line)) for line in s.split("\n")
+        )
+    except Exception:
+        return s
+
+
 def _styles():
+    """
+    Helvetica for fixed English UI (ReportLab + Noto Sans Arabic subset drops Latin letters).
+    Noto (``body`` / ``small``) only for user-supplied strings that contain Arabic script.
+    """
+    ct_r, ct_b = _invoice_pdf_font_names()
+    ui_r, ui_b = "Helvetica", "Helvetica-Bold"
     base = getSampleStyleSheet()
     return {
         "title_left": ParagraphStyle(
             name="InvTitleLeft",
             parent=base["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=ui_b,
             fontSize=22,
             leading=28,
             textColor=_ACCENT,
@@ -42,6 +125,7 @@ def _styles():
         "meta_left": ParagraphStyle(
             name="InvMetaLeft",
             parent=base["Normal"],
+            fontName=ui_r,
             fontSize=10,
             textColor=_SLATE_LIGHT,
             alignment=TA_LEFT,
@@ -51,7 +135,7 @@ def _styles():
         "h3": ParagraphStyle(
             name="InvH3",
             parent=base["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=ui_b,
             fontSize=8,
             textColor=_SLATE_LIGHT,
             spaceAfter=6,
@@ -60,6 +144,15 @@ def _styles():
         "body": ParagraphStyle(
             name="InvBody",
             parent=base["Normal"],
+            fontName=ct_r,
+            fontSize=10,
+            textColor=_SLATE,
+            leading=14,
+        ),
+        "body_ui": ParagraphStyle(
+            name="InvBodyUI",
+            parent=base["Normal"],
+            fontName=ui_r,
             fontSize=10,
             textColor=_SLATE,
             leading=14,
@@ -67,6 +160,15 @@ def _styles():
         "small": ParagraphStyle(
             name="InvSmall",
             parent=base["Normal"],
+            fontName=ct_r,
+            fontSize=8,
+            textColor=_SLATE_LIGHT,
+            leading=11,
+        ),
+        "small_ui": ParagraphStyle(
+            name="InvSmallUI",
+            parent=base["Normal"],
+            fontName=ui_r,
             fontSize=8,
             textColor=_SLATE_LIGHT,
             leading=11,
@@ -74,7 +176,7 @@ def _styles():
         "notes_title": ParagraphStyle(
             name="InvNotesTitle",
             parent=base["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=ui_b,
             fontSize=9,
             textColor=_ACCENT,
             spaceAfter=4,
@@ -83,7 +185,23 @@ def _styles():
 
 
 def _p(text: str, style: ParagraphStyle) -> Paragraph:
-    return Paragraph(escape(text).replace("\n", "<br/>"), style)
+    shaped = _shape_mixed_text(text)
+    return Paragraph(escape(shaped).replace("\n", "<br/>"), style)
+
+
+def _p_field(text: str, styles: dict) -> Paragraph:
+    """User / issuer text: Noto only when invoice uses Arabic and this line has Arabic."""
+    if not _use_unicode_invoice_font.get():
+        return _p(text, styles["body"])
+    st = styles["body"] if _has_arabic_script(text) else styles["body_ui"]
+    return _p(text, st)
+
+
+def _p_field_small(text: str, styles: dict) -> Paragraph:
+    if not _use_unicode_invoice_font.get():
+        return _p(text, styles["small"])
+    st = styles["small"] if _has_arabic_script(text) else styles["small_ui"]
+    return _p(text, st)
 
 
 def _vstack(flowables, col_w) -> Table:
@@ -107,13 +225,13 @@ def _issuer_block_paras(view: InvoiceView, col_w, styles: dict) -> list[Paragrap
         lines.append(f"Tax ID: {view.issuer_tax_id}")
     if not lines:
         lines = [view.platform_name]
-    out.extend(_p(x, styles["body"]) for x in lines)
+    out.extend(_p_field(x, styles) for x in lines)
     return out
 
 
 def _bill_to_paras(view: InvoiceView, styles: dict) -> list[Paragraph]:
     out = [_p("BILL TO", styles["h3"])]
-    out.append(_p(view.company_name, styles["body"]))
+    out.append(_p_field(view.company_name, styles))
     return out
 
 
@@ -199,9 +317,12 @@ def _line_items_table(view: InvoiceView, content_width) -> Table:
         textColor=colors.white,
         alignment=TA_RIGHT,
     )
-    amt_b = ParagraphStyle(name="AmtB", parent=styles["body"], alignment=TA_RIGHT)
+    amt_b = ParagraphStyle(name="AmtB", parent=styles["body_ui"], alignment=TA_RIGHT)
     hdr = [_p("Description", hdr_desc), _p("Amount", hdr_amt)]
-    row = [_p(view.line_item_description, styles["body"]), _p(view.money_display, amt_b)]
+    row = [
+        _p_field(view.line_item_description, styles),
+        _p(view.money_display, amt_b),
+    ]
     t = Table([hdr, row], colWidths=[content_width * 0.68, content_width * 0.32])
     t.setStyle(
         TableStyle(
@@ -222,18 +343,20 @@ def _line_items_table(view: InvoiceView, content_width) -> Table:
 
 def _totals_table(view: InvoiceView, content_width) -> Table:
     styles = _styles()
+    bui = styles["body_ui"]
     w = min(120 * mm, content_width * 0.42)
     tot_v = ParagraphStyle(
         name="TotV",
-        parent=styles["body"],
+        parent=bui,
         fontName="Helvetica-Bold",
         fontSize=12,
         textColor=_ACCENT,
         alignment=TA_RIGHT,
     )
-    tot_l = ParagraphStyle(name="TotL", parent=styles["body"], fontName="Helvetica-Bold")
+    tot_l = ParagraphStyle(name="TotL", parent=bui, fontName="Helvetica-Bold")
+    t1 = ParagraphStyle(name="T1", parent=bui, alignment=TA_RIGHT)
     rows = [
-        [_p("Subtotal", styles["body"]), _p(view.subtotal_display, ParagraphStyle(name="T1", parent=styles["body"], alignment=TA_RIGHT))],
+        [_p("Subtotal", bui), _p(view.subtotal_display, t1)],
         [_p("Total", tot_l), _p(view.total_display, tot_v)],
     ]
     t = Table(rows, colWidths=[w * 0.45, w * 0.55], hAlign="RIGHT")
@@ -257,8 +380,14 @@ def _totals_table(view: InvoiceView, content_width) -> Table:
 def _status_pill(view: InvoiceView) -> Table:
     styles = _styles()
     inner = Paragraph(
-        f"<b>{escape(view.status_label)}</b>",
-        ParagraphStyle(name="pill", parent=styles["body"], fontSize=9, textColor=colors.HexColor(view.status_fg)),
+        escape(_shape_mixed_text(view.status_label)),
+        ParagraphStyle(
+            name="pill",
+            parent=styles["body_ui"],
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            textColor=colors.HexColor(view.status_fg),
+        ),
     )
     t = Table([[inner]], colWidths=[28 * mm])
     t.setStyle(
@@ -278,7 +407,7 @@ def _status_pill(view: InvoiceView) -> Table:
 def _status_row(view: InvoiceView, content_width) -> Table:
     styles = _styles()
     t = Table(
-        [[_p("Payment status", styles["small"]), _status_pill(view)]],
+        [[_p("Payment status", styles["small_ui"]), _status_pill(view)]],
         colWidths=[content_width * 0.22, content_width * 0.78],
     )
     t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
@@ -291,10 +420,10 @@ def _notes_flowables(view: InvoiceView, content_w) -> list:
     note_cells: list = []
     if view.footer_text:
         note_cells.append(_p("Notes", styles["notes_title"]))
-        note_cells.append(_p(view.footer_text, styles["body"]))
+        note_cells.append(_p_field(view.footer_text, styles))
     if view.payment_instructions:
         note_cells.append(_p("Payment instructions", styles["notes_title"]))
-        note_cells.append(_p(view.payment_instructions, styles["small"]))
+        note_cells.append(_p_field_small(view.payment_instructions, styles))
     if note_cells:
         inner = _vstack(note_cells, content_w - 24)
         wrap = Table([[inner]], colWidths=[content_w])
@@ -315,7 +444,7 @@ def _notes_flowables(view: InvoiceView, content_w) -> list:
     out.append(
         _p(
             f"Thank you for your business.\nIssued via {view.platform_name}.",
-            styles["small"],
+            styles["small_ui"],
         )
     )
     return out
@@ -326,8 +455,15 @@ def render_invoice_pdf(invoice) -> bytes:
     Render invoice as PDF bytes (English labels).
     """
     branding = IssuerBranding.load()
-    view = InvoiceView.build(invoice, branding, status_lang="en")
+    token = _use_unicode_invoice_font.set(_needs_arabic_pdf_font(invoice, branding))
+    try:
+        view = InvoiceView.build(invoice, branding, status_lang="en")
+        return _render_invoice_pdf_body(invoice, branding, view)
+    finally:
+        _use_unicode_invoice_font.reset(token)
 
+
+def _render_invoice_pdf_body(invoice, branding: IssuerBranding, view: InvoiceView) -> bytes:
     buf = BytesIO()
     lm = rm = 18 * mm
     tm = bm = 16 * mm

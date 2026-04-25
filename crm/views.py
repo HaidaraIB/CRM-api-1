@@ -35,7 +35,15 @@ class ClientViewSet(viewsets.ModelViewSet):
     queryset = Client.objects.all()
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["name", "phone_number", "priority", "type", "communication_way__name", "status__name"]
+    search_fields = [
+        "name",
+        "phone_number",
+        "phone_numbers__phone_number",
+        "priority",
+        "type",
+        "communication_way__name",
+        "status__name",
+    ]
     ordering_fields = ["created_at", "name", "priority"]
     ordering = ["-created_at"]
 
@@ -52,16 +60,16 @@ class ClientViewSet(viewsets.ModelViewSet):
         )
 
         if user.is_admin():
-            return queryset.filter(company=user.company)
+            return queryset.filter(company=user.company).distinct()
 
         if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
-            return queryset.filter(company=user.company)
+            return queryset.filter(company=user.company).distinct()
 
         if user.is_data_entry():
-            return queryset.filter(company=user.company)
+            return queryset.filter(company=user.company).distinct()
 
         if user.is_employee():
-            return queryset.filter(assigned_to=user)
+            return queryset.filter(assigned_to=user).distinct()
 
         return queryset.none()
 

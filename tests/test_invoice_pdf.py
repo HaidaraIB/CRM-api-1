@@ -132,6 +132,31 @@ def test_invoice_pdf_action_uses_invoicing_module(monkeypatch):
     assert captured["language"] is None
 
 
+@pytest.mark.django_db
+def test_arabic_company_name_uses_unicode_font(settings, tmp_path):
+    """When company name contains Arabic, PDF still builds (Noto + reshape/bidi)."""
+    settings.MEDIA_ROOT = str(tmp_path / "media")
+    (tmp_path / "media").mkdir(parents=True)
+    inv = SimpleNamespace(
+        invoice_number="INV-2026-00099",
+        amount=Decimal("10.00"),
+        currency="USD",
+        company_name="شركة الاختبار",
+        plan_name="Silver",
+        line_description="Silver — monthly",
+        billing_cycle="monthly",
+        due_date=date(2026, 6, 1),
+        created_at=timezone.now(),
+        payment_id=1,
+        payment=SimpleNamespace(payment_status="completed"),
+        subscription=None,
+        effective_payment_status=lambda: "completed",
+    )
+    pdf = render_invoice_pdf(inv)
+    assert pdf.startswith(b"%PDF")
+    assert len(pdf) > 1500
+
+
 def test_render_invoice_pdf_bytes_ignores_language(settings, tmp_path):
     settings.MEDIA_ROOT = str(tmp_path / "media")
     (tmp_path / "media").mkdir(parents=True)
