@@ -44,6 +44,34 @@ from ..policy import get_effective_integration_policy, get_plan_integration_acce
 from settings.models import SystemSettings
 
 logger = logging.getLogger(__name__)
+META_REQUEST_CACHE_TTL_SECONDS = 90
+
+
+def _normalize_meta_page(page: dict | None) -> dict | None:
+    if not isinstance(page, dict):
+        return None
+    page_id = page.get('id')
+    if page_id is None:
+        return None
+    page_id_str = str(page_id).strip()
+    if not page_id_str:
+        return None
+    return {
+        'id': page_id_str,
+        'name': str(page.get('name') or page_id_str),
+        'access_token': str(page.get('access_token') or ''),
+    }
+
+
+def _pick_single_meta_page(pages: list | None, page_id: str | None) -> dict | None:
+    target_id = str(page_id or '').strip()
+    if not target_id:
+        return None
+    for page in pages or []:
+        normalized = _normalize_meta_page(page)
+        if normalized and normalized['id'] == target_id:
+            return normalized
+    return None
 
 
 def _build_oauth_callback_frontend_url() -> str:
@@ -103,14 +131,9 @@ def apply_oauth_token_to_account(account, token_data, user_info):
         'user_info': user_info,
         'token_type': token_data.get('token_type', 'Bearer'),
     }
-    if account.platform == 'meta' and hasattr(oauth_handler, 'get_pages'):
-        try:
-            pages = oauth_handler.get_pages(token_data['access_token'])
-            account.metadata['pages'] = pages
-            for page in pages:
-                page['access_token'] = page.get('access_token', '')
-        except Exception:
-            pass
+    if account.platform == 'meta':
+        # Enforce single-page policy: page selection happens later via select_lead_form.
+        account.metadata['pages'] = []
 
     if account.platform == 'whatsapp':
         try:
@@ -198,12 +221,56 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             account.metadata = {}
         return account.metadata
 
+    def _meta_cache_key(self, account_id: int, scope: str, extra: str = '') -> str:
+        extra_part = f":{extra}" if extra else ''
+        return f"meta_req_cache:{scope}:account:{account_id}{extra_part}"
+
+    def _meta_cache_get(self, account_id: int, scope: str, extra: str = ''):
+        return cache.get(self._meta_cache_key(account_id, scope, extra))
+
+    def _meta_cache_set(self, account_id: int, scope: str, data, extra: str = ''):
+        cache.set(
+            self._meta_cache_key(account_id, scope, extra),
+            data,
+            timeout=META_REQUEST_CACHE_TTL_SECONDS,
+        )
+
+    def _meta_cache_invalidate(self, account_id: int, scopes: list[str] | None = None):
+        targets = scopes or ['test_connection', 'sync_pages', 'meta_health']
+        for scope in targets:
+            cache.delete(self._meta_cache_key(account_id, scope))
+            # meta_health currently keys by requested_page_id; clear common variants as well.
+            if scope == 'meta_health':
+                cache.delete(self._meta_cache_key(account_id, scope, 'default'))
+
+    def _persist_meta_pages_limited(
+        self,
+        account: IntegrationAccount,
+        all_pages_from_graph: list | None,
+        selected_page_id: str | None = None,
+        save: bool = False,
+    ) -> list:
+        metadata = self._ensure_metadata_dict(account)
+        selected_id = str(
+            selected_page_id
+            if selected_page_id is not None
+            else (metadata.get('selected_page_id') or '')
+        ).strip()
+        selected_page = _pick_single_meta_page(all_pages_from_graph, selected_id)
+        metadata['pages'] = [selected_page] if selected_page else []
+        if save:
+            account.save(update_fields=['metadata'])
+        return metadata['pages']
+
     def _resolve_meta_page_access_token(self, account: IntegrationAccount, page_id: str, meta_oauth: MetaOAuth):
         metadata = self._ensure_metadata_dict(account)
         pages = metadata.get('pages', []) or []
         page_id_str = str(page_id).strip()
+        page_name = page_id_str
         for page in pages:
             pid = page.get('id')
+            if pid is not None and str(pid).strip() == page_id_str:
+                page_name = str(page.get('name') or page_id_str)
             if pid is not None and str(pid).strip() == page_id_str and page.get('access_token'):
                 return page.get('access_token')
 
@@ -215,11 +282,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         try:
             fresh_pages = meta_oauth.get_pages(access_token)
             for p in fresh_pages:
-                if str(p.get('id')).strip() == page_id_str and p.get('access_token'):
-                    page_access_token = p.get('access_token')
+                normalized = _normalize_meta_page(p)
+                if normalized and normalized['id'] == page_id_str:
+                    page_name = normalized['name']
+                    if normalized['access_token']:
+                        page_access_token = normalized['access_token']
                     break
-            if fresh_pages:
-                metadata['pages'] = fresh_pages
         except Exception:
             pass
 
@@ -230,17 +298,11 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 page_access_token = None
 
         if page_access_token:
-            pages = metadata.get('pages', []) or []
-            updated = False
-            for page in pages:
-                pid = page.get('id')
-                if pid is not None and str(pid).strip() == page_id_str:
-                    page['access_token'] = page_access_token
-                    updated = True
-                    break
-            if not updated:
-                pages.append({'id': page_id_str, 'name': page_id_str, 'access_token': page_access_token})
-            metadata['pages'] = pages
+            metadata['pages'] = [{
+                'id': page_id_str,
+                'name': page_name,
+                'access_token': page_access_token,
+            }]
             account.save(update_fields=['metadata'])
 
         return page_access_token
@@ -537,6 +599,8 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         account.status = 'disconnected'
         account.error_message = None
         account.save()
+        if account.platform == 'meta':
+            self._meta_cache_invalidate(account.id)
 
         IntegrationLog.objects.create(
             account=account,
@@ -578,6 +642,10 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 details={'valid': False},
             )
 
+        cached_result = self._meta_cache_get(account.id, 'test_connection')
+        if cached_result is not None:
+            return success_response(data=cached_result)
+
         try:
             meta_oauth = MetaOAuth()
             debug_data = meta_oauth.debug_token(access_token)
@@ -586,40 +654,36 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             account.status = 'expired'
             account.error_message = str(e)[:500]
             account.save()
-            return success_response(
-                data={'valid': False, 'message': f'Connection check failed: {e}'},
-            )
+            data = {'valid': False, 'message': f'Connection check failed: {e}'}
+            self._meta_cache_set(account.id, 'test_connection', data)
+            return success_response(data=data)
 
         is_valid = debug_data.get('is_valid') is True
         if not is_valid:
             account.status = 'expired'
             account.error_message = debug_data.get('error', {}).get('message', 'Token is no longer valid')
             account.save()
-            return success_response(
-                data={
-                    'valid': False,
-                    'message': 'Token is no longer valid. Please disconnect and connect again.',
-                },
-            )
+            data = {
+                'valid': False,
+                'message': 'Token is no longer valid. Please disconnect and connect again.',
+            }
+            self._meta_cache_set(account.id, 'test_connection', data)
+            return success_response(data=data)
 
-        # Token valid: optionally refresh pages list
+        # Token valid: refresh only the selected page metadata entry (if selected)
         try:
             pages = meta_oauth.get_pages(access_token)
-            if pages and account.metadata is not None:
-                if not isinstance(account.metadata, dict):
-                    account.metadata = {}
-                account.metadata['pages'] = pages
-                account.save(update_fields=['metadata'])
+            self._persist_meta_pages_limited(account, pages, save=True)
         except Exception as e:
             logger.warning("test_connection get_pages failed: %s", e)
 
-        return success_response(
-            data={
-                'valid': True,
-                'message': 'Connection is valid.',
-                'expires_at': debug_data.get('expires_at'),
-            },
-        )
+        data = {
+            'valid': True,
+            'message': 'Connection is valid.',
+            'expires_at': debug_data.get('expires_at'),
+        }
+        self._meta_cache_set(account.id, 'test_connection', data)
+        return success_response(data=data)
 
     def perform_destroy(self, instance):
         """عند حذف الحساب: لـ Meta إلغاء صلاحيات التطبيق من فيسبوك أولاً ثم الحذف."""
@@ -739,6 +803,13 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         access_token = account.get_access_token()
         if not access_token:
             return error_response('No access token available', code='bad_request')
+        cached_sync = self._meta_cache_get(account.id, 'sync_pages')
+        if cached_sync is not None:
+            metadata = self._ensure_metadata_dict(account)
+            selected_page_id = str(metadata.get('selected_page_id') or '').strip()
+            self._persist_meta_pages_limited(account, cached_sync.get('pages') or [], selected_page_id=selected_page_id)
+            account.save(update_fields=['metadata'])
+            return success_response(data=cached_sync)
         try:
             oauth_handler = get_oauth_handler('meta')
             if not hasattr(oauth_handler, 'get_pages'):
@@ -748,36 +819,37 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 )
             pages = oauth_handler.get_pages(access_token)
             metadata = self._ensure_metadata_dict(account)
-            metadata['pages'] = pages
             subscribe_results = []
-            for page in pages:
-                page['access_token'] = page.get('access_token', '')
-                page_id = page.get('id')
-                if not page_id:
-                    continue
+            selected_page_id = str(metadata.get('selected_page_id') or '').strip()
+            self._persist_meta_pages_limited(account, pages, selected_page_id=selected_page_id)
+            if selected_page_id:
                 try:
-                    sub = self._auto_subscribe_meta_page(account, str(page_id), oauth_handler)
+                    sub = self._auto_subscribe_meta_page(account, selected_page_id, oauth_handler)
                     subscribe_results.append(sub)
                     IntegrationLog.objects.create(
                         account=account,
                         action='meta_page_subscribed',
                         status='success' if sub.get('success') else 'error',
-                        message=f"Auto-subscribe page {page_id}: {sub.get('message')}",
+                        message=f"Auto-subscribe page {selected_page_id}: {sub.get('message')}",
                         response_data=sub.get('response') if isinstance(sub.get('response'), dict) else {'raw': sub},
                     )
                 except Exception as e:
                     subscribe_results.append(
-                        {'success': False, 'page_id': str(page_id), 'message': str(e)}
+                        {'success': False, 'page_id': selected_page_id, 'message': str(e)}
                     )
                     IntegrationLog.objects.create(
                         account=account,
                         action='meta_page_subscribed',
                         status='error',
-                        message=f'Auto-subscribe failed for page {page_id}',
+                        message=f'Auto-subscribe failed for page {selected_page_id}',
                         error_details=str(e),
                     )
             account.save()
-            return success_response(data={'pages': pages, 'subscribe_results': subscribe_results})
+            data = {'pages': pages, 'subscribe_results': subscribe_results}
+            self._meta_cache_set(account.id, 'sync_pages', data)
+            # Pages/subscription state changed; avoid stale health cards.
+            self._meta_cache_invalidate(account.id, scopes=['meta_health'])
+            return success_response(data=data)
         except Exception as e:
             logger.exception("sync_pages failed for account %s", account.id)
             return error_response(str(e), code='bad_request')
@@ -803,15 +875,17 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         page_id = request.query_params.get('page_id')
         if not page_id:
             return error_response('page_id parameter is required', code='bad_request')
+        page_id = str(page_id).strip()
         
         try:
             meta_oauth = MetaOAuth()
             
             # الحصول على Page Access Token
-            pages = account.metadata.get('pages', [])
+            metadata = self._ensure_metadata_dict(account)
+            pages = metadata.get('pages', [])
             page_access_token = None
             for page in pages:
-                if page.get('id') == page_id:
+                if str(page.get('id') or '').strip() == page_id:
                     page_access_token = page.get('access_token')
                     break
             
@@ -826,15 +900,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 try:
                     fresh_pages = meta_oauth.get_pages(access_token)
                     for p in fresh_pages:
-                        if str(p.get('id')) == str(page_id) and p.get('access_token'):
-                            page_access_token = p.get('access_token')
+                        normalized = _normalize_meta_page(p)
+                        if normalized and normalized['id'] == page_id and normalized['access_token']:
+                            page_access_token = normalized['access_token']
+                            metadata['pages'] = [normalized]
+                            account.save(update_fields=['metadata'])
                             break
-                    if page_access_token and account.metadata.get('pages'):
-                        for i, p in enumerate(account.metadata['pages']):
-                            if str(p.get('id')) == str(page_id):
-                                account.metadata['pages'][i]['access_token'] = page_access_token
-                                account.save()
-                                break
                 except Exception:
                     pass
                 if not page_access_token:
@@ -911,8 +982,27 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'page_id and form_id are required',
                 code='bad_request',
             )
+        page_id = str(page_id).strip()
+        form_id = str(form_id).strip()
 
-        self._ensure_metadata_dict(account)
+        metadata = self._ensure_metadata_dict(account)
+        access_token = account.get_access_token()
+        if not access_token:
+            return error_response('No access token available', code='bad_request')
+
+        try:
+            meta_oauth = MetaOAuth()
+            available_pages = meta_oauth.get_pages(access_token)
+        except Exception as e:
+            logger.warning("select_lead_form get_pages failed: %s", e)
+            return error_response('Failed to validate selected page with Meta.', code='bad_request')
+
+        selected_page = _pick_single_meta_page(available_pages, page_id)
+        if not selected_page:
+            return error_response(
+                'Selected page is not available for this Meta account.',
+                code='bad_request',
+            )
         
         # التحقق من وجود الكامبين إذا تم توفيره
         campaign = None
@@ -928,22 +1018,23 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 )
         
         # تحديث metadata
-        if 'form_campaign_mapping' not in account.metadata:
-            account.metadata['form_campaign_mapping'] = {}
+        if 'form_campaign_mapping' not in metadata:
+            metadata['form_campaign_mapping'] = {}
         
         if campaign_id:
-            account.metadata['form_campaign_mapping'][form_id] = campaign_id
+            metadata['form_campaign_mapping'][form_id] = campaign_id
         else:
             # إزالة الربط إذا لم يتم توفير campaign_id
-            account.metadata['form_campaign_mapping'].pop(form_id, None)
+            metadata['form_campaign_mapping'].pop(form_id, None)
         
-        account.metadata['selected_page_id'] = str(page_id)
-        account.metadata['selected_form_id'] = str(form_id)
+        metadata['selected_page_id'] = page_id
+        metadata['selected_form_id'] = form_id
+        metadata['pages'] = [selected_page]
         account.save()
+        self._meta_cache_invalidate(account.id)
 
         subscribe_status = {'success': False, 'page_id': str(page_id), 'message': 'Subscription not attempted'}
         try:
-            meta_oauth = MetaOAuth()
             subscribe_status = self._auto_subscribe_meta_page(account, str(page_id), meta_oauth)
             IntegrationLog.objects.create(
                 account=account,
@@ -1001,6 +1092,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         should_subscribe = str(request.query_params.get('subscribe', '')).strip() in {'1', 'true', 'True'}
         requested_page_id = str(request.query_params.get('page_id', '') or '').strip()
         subscribe_target_page_id = requested_page_id or selected_page_id
+        health_cache_extra = requested_page_id or 'default'
+
+        if not should_subscribe:
+            cached_health = self._meta_cache_get(account.id, 'meta_health', extra=health_cache_extra)
+            if cached_health is not None:
+                return success_response(data=cached_health)
 
         token_data = {'valid': False}
         token = account.get_access_token()
@@ -1082,21 +1179,24 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         }
 
         callback_url = f"{getattr(settings, 'API_BASE_URL', '').rstrip('/')}/api/integrations/webhooks/meta/"
-        return success_response(
-            data={
-                'account_id': account.id,
-                'status': account.status,
-                'token': token_data,
-                'webhook': {
-                    'callback_url': callback_url,
-                    'verify_token_set': bool(getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')),
-                    'client_secret_set': bool(getattr(settings, 'META_CLIENT_SECRET', '')),
-                },
-                'selection': selection,
-                'pages': page_rows,
-                'recent_activity': recent_activity,
-            }
-        )
+        data = {
+            'account_id': account.id,
+            'status': account.status,
+            'token': token_data,
+            'webhook': {
+                'callback_url': callback_url,
+                'verify_token_set': bool(getattr(settings, 'META_WEBHOOK_VERIFY_TOKEN', '')),
+                'client_secret_set': bool(getattr(settings, 'META_CLIENT_SECRET', '')),
+            },
+            'selection': selection,
+            'pages': page_rows,
+            'recent_activity': recent_activity,
+        }
+        if should_subscribe:
+            self._meta_cache_invalidate(account.id, scopes=['meta_health'])
+        else:
+            self._meta_cache_set(account.id, 'meta_health', data, extra=health_cache_extra)
+        return success_response(data=data)
 
 
 class IntegrationLogViewSet(viewsets.ReadOnlyModelViewSet):
