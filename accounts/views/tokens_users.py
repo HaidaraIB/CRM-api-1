@@ -67,24 +67,46 @@ class UserViewSet(viewsets.ModelViewSet):
     ordering_fields = ["date_joined", "last_login", "username"]
     ordering = ["-date_joined"]
 
+    @staticmethod
+    def _parse_roles_param(raw_value):
+        if not raw_value:
+            return []
+        role_aliases = {
+            "owner": Role.ADMIN.value,
+        }
+        roles = []
+        for item in raw_value.split(","):
+            role = item.strip().lower()
+            if not role:
+                continue
+            roles.append(role_aliases.get(role, role))
+        return list(dict.fromkeys(roles))
+
     def get_queryset(self):
         user = self.request.user
         queryset = super().get_queryset()
 
-        # Tenant user visibility is always company-scoped.
-        # `is_superuser` only controls access to the platform/admin panel.
-        if user.company and user.is_admin():
-            return queryset.filter(company=user.company)
-
         # Supervisor with can_manage_users: full company users; can_manage_leads: list only (for Activities filter)
         if user.is_supervisor() and user.company:
-            if user.supervisor_has_permission("manage_users"):
-                return queryset.filter(company=user.company)
-            if user.supervisor_has_permission("manage_leads"):
-                return queryset.filter(company=user.company)
+            if user.supervisor_has_permission("manage_users") or user.supervisor_has_permission("manage_leads"):
+                queryset = queryset.filter(company=user.company)
+            else:
+                queryset = queryset.filter(id=user.id)
+        elif user.company and user.is_admin():
+            queryset = queryset.filter(company=user.company)
+        else:
+            # Employee can only access their own profile
+            queryset = queryset.filter(id=user.id)
 
-        # Employee can only access their own profile
-        return queryset.filter(id=user.id)
+        include_roles = self._parse_roles_param(self.request.query_params.get("roles"))
+        if include_roles:
+            queryset = queryset.filter(role__in=include_roles)
+
+        exclude_roles = self._parse_roles_param(self.request.query_params.get("exclude_roles"))
+        if exclude_roles:
+            queryset = queryset.exclude(role__in=exclude_roles)
+
+        return queryset
 
     def perform_create(self, serializer):
         """Create user and automatically set company from request user, then link company owner if user is admin"""

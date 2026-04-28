@@ -267,6 +267,33 @@ class TwoFactorAuth(models.Model):
         self.save(update_fields=["is_verified", "verified_at"])
 
 
+class OwnerTrustedDevice(models.Model):
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="owner_trusted_devices",
+    )
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    user_agent_hash = models.CharField(max_length=64, blank=True, default="")
+    ip_address = models.CharField(max_length=64, blank=True, default="")
+    trusted_until = models.DateTimeField()
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "owner_trusted_devices"
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["user", "trusted_until"]),
+            models.Index(fields=["user", "revoked_at"]),
+        ]
+
+    def __str__(self):
+        return f"OwnerTrustedDevice user={self.user_id}"
+
+
 class LimitedAdmin(models.Model):
     """Limited Admin for Super Admin Panel with restricted permissions"""
     user = models.OneToOneField(

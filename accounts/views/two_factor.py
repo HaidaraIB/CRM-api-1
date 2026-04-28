@@ -40,6 +40,12 @@ from ..utils import (
     send_password_reset_email,
     send_two_factor_auth_email,
 )
+from ..two_factor_policy import (
+    OWNER_TRUST_COOKIE_NAME,
+    OWNER_TRUST_DAYS,
+    is_company_owner,
+    issue_trusted_device,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -79,6 +85,13 @@ def request_two_factor_auth(request):
     user = serializer.validated_data.get("user")
     if not user:
         return error_response("User not found.", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
+
+    if not is_company_owner(user):
+        return error_response(
+            "Two-factor authentication is only required for company owners.",
+            code="two_factor_not_required",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     # Check subscription before sending 2FA code (for all users except Super Admin)
     if not user.is_super_admin():
@@ -365,4 +378,18 @@ def verify_two_factor_auth(request):
         },
     }
 
-    return success_response(data=response_data)
+    response = success_response(data=response_data)
+
+    trust_device = bool(request.data.get("trust_device", False))
+    if is_company_owner(user) and trust_device:
+        trusted_token, trusted_until = issue_trusted_device(user, request)
+        response.set_cookie(
+            OWNER_TRUST_COOKIE_NAME,
+            trusted_token,
+            max_age=OWNER_TRUST_DAYS * 24 * 60 * 60,
+            httponly=True,
+            secure=not settings.DEBUG,
+            samesite="Lax",
+        )
+
+    return response

@@ -7,6 +7,9 @@ from drf_spectacular.utils import extend_schema_field
 from .models import User, Role, TwoFactorAuth, LimitedAdmin, SupervisorPermission
 from companies.models import Company
 from subscriptions.models import Plan, Subscription, SubscriptionStatus, BillingCycle
+from .two_factor_policy import is_company_owner, is_trusted_device_valid
+from .utils import get_email_language_for_user, send_two_factor_auth_email
+from django.conf import settings
 
 # Inventory permission keys; only one is allowed per company based on specialization
 INVENTORY_PERM_KEYS = ('can_manage_products', 'can_manage_services', 'can_manage_real_estate')
@@ -343,6 +346,84 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         
         # Validate using parent class
         data = super().validate(attrs)
+        request = self.context.get("request")
+
+        # Keep login subscription-safe to match 2FA endpoint behavior.
+        if not self.user.is_super_admin():
+            if not self.user.company:
+                raise serializers.ValidationError(
+                    {"error": "Your account is not associated with a company. Please contact support."}
+                )
+
+            has_active_subscription = Subscription.objects.filter(
+                company=self.user.company, is_active=True
+            ).exists()
+            if not has_active_subscription:
+                subscription = (
+                    Subscription.objects.filter(company=self.user.company)
+                    .order_by("-created_at")
+                    .first()
+                )
+                is_employee_user = self.user.role in ("employee", "data_entry")
+                if is_employee_user:
+                    raise serializers.ValidationError(
+                        {"error": "Your account is temporarily inactive", "code": "ACCOUNT_TEMPORARILY_INACTIVE"}
+                    )
+                raise serializers.ValidationError(
+                    {
+                        "error": "Your subscription is not active. Please contact support or Complete Your Payment to access the system.",
+                        "code": "SUBSCRIPTION_INACTIVE",
+                        "subscriptionId": subscription.id if subscription else None,
+                    }
+                )
+
+        # Owner-only intelligent 2FA: challenge only when trusted-device check fails.
+        if request and is_company_owner(self.user) and not is_trusted_device_valid(self.user, request):
+            expiry_minutes = 10
+
+            demo_2fa_code = None
+            is_google_demo = (
+                settings.DEMO_GOOGLE_ACCOUNT_USERNAME
+                and self.user.username.lower() == settings.DEMO_GOOGLE_ACCOUNT_USERNAME.lower()
+            ) or (
+                settings.DEMO_GOOGLE_ACCOUNT_EMAIL
+                and self.user.email.lower() == settings.DEMO_GOOGLE_ACCOUNT_EMAIL.lower()
+            )
+            is_apple_demo = (
+                settings.DEMO_APPLE_ACCOUNT_USERNAME
+                and self.user.username.lower() == settings.DEMO_APPLE_ACCOUNT_USERNAME.lower()
+            ) or (
+                settings.DEMO_APPLE_ACCOUNT_EMAIL
+                and self.user.email.lower() == settings.DEMO_APPLE_ACCOUNT_EMAIL.lower()
+            )
+            if is_google_demo and getattr(settings, "DEMO_GOOGLE_ACCOUNT_2FA_CODE", ""):
+                demo_2fa_code = settings.DEMO_GOOGLE_ACCOUNT_2FA_CODE
+            elif is_apple_demo and getattr(settings, "DEMO_APPLE_ACCOUNT_2FA_CODE", ""):
+                demo_2fa_code = settings.DEMO_APPLE_ACCOUNT_2FA_CODE
+
+            if demo_2fa_code:
+                TwoFactorAuth.objects.filter(user=self.user, is_verified=False).delete()
+                import uuid
+
+                two_fa = TwoFactorAuth.objects.create(
+                    user=self.user,
+                    code=demo_2fa_code,
+                    token=uuid.uuid4().hex,
+                    expires_at=timezone.now() + timedelta(minutes=expiry_minutes),
+                )
+                sent = True
+            else:
+                two_fa = TwoFactorAuth.create_for_user(self.user, expiry_minutes=expiry_minutes)
+                language = get_email_language_for_user(self.user, request, default="ar")
+                sent = send_two_factor_auth_email(self.user, two_fa, language=language)
+
+            return {
+                "requires_two_factor": True,
+                "sent": sent,
+                "token": two_fa.token,
+                "message": "2FA code has been sent to your email.",
+                "user": build_user_auth_payload(self.user, request),
+            }
 
         # Get limited admin profile if exists
         limited_admin = None

@@ -6,8 +6,58 @@ import pytest
 from django.urls import reverse
 from django.contrib.auth import get_user_model
 from rest_framework import status
+from django.utils import timezone
+from datetime import timedelta
+from django.core.cache import cache
+
+from companies.models import Company
+from subscriptions.models import Plan, Subscription, BillingCycle
+from accounts.models import OwnerTrustedDevice
+from accounts.two_factor_policy import OWNER_TRUST_COOKIE_NAME, hash_device_token, hash_user_agent
 
 User = get_user_model()
+
+@pytest.fixture(autouse=True)
+def _clear_throttle_cache():
+    cache.clear()
+
+
+def _with_active_subscription(user, make_owner=True):
+    owner = user
+    if not make_owner:
+        owner = User.objects.create_user(
+            username=f"owner_{user.username}",
+            email=f"owner_{user.username}@example.com",
+            password="securepassword123",
+            role="admin",
+        )
+    company = Company.objects.create(
+        name=f"Company {user.username}",
+        domain=f"{user.username}.example.com",
+        owner=owner,
+    )
+    if not make_owner:
+        owner.company = company
+        owner.save(update_fields=["company"])
+    user.company = company
+    user.save(update_fields=["company"])
+    plan = Plan.objects.create(
+        name=f"Plan {user.username}",
+        description="test",
+        price_monthly=10,
+        price_yearly=100,
+    )
+    now = timezone.now()
+    Subscription.objects.create(
+        company=company,
+        plan=plan,
+        is_active=True,
+        start_date=now,
+        end_date=now + timedelta(days=30),
+        current_period_start=now,
+        billing_cycle=BillingCycle.MONTHLY,
+    )
+    return company
 
 
 @pytest.mark.django_db
@@ -17,7 +67,10 @@ def test_login_with_username(api_client):
         username="testuser",
         email="test@example.com",
         password="securepassword123",
+        role="employee",
     )
+    user = User.objects.get(username="testuser")
+    _with_active_subscription(user, make_owner=False)
     url = reverse("token_obtain_pair")
     data = {"username": "testuser", "password": "securepassword123"}
     response = api_client.post(url, data)
@@ -32,7 +85,10 @@ def test_login_with_email(api_client):
         username="testuser2",
         email="testuser2@example.com",
         password="securepassword123",
+        role="employee",
     )
+    user = User.objects.get(username="testuser2")
+    _with_active_subscription(user, make_owner=False)
     url = reverse("token_obtain_pair")
     data = {"username": "testuser2@example.com", "password": "securepassword123"}
     response = api_client.post(url, data)
@@ -45,9 +101,116 @@ def test_login_invalid_password(api_client):
     """Test that login fails gracefully with invalid credentials."""
     User.objects.create_user(
         username="testuser3",
+        email="testuser3@example.com",
         password="securepassword123",
+        role="employee",
     )
+    user = User.objects.get(username="testuser3")
+    _with_active_subscription(user)
     url = reverse("token_obtain_pair")
     data = {"username": "testuser3", "password": "wrongpassword"}
     response = api_client.post(url, data)
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
+def test_non_owner_login_does_not_trigger_2fa(api_client):
+    owner = User.objects.create_user(
+        username="ownerA",
+        email="ownerA@example.com",
+        password="securepassword123",
+        role="admin",
+    )
+    company = _with_active_subscription(owner)
+    employee = User.objects.create_user(
+        username="employeeA",
+        email="employeeA@example.com",
+        password="securepassword123",
+        role="employee",
+        company=company,
+    )
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(url, {"username": employee.username, "password": "securepassword123"}, format="json")
+    assert response.status_code == status.HTTP_200_OK
+    assert "access" in response.data
+    assert response.data.get("requires_two_factor") is None
+
+
+@pytest.mark.django_db
+def test_owner_first_login_requires_2fa(api_client):
+    owner = User.objects.create_user(
+        username="ownerB",
+        email="ownerB@example.com",
+        password="securepassword123",
+        role="admin",
+    )
+    _with_active_subscription(owner)
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(url, {"username": owner.username, "password": "securepassword123"}, format="json")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data.get("requires_two_factor") is True
+    assert "access" not in response.data
+    assert response.data.get("token")
+
+
+@pytest.mark.django_db
+def test_owner_trusted_device_skips_2fa(api_client):
+    owner = User.objects.create_user(
+        username="ownerC",
+        email="ownerC@example.com",
+        password="securepassword123",
+        role="admin",
+    )
+    _with_active_subscription(owner)
+
+    raw_token = "trusted-device-token"
+    OwnerTrustedDevice.objects.create(
+        user=owner,
+        token_hash=hash_device_token(raw_token),
+        user_agent_hash=hash_user_agent("pytest-agent"),
+        trusted_until=timezone.now() + timedelta(days=2),
+    )
+    api_client.cookies[OWNER_TRUST_COOKIE_NAME] = raw_token
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": owner.username, "password": "securepassword123"},
+        format="json",
+        HTTP_USER_AGENT="pytest-agent",
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert "access" in response.data
+    assert response.data.get("requires_two_factor") is None
+
+
+@pytest.mark.django_db
+def test_owner_expired_trusted_device_requires_2fa(api_client):
+    owner = User.objects.create_user(
+        username="ownerD",
+        email="ownerD@example.com",
+        password="securepassword123",
+        role="admin",
+    )
+    _with_active_subscription(owner)
+
+    raw_token = "expired-device-token"
+    OwnerTrustedDevice.objects.create(
+        user=owner,
+        token_hash=hash_device_token(raw_token),
+        user_agent_hash=hash_user_agent("pytest-agent"),
+        trusted_until=timezone.now() - timedelta(minutes=1),
+    )
+    api_client.cookies[OWNER_TRUST_COOKIE_NAME] = raw_token
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": owner.username, "password": "securepassword123"},
+        format="json",
+        HTTP_USER_AGENT="pytest-agent",
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data.get("requires_two_factor") is True
