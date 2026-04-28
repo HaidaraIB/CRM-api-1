@@ -1,5 +1,6 @@
 from django.db.models.signals import post_save, pre_save
 from django.db.models import Count
+from django.db import transaction
 from django.dispatch import receiver
 from django.utils import timezone
 from .models import Client, ClientTask, Deal
@@ -22,6 +23,46 @@ def get_least_busy_employee(company):
     ).annotate(
         client_count=Count('assigned_clients')
     ).order_by('client_count').first()
+
+
+def get_next_data_entry_round_robin_employee(company):
+    """
+    Return the next active employee for data-entry lead assignment using
+    a persisted circular pointer on Company.
+    """
+    from companies.models import Company
+
+    with transaction.atomic():
+        locked_company = Company.objects.select_for_update().get(pk=company.pk)
+        employees = list(
+            User.objects.filter(
+                company=locked_company,
+                role=Role.EMPLOYEE.value,
+                is_active=True,
+            )
+            .order_by("id")
+            .only("id")
+        )
+
+        if not employees:
+            if locked_company.last_data_entry_assigned_employee_id is not None:
+                locked_company.last_data_entry_assigned_employee = None
+                locked_company.save(update_fields=["last_data_entry_assigned_employee"])
+            return None
+
+        employee_ids = [employee.id for employee in employees]
+        last_id = locked_company.last_data_entry_assigned_employee_id
+
+        if last_id in employee_ids:
+            current_index = employee_ids.index(last_id)
+            next_index = (current_index + 1) % len(employee_ids)
+        else:
+            next_index = 0
+
+        selected_employee = employees[next_index]
+        locked_company.last_data_entry_assigned_employee = selected_employee
+        locked_company.save(update_fields=["last_data_entry_assigned_employee"])
+        return selected_employee
 
 
 @receiver(post_save, sender=Client)

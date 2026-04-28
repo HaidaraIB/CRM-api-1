@@ -21,6 +21,14 @@ class Company(models.Model):
     owner = models.ForeignKey(
         "accounts.User", on_delete=models.CASCADE, related_name="companies"
     )
+    last_data_entry_assigned_employee = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="data_entry_round_robin_companies",
+        null=True,
+        blank=True,
+        help_text="Last employee assigned from data-entry round-robin.",
+    )
     # Auto assignment settings
     auto_assign_enabled = models.BooleanField(
         default=False,

@@ -97,10 +97,10 @@ class ClientViewSet(viewsets.ModelViewSet):
         serializer.save(company=company)
         client = serializer.instance
         if user.is_data_entry() and company and client and not client.assigned_to:
-            from crm.signals import get_least_busy_employee
+            from crm.signals import get_next_data_entry_round_robin_employee
             from django.utils import timezone as dj_tz
 
-            assignee = get_least_busy_employee(company)
+            assignee = get_next_data_entry_round_robin_employee(company)
             if not assignee:
                 assignee = company.owner
             if assignee:

@@ -22,6 +22,46 @@ class TestClientCRUD:
         assert response.status_code == status.HTTP_201_CREATED
         assert api_body(response)["name"] == "New Lead"
 
+    def test_admin_create_keeps_signal_based_auto_assign_behavior(
+        self, authenticated_admin, company, employee_user
+    ):
+        from accounts.models import User
+        from crm.models import Client
+
+        company.auto_assign_enabled = True
+        company.save(update_fields=["auto_assign_enabled"])
+
+        employee_two = User.objects.create_user(
+            username="employee_auto_assign_two",
+            email="employee_auto_assign_two@test.com",
+            password="testpass123",
+            company=company,
+            role="employee",
+            is_active=True,
+        )
+
+        Client.objects.create(
+            name="Seed assigned",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=employee_user,
+        )
+        company.last_data_entry_assigned_employee = employee_user
+        company.save(update_fields=["last_data_entry_assigned_employee"])
+
+        response = authenticated_admin.post(
+            "/api/v1/clients/",
+            {"name": "Admin Added", "priority": "high", "type": "fresh", "company": company.id},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+        created = Client.objects.get(id=api_body(response)["id"])
+        company.refresh_from_db()
+        assert created.assigned_to_id == employee_two.id
+        assert company.last_data_entry_assigned_employee_id == employee_user.id
+
     def test_list_clients(self, authenticated_admin, company):
         from crm.models import Client
 
@@ -134,13 +174,101 @@ class TestDataEntryClient:
         lead = Client.objects.get(id=api_body(response)["id"])
         assert lead.assigned_to_id == employee_user.id
 
+    def test_data_entry_create_round_robin_sequence_and_wrap(
+        self, authenticated_data_entry, company, employee_user
+    ):
+        from accounts.models import User
+        from crm.models import Client
+
+        employee_two = User.objects.create_user(
+            username="employee_two",
+            email="employee_two@test.com",
+            password="testpass123",
+            company=company,
+            role="employee",
+            is_active=True,
+        )
+        employee_three = User.objects.create_user(
+            username="employee_three",
+            email="employee_three@test.com",
+            password="testpass123",
+            company=company,
+            role="employee",
+            is_active=True,
+        )
+
+        created_ids = []
+        for idx in range(4):
+            response = authenticated_data_entry.post(
+                "/api/v1/clients/",
+                {
+                    "name": f"RR Lead {idx}",
+                    "priority": "low",
+                    "type": "fresh",
+                    "company": company.id,
+                },
+                format="json",
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+            created_ids.append(api_body(response)["id"])
+
+        assigned_ids = list(
+            Client.objects.filter(id__in=created_ids)
+            .order_by("id")
+            .values_list("assigned_to_id", flat=True)
+        )
+        assert assigned_ids == [
+            employee_user.id,
+            employee_two.id,
+            employee_three.id,
+            employee_user.id,
+        ]
+
+    def test_data_entry_round_robin_recovers_when_last_employee_inactive(
+        self, authenticated_data_entry, company, employee_user
+    ):
+        from accounts.models import User
+        from crm.models import Client
+
+        employee_two = User.objects.create_user(
+            username="employee_rr_inactive",
+            email="employee_rr_inactive@test.com",
+            password="testpass123",
+            company=company,
+            role="employee",
+            is_active=True,
+        )
+
+        company.last_data_entry_assigned_employee = employee_two
+        company.save(update_fields=["last_data_entry_assigned_employee"])
+        employee_two.is_active = False
+        employee_two.save(update_fields=["is_active"])
+
+        response = authenticated_data_entry.post(
+            "/api/v1/clients/",
+            {
+                "name": "Inactive Pointer Recovery",
+                "priority": "low",
+                "type": "fresh",
+                "company": company.id,
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+        lead = Client.objects.get(id=api_body(response)["id"])
+        company.refresh_from_db()
+        assert lead.assigned_to_id == employee_user.id
+        assert company.last_data_entry_assigned_employee_id == employee_user.id
+
     def test_data_entry_create_assigns_to_owner_when_no_sales_employee(
         self, authenticated_data_entry, company, employee_user, owner_user
     ):
         from accounts.models import User
         from crm.models import Client
 
-        User.objects.filter(id=employee_user.id).delete()
+        employee_user.is_active = False
+        employee_user.save(update_fields=["is_active"])
         data = {
             "name": "No Emp",
             "priority": "low",
@@ -150,7 +278,9 @@ class TestDataEntryClient:
         response = authenticated_data_entry.post("/api/v1/clients/", data, format="json")
         assert response.status_code == status.HTTP_201_CREATED
         lead = Client.objects.get(id=api_body(response)["id"])
+        company.refresh_from_db()
         assert lead.assigned_to_id == owner_user.id
+        assert company.last_data_entry_assigned_employee_id is None
 
     def test_data_entry_bulk_assign_forbidden(self, authenticated_data_entry, company):
         from crm.models import Client
