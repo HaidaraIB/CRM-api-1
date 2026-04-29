@@ -57,6 +57,7 @@ class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
     limited_admin = serializers.SerializerMethodField()
     supervisor_permissions = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -86,6 +87,9 @@ class UserSerializer(serializers.ModelSerializer):
             "language",  # User preferred language
             "limited_admin",
             "supervisor_permissions",
+            "last_seen_at",
+            "last_seen_source",
+            "is_online",
         ]
         read_only_fields = ["id", "date_joined", "last_login", "email_verified", "phone_verified", "fcm_token"]
         extra_kwargs = {
@@ -271,6 +275,12 @@ class UserSerializer(serializers.ModelSerializer):
         except SupervisorPermission.DoesNotExist:
             return None
 
+    @extend_schema_field(serializers.BooleanField())
+    def get_is_online(self, obj):
+        if not obj.last_seen_at:
+            return False
+        return (timezone.now() - obj.last_seen_at) <= timedelta(seconds=90)
+
 
 class UserListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
@@ -278,6 +288,7 @@ class UserListSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
     company_specialization = serializers.CharField(source="company.specialization", read_only=True)
     is_me = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -297,6 +308,9 @@ class UserListSerializer(serializers.ModelSerializer):
             "email_verified",
             "date_joined",
             "is_me",
+            "last_seen_at",
+            "last_seen_source",
+            "is_online",
         ]
 
     @extend_schema_field(serializers.BooleanField())
@@ -306,6 +320,12 @@ class UserListSerializer(serializers.ModelSerializer):
         if request and request.user:
             return obj.id == request.user.id
         return False
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_is_online(self, obj):
+        if not obj.last_seen_at:
+            return False
+        return (timezone.now() - obj.last_seen_at) <= timedelta(seconds=90)
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):

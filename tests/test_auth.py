@@ -245,3 +245,68 @@ def test_owner_expired_trusted_device_requires_2fa(api_client):
     )
     assert response.status_code == status.HTTP_200_OK
     assert response.data.get("requires_two_factor") is True
+
+
+@pytest.mark.django_db
+def test_presence_heartbeat_requires_authentication(api_client):
+    url = reverse("user-presence-heartbeat")
+    response = api_client.post(url, {"source": "web"}, format="json")
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
+def test_presence_heartbeat_updates_user_presence(api_client):
+    user = User.objects.create_user(
+        username="presence_user",
+        email="presence_user@example.com",
+        password="securepassword123",
+        role="employee",
+    )
+    _with_active_subscription(user, make_owner=False)
+    api_client.force_authenticate(user=user)
+
+    url = reverse("user-presence-heartbeat")
+    response = api_client.post(url, {"source": "mobile"}, format="json")
+    assert response.status_code == status.HTTP_200_OK
+
+    user.refresh_from_db()
+    assert user.last_seen_at is not None
+    assert user.last_seen_source == "mobile"
+
+
+@pytest.mark.django_db
+def test_users_list_includes_online_presence(api_client):
+    owner = User.objects.create_user(
+        username="presence_owner",
+        email="presence_owner@example.com",
+        password="securepassword123",
+        role="admin",
+    )
+    company = _with_active_subscription(owner)
+    online_employee = User.objects.create_user(
+        username="presence_online",
+        email="presence_online@example.com",
+        password="securepassword123",
+        role="employee",
+        company=company,
+        last_seen_at=timezone.now() - timedelta(seconds=30),
+        last_seen_source="web",
+    )
+    User.objects.create_user(
+        username="presence_offline",
+        email="presence_offline@example.com",
+        password="securepassword123",
+        role="data_entry",
+        company=company,
+        last_seen_at=timezone.now() - timedelta(minutes=10),
+        last_seen_source="mobile",
+    )
+
+    api_client.force_authenticate(user=owner)
+    response = api_client.get(reverse("user-list"))
+    assert response.status_code == status.HTTP_200_OK
+    payload = response.data.get("data", response.data)
+    results = payload.get("results", [])
+    target = next(item for item in results if item["id"] == online_employee.id)
+    assert target["is_online"] is True
+    assert target["last_seen_source"] == "web"

@@ -35,6 +35,16 @@ class User(AbstractUser):
     )
     fcm_token = models.CharField(max_length=255, blank=True, null=True, help_text="Firebase Cloud Messaging token for push notifications")
     language = models.CharField(max_length=10, default='ar', choices=[('ar', 'Arabic'), ('en', 'English')], help_text="User preferred language for notifications")
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    last_seen_source = models.CharField(
+        max_length=16,
+        choices=[
+            ("web", "Web"),
+            ("mobile", "Mobile"),
+            ("unknown", "Unknown"),
+        ],
+        default="unknown",
+    )
 
     def __str__(self):
         return self.username

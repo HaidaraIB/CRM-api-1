@@ -209,6 +209,26 @@ class UserViewSet(viewsets.ModelViewSet):
         return success_response(data=serializer.data)
 
     @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated])
+    def presence_heartbeat(self, request):
+        source = str(request.data.get("source", "unknown")).strip().lower()
+        allowed_sources = {"web", "mobile", "unknown"}
+        if source not in allowed_sources:
+            source = "unknown"
+
+        user = request.user
+        user.last_seen_at = timezone.now()
+        user.last_seen_source = source
+        user.save(update_fields=["last_seen_at", "last_seen_source"])
+
+        return success_response(
+            message="Presence heartbeat recorded.",
+            data={
+                "last_seen_at": user.last_seen_at,
+                "last_seen_source": user.last_seen_source,
+            },
+        )
+
+    @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated])
     def change_password(self, request):
         """
         Change password for the current authenticated user
