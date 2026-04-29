@@ -67,7 +67,7 @@ class Command(BaseCommand):
         skipped_count = 0
 
         for company in companies:
-            if not company.owner or not company.owner.fcm_token:
+            if not company.owner or not company.owner.has_any_fcm_token():
                 skipped_count += 1
                 continue
 

@@ -11,6 +11,7 @@ from accounts.models import User, Role
 from subscriptions.models import Subscription
 from notifications.services import NotificationService
 from notifications.models import NotificationType
+from django.db.models import Q
 import logging
 
 logger = logging.getLogger(__name__)
@@ -205,7 +206,9 @@ def get_recipient_users(broadcast_target):
         QuerySet of User objects
     """
     users = _get_eligible_recipient_users_queryset(broadcast_target)
-    users = users.exclude(fcm_token__isnull=True).exclude(fcm_token='')
+    users = users.filter(
+        (Q(fcm_token__isnull=False) & ~Q(fcm_token="")) | ~Q(fcm_tokens=[])
+    )
     return users
 
 

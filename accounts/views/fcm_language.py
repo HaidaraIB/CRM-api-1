@@ -41,8 +41,28 @@ from ..utils import (
     send_two_factor_auth_email,
 )
 import logging
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
+
+
+def _revoke_token_from_other_users(current_user, token):
+    normalized_token = (token or "").strip()
+    if not normalized_token:
+        return
+
+    User.objects.filter(fcm_token=normalized_token).exclude(pk=current_user.pk).update(
+        fcm_token=None
+    )
+
+    for other_user in User.objects.exclude(pk=current_user.pk).only(
+        "id", "fcm_tokens"
+    ):
+        other_tokens = other_user.fcm_tokens if isinstance(other_user.fcm_tokens, list) else []
+        if normalized_token not in other_tokens:
+            continue
+        other_user.fcm_tokens = [t for t in other_tokens if t != normalized_token]
+        other_user.save(update_fields=["fcm_tokens"])
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -81,14 +101,17 @@ def update_fcm_token(request):
         f"ip={ip} ua={user_agent} token_len={token_len} token_prefix={token_prefix}"
     )
 
-    user.fcm_token = fcm_token
-
-    # Update language if provided
-    if language in ["ar", "en"]:
-        user.language = language
-
     try:
-        user.save(update_fields=["fcm_token", "language"])
+        with transaction.atomic():
+            _revoke_token_from_other_users(user, fcm_token)
+            user.fcm_token = fcm_token
+            user.add_fcm_token(fcm_token)
+
+            update_fields = ["fcm_token", "fcm_tokens"]
+            if language in ["ar", "en"]:
+                user.language = language
+                update_fields.append("language")
+            user.save(update_fields=update_fields)
     except Exception as e:
         # This will show in django_important.log (ERROR level).
         logger.exception(
@@ -110,6 +133,22 @@ def update_fcm_token(request):
     )
 
     return success_response(message="FCM token updated successfully")
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def remove_fcm_token(request):
+    user = request.user
+    fcm_token = request.data.get("fcm_token", "").strip()
+
+    if not fcm_token:
+        return error_response("fcm_token is required", code="bad_request")
+
+    changed = user.remove_fcm_token(fcm_token)
+    if changed:
+        user.save(update_fields=["fcm_token", "fcm_tokens"])
+
+    return success_response(message="FCM token removed successfully")
 
 
 @api_view(["POST"])

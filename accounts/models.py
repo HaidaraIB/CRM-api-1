@@ -34,6 +34,11 @@ class User(AbstractUser):
         help_text="Owner phone verified via WhatsApp OTP before registration (or legacy migration).",
     )
     fcm_token = models.CharField(max_length=255, blank=True, null=True, help_text="Firebase Cloud Messaging token for push notifications")
+    fcm_tokens = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of Firebase Cloud Messaging tokens for multi-device push notifications",
+    )
     language = models.CharField(max_length=10, default='ar', choices=[('ar', 'Arabic'), ('en', 'English')], help_text="User preferred language for notifications")
     last_seen_at = models.DateTimeField(null=True, blank=True)
     last_seen_source = models.CharField(
@@ -98,6 +103,59 @@ class User(AbstractUser):
             return sp.is_active and sp.has_permission(permission_name)
         except Exception:
             return False
+
+    @staticmethod
+    def _normalize_fcm_token(token):
+        if not isinstance(token, str):
+            return ""
+        return token.strip()
+
+    def _normalized_fcm_tokens(self):
+        raw_tokens = self.fcm_tokens if isinstance(self.fcm_tokens, list) else []
+        seen = set()
+        normalized = []
+        for token in raw_tokens:
+            normalized_token = self._normalize_fcm_token(token)
+            if not normalized_token or normalized_token in seen:
+                continue
+            seen.add(normalized_token)
+            normalized.append(normalized_token)
+        return normalized
+
+    def iter_fcm_tokens_for_push(self):
+        tokens = self._normalized_fcm_tokens()
+        legacy_token = self._normalize_fcm_token(self.fcm_token)
+        if legacy_token and legacy_token not in tokens:
+            tokens.append(legacy_token)
+        return tokens
+
+    def has_any_fcm_token(self):
+        return bool(self.iter_fcm_tokens_for_push())
+
+    def add_fcm_token(self, token):
+        normalized_token = self._normalize_fcm_token(token)
+        if not normalized_token:
+            return False
+        tokens = self._normalized_fcm_tokens()
+        if normalized_token in tokens:
+            self.fcm_tokens = tokens
+            return False
+        tokens.append(normalized_token)
+        self.fcm_tokens = tokens
+        return True
+
+    def remove_fcm_token(self, token):
+        normalized_token = self._normalize_fcm_token(token)
+        if not normalized_token:
+            return False
+        current_tokens = self._normalized_fcm_tokens()
+        tokens = [t for t in current_tokens if t != normalized_token]
+        changed = len(tokens) != len(current_tokens)
+        self.fcm_tokens = tokens
+        if self.fcm_token == normalized_token:
+            self.fcm_token = None
+            changed = True
+        return changed
 
     class Meta:
         db_table = "users"

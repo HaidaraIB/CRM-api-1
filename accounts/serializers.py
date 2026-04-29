@@ -84,6 +84,7 @@ class UserSerializer(serializers.ModelSerializer):
             "last_login",
             "is_me",
             "fcm_token",  # Include FCM token (read-only for security)
+            "fcm_tokens",  # Include multi-device FCM tokens (read-only)
             "language",  # User preferred language
             "limited_admin",
             "supervisor_permissions",
@@ -91,7 +92,15 @@ class UserSerializer(serializers.ModelSerializer):
             "last_seen_source",
             "is_online",
         ]
-        read_only_fields = ["id", "date_joined", "last_login", "email_verified", "phone_verified", "fcm_token"]
+        read_only_fields = [
+            "id",
+            "date_joined",
+            "last_login",
+            "email_verified",
+            "phone_verified",
+            "fcm_token",
+            "fcm_tokens",
+        ]
         extra_kwargs = {
             "email": {"required": True},
         }
@@ -815,11 +824,7 @@ class RegisterCompanySerializer(serializers.Serializer):
             specialization=company_data['specialization'],
             owner=owner,
         )
-
-        if company_data["specialization"] in ("real_estate", "services"):
-            from settings.lead_status_automation import ensure_visited_lead_status
-
-            ensure_visited_lead_status(company)
+        # Default channels/stages/statuses/etc. are seeded in companies.signals post_save.
 
         # Link company to owner
         owner.company = company

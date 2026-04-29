@@ -74,7 +74,7 @@ class Command(BaseCommand):
                 continue
 
             try:
-                if owner.fcm_token:
+                if owner.has_any_fcm_token():
                     NotificationService.send_notification(
                         user=owner,
                         notification_type=NotificationType.SUBSCRIPTION_EXPIRED,

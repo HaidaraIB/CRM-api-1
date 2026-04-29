@@ -1,7 +1,7 @@
 """
 Notification translations for different languages
 """
-from typing import Dict
+from typing import Any, Dict
 
 # ترجمات الإشعارات
 NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
@@ -358,6 +358,106 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
 }
 
 
+def normalize_notification_language(language: Any) -> str:
+    """Return 'ar' or 'en' for the recipient's stored preference."""
+    if language is None:
+        return "ar"
+    code = str(language).strip().lower().replace("-", "_")
+    if code.startswith("en"):
+        return "en"
+    if code.startswith("ar"):
+        return "ar"
+    return "ar"
+
+
+class _SafeFormatDict(dict):
+    def __missing__(self, key: str) -> str:  # type: ignore[override]
+        return ""
+
+
+def _format_template(template: str, **kwargs: Any) -> str:
+    safe = {k: ("" if v is None else str(v)) for k, v in kwargs.items()}
+    try:
+        return template.format_map(_SafeFormatDict(safe))
+    except (ValueError, KeyError):
+        return template
+
+
+# Owner team feed: full sentence per action (title is short; body is the line users read).
+_TEAM_ACTIVITY_TITLES = {
+    "ar": "نشاط الفريق",
+    "en": "Team activity",
+}
+
+_TEAM_ACTIVITY_BODIES: Dict[str, Dict[str, str]] = {
+    "status_change": {
+        "ar": "قام الموظف {employee} بتغيير حالة العميل المحتمل {lead} من {old_status} إلى {new_status}",
+        "en": "Employee {employee} changed the status of lead {lead} from {old_status} to {new_status}",
+    },
+    "assignment": {
+        "ar": "قام الموظف {employee} بتغيير تعيين العميل المحتمل {lead} من {old_assignee} إلى {new_assignee}",
+        "en": "Employee {employee} changed the assignment of lead {lead} from {old_assignee} to {new_assignee}",
+    },
+    "edit": {
+        "ar": "قام الموظف {employee} بتحديث العميل المحتمل {lead}: {detail}",
+        "en": "Employee {employee} updated lead {lead}: {detail}",
+    },
+    "lead_created": {
+        "ar": "قام الموظف {employee} بإنشاء عميل محتمل جديد {lead}",
+        "en": "Employee {employee} created lead {lead}",
+    },
+    "call_logged": {
+        "ar": "قام الموظف {employee} بتسجيل مكالمة على العميل المحتمل {lead}",
+        "en": "Employee {employee} logged a call on lead {lead}",
+    },
+    "visit_logged": {
+        "ar": "قام الموظف {employee} بتسجيل زيارة على العميل المحتمل {lead}",
+        "en": "Employee {employee} logged a visit on lead {lead}",
+    },
+    "task_created": {
+        "ar": "قام الموظف {employee} بإضافة مهمة على العميل المحتمل {lead}",
+        "en": "Employee {employee} added a task on lead {lead}",
+    },
+    "deal_won": {
+        "ar": "قام الموظف {employee} بإغلاق صفقة ناجحة للعميل المحتمل {lead} ({deal_title}) بقيمة {value}",
+        "en": "Employee {employee} won a deal for lead {lead} ({deal_title}) with value {value}",
+    },
+    "unknown": {
+        "ar": "قام الموظف {employee} بإجراء على العميل المحتمل {lead}: {detail}",
+        "en": "Employee {employee} performed an action on lead {lead}: {detail}",
+    },
+}
+
+
+def get_team_activity_text(language: str, action: str, **kwargs: Any) -> Dict[str, str]:
+    """
+    Localized title/body for owner team-activity notifications.
+    Expects display names in kwargs; use keys employee, lead, plus action-specific fields.
+    """
+    lang = normalize_notification_language(language)
+    employee = kwargs.get("employee") or kwargs.get("employee_name") or kwargs.get("actor_name") or ""
+    lead = kwargs.get("lead") or kwargs.get("lead_name") or ""
+    detail = kwargs.get("detail") or kwargs.get("details") or kwargs.get("summary") or ""
+
+    bodies = _TEAM_ACTIVITY_BODIES.get(action) or _TEAM_ACTIVITY_BODIES["unknown"]
+    body_tpl = bodies.get(lang, bodies["ar"])
+    title = _TEAM_ACTIVITY_TITLES.get(lang, _TEAM_ACTIVITY_TITLES["ar"])
+
+    body = _format_template(
+        body_tpl,
+        employee=employee,
+        lead=lead,
+        old_status=kwargs.get("old_status", ""),
+        new_status=kwargs.get("new_status", ""),
+        old_assignee=kwargs.get("old_assignee", ""),
+        new_assignee=kwargs.get("new_assignee", ""),
+        detail=detail,
+        deal_title=kwargs.get("deal_title", ""),
+        value=kwargs.get("value", ""),
+    )
+    return {"title": title, "body": body}
+
+
 def get_notification_text(notification_type: str, language: str = 'ar', **kwargs) -> Dict[str, str]:
     """
     Get notification title and body in the specified language
@@ -370,10 +470,12 @@ def get_notification_text(notification_type: str, language: str = 'ar', **kwargs
     Returns:
         Dict with 'title' and 'body' keys
     """
-    # Default to Arabic if language not supported
-    if language not in ['ar', 'en']:
-        language = 'ar'
-    
+    language = normalize_notification_language(language)
+
+    if notification_type == "team_activity":
+        action = kwargs.get("action") or "unknown"
+        return get_team_activity_text(language, action, **kwargs)
+
     # Get translations for this notification type
     translations = NOTIFICATION_TRANSLATIONS.get(notification_type, {})
     

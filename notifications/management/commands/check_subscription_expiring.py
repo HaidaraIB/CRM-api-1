@@ -73,7 +73,7 @@ class Command(BaseCommand):
 
             try:
                 # Push notification (skip if no FCM token)
-                if owner.fcm_token:
+                if owner.has_any_fcm_token():
                     NotificationService.send_notification(
                         user=owner,
                         notification_type=NotificationType.SUBSCRIPTION_EXPIRING,

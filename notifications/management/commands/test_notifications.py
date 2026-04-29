@@ -62,7 +62,7 @@ class Command(BaseCommand):
             self.style.SUCCESS(f'Testing notifications for user: {user.username} (ID: {user.id})')
         )
 
-        if not user.fcm_token:
+        if not user.has_any_fcm_token():
             self.stdout.write(
                 self.style.WARNING(
                     f'User {user.username} has no FCM token. '

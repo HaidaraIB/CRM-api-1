@@ -57,7 +57,7 @@ class Command(BaseCommand):
         skipped_count = 0
 
         for lead in leads:
-            if not lead.assigned_to or not lead.assigned_to.fcm_token:
+            if not lead.assigned_to or not lead.assigned_to.has_any_fcm_token():
                 skipped_count += 1
                 continue
 

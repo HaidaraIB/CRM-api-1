@@ -1,6 +1,11 @@
 """Account HTTP endpoints; URLconf uses ``from accounts.views import ...``."""
 from .email_verify import check_registration_availability, resend_verification, verify_email
-from .fcm_language import fcm_diagnostics_full, update_fcm_token, update_language
+from .fcm_language import (
+    fcm_diagnostics_full,
+    remove_fcm_token,
+    update_fcm_token,
+    update_language,
+)
 from .impersonation import impersonate, impersonate_exchange, impersonate_exchange_status
 from .limited_supervisor import LimitedAdminViewSet, SupervisorViewSet
 from .password_reset import forgot_password, reset_password
@@ -29,6 +34,7 @@ __all__ = [
     "request_two_factor_auth",
     "verify_two_factor_auth",
     "update_fcm_token",
+    "remove_fcm_token",
     "update_language",
     "fcm_diagnostics_full",
 ]

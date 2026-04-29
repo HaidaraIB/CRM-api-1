@@ -19,6 +19,7 @@ class NotificationType(models.TextChoices):
     LEAD_TRANSFERRED = 'lead_transferred', 'Lead Transferred'
     LEAD_UPDATED = 'lead_updated', 'Lead Updated'
     LEAD_REMINDER = 'lead_reminder', 'Lead Reminder'
+    TEAM_ACTIVITY = 'team_activity', 'Team Activity'
     
     # WhatsApp Notifications
     WHATSAPP_MESSAGE_RECEIVED = 'whatsapp_message_received', 'WhatsApp Message Received'

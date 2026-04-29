@@ -49,6 +49,7 @@ from accounts.views import (
     request_two_factor_auth,
     verify_two_factor_auth,
     update_fcm_token,
+    remove_fcm_token,
     update_language,
     fcm_diagnostics_full,
 )
@@ -192,6 +193,7 @@ v1_patterns = [
     path("subscriptions/preview-change/", preview_subscription_change, name="preview_subscription_change"),
     path("subscriptions/schedule-downgrade/", schedule_subscription_downgrade, name="schedule_subscription_downgrade"),
     path("users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
+    path("users/remove-fcm-token/", remove_fcm_token, name="remove_fcm_token"),
     path("users/update-language/", update_language, name="update_language"),
     path("users/fcm-diagnostics-full/", fcm_diagnostics_full, name="fcm_diagnostics_full"),
     path("", include(router.urls)),

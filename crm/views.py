@@ -10,6 +10,9 @@ from accounts.permissions import (
 from crm_saas_api.responses import success_response, error_response
 from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientVisit, ClientEvent
 from accounts.models import User
+from notifications.models import NotificationType
+from notifications.services import NotificationService
+from notifications.team_activity import notify_owner_team_activity
 from .serializers import (
     ClientSerializer,
     ClientListSerializer,
@@ -107,6 +110,31 @@ class ClientViewSet(viewsets.ModelViewSet):
                 client.assigned_to = assignee
                 client.assigned_at = dj_tz.now()
                 client.save(update_fields=["assigned_to", "assigned_at"])
+
+        if not company or not client:
+            return
+
+        if client.campaign and user != company.owner:
+            campaign_name = client.campaign.name
+            NotificationService.send_notification(
+                user=company.owner,
+                notification_type=NotificationType.NEW_LEAD,
+                data={
+                    "lead_id": client.id,
+                    "lead_name": client.name,
+                    "campaign_name": campaign_name,
+                },
+                sender_role=getattr(user, "role", None),
+            )
+            return
+
+        notify_owner_team_activity(
+            user,
+            company,
+            action="lead_created",
+            lead_id=client.id,
+            lead_name=client.name,
+        )
 
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):

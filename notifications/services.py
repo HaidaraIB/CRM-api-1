@@ -6,8 +6,9 @@ import os
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from .models import Notification, NotificationType, NotificationSettings
-from .translations import get_notification_text
+from .translations import get_notification_text, normalize_notification_language
 
 if TYPE_CHECKING:
     from django.contrib.auth.models import AbstractUser
@@ -81,6 +82,7 @@ class NotificationService:
         lead_source: Optional[str] = None,
         sender_role: Optional[str] = None,
         skip_settings_check: bool = False,
+        skip_database_insert: bool = False,
     ) -> bool:
         """
         Send a push notification to a user
@@ -96,6 +98,7 @@ class NotificationService:
             lead_source: Optional lead source (for source filtering)
             sender_role: Optional sender role (for role filtering)
             skip_settings_check: Skip notification settings check (for admin/system notifications)
+            skip_database_insert: If True, do not write Notification rows (caller already persisted)
         """
         # Check user notification settings (unless explicitly skipped)
         if not skip_settings_check:
@@ -115,9 +118,17 @@ class NotificationService:
             except Exception as e:
                 logger.warning(f"Error checking notification settings for user {user.username}: {e}")
                 # Continue with sending if settings check fails (fail open)
-        
-        # Get user language
-        user_language = language or getattr(user, 'language', 'ar') or 'ar'
+
+        # Recipient language from DB (avoids stale request-scoped user instances)
+        try:
+            fresh_user = User.objects.only("language").get(pk=user.pk)
+            user_language = normalize_notification_language(
+                language or fresh_user.language or getattr(user, "language", None)
+            )
+        except Exception:
+            user_language = normalize_notification_language(
+                language or getattr(user, "language", None)
+            )
         
         # Get translated text if title/body not provided
         if title is None or body is None:
@@ -132,27 +143,30 @@ class NotificationService:
         if not cls.initialize():
             logger.warning("Firebase not initialized. Saving notification to database only.")
             # Still save to database even if Firebase is not available
-            Notification.objects.create(
-                user=user,
-                type=notification_type,
-                title=title,
-                body=body,
-                data=data or {},
-                image_url=image_url,
-            )
+            if not skip_database_insert:
+                Notification.objects.create(
+                    user=user,
+                    type=notification_type,
+                    title=title,
+                    body=body,
+                    data=data or {},
+                    image_url=image_url,
+                )
             return False
         
-        if not user.fcm_token:
+        user_tokens = user.iter_fcm_tokens_for_push()
+        if not user_tokens:
             logger.warning(f"User {user.username} has no FCM token. Notification not sent.")
             # Still save to database
-            Notification.objects.create(
-                user=user,
-                type=notification_type,
-                title=title,
-                body=body,
-                data=data or {},
-                image_url=image_url,
-            )
+            if not skip_database_insert:
+                Notification.objects.create(
+                    user=user,
+                    type=notification_type,
+                    title=title,
+                    body=body,
+                    data=data or {},
+                    image_url=image_url,
+                )
             return False
         
         try:
@@ -178,47 +192,51 @@ class NotificationService:
             if image_url:
                 message_data['image_url'] = image_url
             
-            # Create message
-            message = messaging.Message(
-                notification=notification_payload,
-                data=message_data,
-                token=user.fcm_token,
-            )
-            
-            # Send message
-            response = messaging.send(message)
-            logger.info(f"Notification sent to {user.username}: {response}")
+            success_count = 0
+            for token in user_tokens:
+                try:
+                    message = messaging.Message(
+                        notification=notification_payload,
+                        data=message_data,
+                        token=token,
+                    )
+                    response = messaging.send(message)
+                    logger.info(
+                        f"Notification sent to {user.username} token={token[:12]}...: {response}"
+                    )
+                    success_count += 1
+                except messaging.UnregisteredError:
+                    logger.warning(
+                        f"FCM token for user {user.username} is invalid. Removing token."
+                    )
+                    user.remove_fcm_token(token)
+                    user.save(update_fields=["fcm_token", "fcm_tokens"])
             
             # Save to database
-            Notification.objects.create(
-                user=user,
-                type=notification_type,
-                title=title,
-                body=body,
-                data=data or {},
-                image_url=image_url,
-            )
+            if not skip_database_insert:
+                Notification.objects.create(
+                    user=user,
+                    type=notification_type,
+                    title=title,
+                    body=body,
+                    data=data or {},
+                    image_url=image_url,
+                )
             
-            return True
-            
-        except messaging.UnregisteredError:
-            # Token is invalid, remove it
-            logger.warning(f"FCM token for user {user.username} is invalid. Removing token.")
-            user.fcm_token = None
-            user.save(update_fields=['fcm_token'])
-            return False
+            return success_count > 0
             
         except Exception as e:
             logger.error(f"Error sending notification to {user.username}: {e}")
             # Still save to database
-            Notification.objects.create(
-                user=user,
-                type=notification_type,
-                title=title,
-                body=body,
-                data=data or {},
-                image_url=image_url,
-            )
+            if not skip_database_insert:
+                Notification.objects.create(
+                    user=user,
+                    type=notification_type,
+                    title=title,
+                    body=body,
+                    data=data or {},
+                    image_url=image_url,
+                )
             return False
     
     @classmethod
@@ -275,8 +293,10 @@ class NotificationService:
         if roles:
             users = users.filter(role__in=roles)
         
-        # Filter users with FCM tokens
-        users = users.exclude(fcm_token__isnull=True).exclude(fcm_token='')
+        # Filter users with at least one FCM token (legacy or multi-device).
+        users = users.filter(
+            (Q(fcm_token__isnull=False) & ~Q(fcm_token="")) | ~Q(fcm_tokens=[])
+        )
         
         return cls.send_notification_to_multiple(
             list(users),

@@ -90,7 +90,7 @@ class Command(BaseCommand):
                 continue
 
             # Notify company owner
-            if company.owner.fcm_token:
+            if company.owner.has_any_fcm_token():
                 if dry_run:
                     self.stdout.write(
                         self.style.SUCCESS(
@@ -117,7 +117,7 @@ class Command(BaseCommand):
                         skipped_count += 1
 
             # Notify top employee
-            if top_employee.fcm_token:
+            if top_employee.has_any_fcm_token():
                 if dry_run:
                     self.stdout.write(
                         self.style.SUCCESS(
