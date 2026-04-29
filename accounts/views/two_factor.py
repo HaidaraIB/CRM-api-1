@@ -86,11 +86,14 @@ def request_two_factor_auth(request):
     if not user:
         return error_response("User not found.", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
 
-    if not is_company_owner(user):
-        return error_response(
-            "Two-factor authentication is only required for company owners.",
-            code="two_factor_not_required",
-            status_code=status.HTTP_400_BAD_REQUEST,
+    is_owner = is_company_owner(user)
+    if not is_owner:
+        # Temporary backward compatibility for older mobile apps:
+        # old clients still call /auth/request-2fa/ for all roles.
+        logger.info(
+            "Legacy /auth/request-2fa compatibility path for non-owner user_id=%s role=%s",
+            user.id,
+            user.role,
         )
 
     # Check subscription before sending 2FA code (for all users except Super Admin)

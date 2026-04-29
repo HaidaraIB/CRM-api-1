@@ -111,7 +111,7 @@ class TestRateLimiting:
 
 @pytest.mark.django_db
 class TestOwner2faPolicy:
-    def test_request_2fa_rejects_non_owner(self, api_client, admin_user, subscription):
+    def test_request_2fa_allows_non_owner_for_legacy_mobile_compat(self, api_client, admin_user, subscription):
         from django.core.cache import cache
         cache.clear()
         response = api_client.post(
@@ -119,4 +119,7 @@ class TestOwner2faPolicy:
             {"username": admin_user.username, "password": "testpass123"},
             format="json",
         )
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_200_OK
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        assert isinstance(data.get("token"), str) and data.get("token")
