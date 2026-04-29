@@ -187,6 +187,37 @@ def test_owner_trusted_device_skips_2fa(api_client):
 
 
 @pytest.mark.django_db
+def test_owner_trusted_device_header_skips_2fa(api_client):
+    owner = User.objects.create_user(
+        username="ownerHeaderA",
+        email="ownerHeaderA@example.com",
+        password="securepassword123",
+        role="admin",
+    )
+    _with_active_subscription(owner)
+
+    raw_token = "trusted-device-header-token"
+    OwnerTrustedDevice.objects.create(
+        user=owner,
+        token_hash=hash_device_token(raw_token),
+        user_agent_hash=hash_user_agent("pytest-mobile-agent"),
+        trusted_until=timezone.now() + timedelta(days=2),
+    )
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": owner.username, "password": "securepassword123"},
+        format="json",
+        HTTP_USER_AGENT="pytest-mobile-agent",
+        HTTP_X_OWNER_TRUSTED_DEVICE=raw_token,
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert "access" in response.data
+    assert response.data.get("requires_two_factor") is None
+
+
+@pytest.mark.django_db
 def test_owner_expired_trusted_device_requires_2fa(api_client):
     owner = User.objects.create_user(
         username="ownerD",

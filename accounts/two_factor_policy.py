@@ -8,6 +8,7 @@ from .models import OwnerTrustedDevice
 
 
 OWNER_TRUST_COOKIE_NAME = "owner_trusted_device"
+OWNER_TRUST_HEADER_NAME = "HTTP_X_OWNER_TRUSTED_DEVICE"
 OWNER_TRUST_DAYS = 7
 
 
@@ -55,6 +56,8 @@ def issue_trusted_device(user, request):
 
 def is_trusted_device_valid(user, request) -> bool:
     raw_token = request.COOKIES.get(OWNER_TRUST_COOKIE_NAME, "").strip()
+    if not raw_token:
+        raw_token = (request.META.get(OWNER_TRUST_HEADER_NAME) or "").strip()
     if not raw_token:
         return False
 

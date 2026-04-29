@@ -386,6 +386,11 @@ def verify_two_factor_auth(request):
     trust_device = bool(request.data.get("trust_device", False))
     if is_company_owner(user) and trust_device:
         trusted_token, trusted_until = issue_trusted_device(user, request)
+        # Mobile clients don't persist HttpOnly cookies reliably with plain HTTP
+        # stacks, so also return token in response payload for secure app storage.
+        response.data.setdefault("data", {})
+        response.data["data"]["trusted_device_token"] = trusted_token
+        response.data["data"]["trusted_until"] = trusted_until.isoformat()
         response.set_cookie(
             OWNER_TRUST_COOKIE_NAME,
             trusted_token,
