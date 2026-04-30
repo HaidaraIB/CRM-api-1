@@ -1,7 +1,15 @@
 from django.utils import timezone
 from datetime import timedelta
 from django.db import models
-from .models import Client, ClientEvent
+from django.db.models import Exists, OuterRef
+from .models import (
+    Client,
+    ClientCall,
+    ClientEvent,
+    ClientTask,
+    ClientVisit,
+    Deal,
+)
 from accounts.models import User
 
 
@@ -63,7 +71,48 @@ def re_assign_inactive_clients():
             models.Q(last_contacted_at__isnull=True) | 
             models.Q(last_contacted_at__lt=threshold_time)
         )
-        
+
+        # Lock the lead to its current employee if that employee has ever
+        # performed any action on it (task, call, visit, event, or deal).
+        # Once the assigned employee touches the lead, it must never be
+        # reassigned away from them by the auto-reassignment job.
+        assigned_acted = (
+            Exists(
+                ClientEvent.objects.filter(
+                    client=OuterRef('pk'),
+                    created_by=OuterRef('assigned_to'),
+                )
+            )
+            | Exists(
+                ClientTask.objects.filter(
+                    client=OuterRef('pk'),
+                    created_by=OuterRef('assigned_to'),
+                )
+            )
+            | Exists(
+                ClientCall.objects.filter(
+                    client=OuterRef('pk'),
+                    created_by=OuterRef('assigned_to'),
+                )
+            )
+            | Exists(
+                ClientVisit.objects.filter(
+                    client=OuterRef('pk'),
+                    created_by=OuterRef('assigned_to'),
+                )
+            )
+            | Exists(
+                Deal.objects.filter(
+                    client=OuterRef('pk'),
+                    employee=OuterRef('assigned_to'),
+                )
+            )
+        )
+
+        clients_to_reassign = clients_to_reassign.annotate(
+            _assigned_employee_acted=assigned_acted
+        ).filter(_assigned_employee_acted=False)
+
         for client in clients_to_reassign:
             # Get new employee (different from current one)
             current_employee = client.assigned_to
