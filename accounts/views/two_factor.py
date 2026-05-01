@@ -96,6 +96,15 @@ def request_two_factor_auth(request):
             user.role,
         )
 
+    from ..login_verification_policy import login_verification_error
+    verification_error = login_verification_error(user)
+    if verification_error:
+        return error_response(
+            verification_error["error"],
+            code=verification_error["code"],
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
     # Check subscription before sending 2FA code (for all users except Super Admin)
     if not user.is_super_admin():
         if user.company:
@@ -250,6 +259,15 @@ def verify_two_factor_auth(request):
             "Invalid credentials.",
             code="authentication_failed",
             status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    from ..login_verification_policy import login_verification_error
+    verification_error = login_verification_error(user)
+    if verification_error:
+        return error_response(
+            verification_error["error"],
+            code=verification_error["code"],
+            status_code=status.HTTP_403_FORBIDDEN,
         )
 
     # Now verify 2FA code

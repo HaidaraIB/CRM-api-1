@@ -376,6 +376,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Validate using parent class
         data = super().validate(attrs)
         request = self.context.get("request")
+        from .login_verification_policy import login_verification_error
+
+        verification_error = login_verification_error(self.user)
+        if verification_error:
+            raise serializers.ValidationError(verification_error)
 
         # Keep login subscription-safe to match 2FA endpoint behavior.
         if not self.user.is_super_admin():
@@ -683,6 +688,7 @@ class RegisterCompanySerializer(serializers.Serializer):
         required=True
     )
     phone_verification_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    email_verification_token = serializers.CharField(required=False, allow_blank=True, write_only=True)
     plan_id = serializers.IntegerField(required=False, allow_null=True)
     billing_cycle = serializers.ChoiceField(
         choices=['monthly', 'yearly'],
@@ -710,40 +716,76 @@ class RegisterCompanySerializer(serializers.Serializer):
             SignatureExpired,
             unsign_phone_registration_token,
         )
+        from .email_registration_utils import (
+            BadSignature as EmailBadSignature,
+            SignatureExpired as EmailSignatureExpired,
+            unsign_email_registration_token,
+        )
         from .platform_whatsapp import normalize_phone_digits
-        from django.core.cache import cache
+        from .email_registration_policy import effective_registration_email_verification_required
+        from .phone_otp_policy import effective_phone_otp_required
 
         request = self.context.get("request")
         token = (attrs.get("phone_verification_token") or "").strip()
+        email_token = (attrs.get("email_verification_token") or "").strip()
         owner = attrs.get("owner") or {}
         phone = normalize_phone_digits(owner.get("phone", ""))
+        email = (owner.get("email") or "").strip().lower()
         if not phone:
             raise serializers.ValidationError({"owner": ["Phone number is required"]})
-        # Source of truth is runtime admin toggle only; default is disabled.
-        otp_required = bool(cache.get("platform_whatsapp_otp_required_override", False))
+        if not email:
+            raise serializers.ValidationError({"owner": ["Email is required"]})
+        otp_required = effective_phone_otp_required()
         if not otp_required:
             attrs["_skip_phone_verification"] = True
+        else:
+            if not token:
+                if request and self._request_can_skip_phone_verification(request):
+                    attrs["_skip_phone_verification"] = True
+                else:
+                    raise serializers.ValidationError(
+                        {"phone_verification_token": ["Phone verification is required before registration."]}
+                    )
+            else:
+                try:
+                    signed_phone = unsign_phone_registration_token(token, max_age=1800)
+                except SignatureExpired:
+                    raise serializers.ValidationError(
+                        {"phone_verification_token": ["Verification expired. Verify your phone again."]}
+                    )
+                except BadSignature:
+                    raise serializers.ValidationError(
+                        {"phone_verification_token": ["Invalid verification token."]}
+                    )
+                if signed_phone != phone:
+                    raise serializers.ValidationError(
+                        {"phone_verification_token": ["Phone does not match verification."]}
+                    )
+
+        email_required = effective_registration_email_verification_required()
+        if not email_required:
+            attrs["_skip_email_verification"] = True
             return attrs
-        if not token:
+        if not email_token:
             if request and self._request_can_skip_phone_verification(request):
-                attrs["_skip_phone_verification"] = True
+                attrs["_skip_email_verification"] = True
                 return attrs
             raise serializers.ValidationError(
-                {"phone_verification_token": ["WhatsApp verification is required before registration."]}
+                {"email_verification_token": ["Email verification is required before registration."]}
             )
         try:
-            signed_phone = unsign_phone_registration_token(token, max_age=1800)
-        except SignatureExpired:
+            signed_email = unsign_email_registration_token(email_token, max_age=1800)
+        except EmailSignatureExpired:
             raise serializers.ValidationError(
-                {"phone_verification_token": ["Verification expired. Verify your phone again."]}
+                {"email_verification_token": ["Email verification expired. Verify your email again."]}
             )
-        except BadSignature:
+        except EmailBadSignature:
             raise serializers.ValidationError(
-                {"phone_verification_token": ["Invalid verification token."]}
+                {"email_verification_token": ["Invalid email verification token."]}
             )
-        if signed_phone != phone:
+        if signed_email != email:
             raise serializers.ValidationError(
-                {"phone_verification_token": ["Phone does not match verification."]}
+                {"email_verification_token": ["Email does not match verification token."]}
             )
         return attrs
 
@@ -799,6 +841,8 @@ class RegisterCompanySerializer(serializers.Serializer):
         """Create company, owner user, and subscription"""
         validated_data.pop("phone_verification_token", None)
         validated_data.pop("_skip_phone_verification", None)
+        validated_data.pop("email_verification_token", None)
+        validated_data.pop("_skip_email_verification", None)
         company_data = validated_data['company']
         owner_data = validated_data['owner']
         plan_id = validated_data.get('plan_id')
@@ -815,7 +859,12 @@ class RegisterCompanySerializer(serializers.Serializer):
             role=Role.ADMIN.value,
         )
         owner.phone_verified = True
-        owner.save(update_fields=["phone_verified"])
+        from .email_registration_policy import effective_registration_email_verification_required
+        if effective_registration_email_verification_required():
+            owner.email_verified = True
+            owner.save(update_fields=["phone_verified", "email_verified"])
+        else:
+            owner.save(update_fields=["phone_verified"])
 
         # Create company
         company = Company.objects.create(

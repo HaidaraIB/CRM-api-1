@@ -210,7 +210,9 @@ def process_whatsapp_message(message, phone_number_id):
     معالجة رسالة WhatsApp واردة.
     Multi-tenant: نستخرج phone_number_id → نبحث في WhatsAppAccount → نحصل على tenant (company).
     """
-    platform_pid = getattr(settings, "PLATFORM_WHATSAPP_PHONE_NUMBER_ID", "") or ""
+    from accounts.platform_whatsapp import effective_platform_phone_number_id
+
+    platform_pid = effective_platform_phone_number_id()
     if platform_pid and str(phone_number_id) == str(platform_pid):
         process_platform_admin_inbound(message)
         return

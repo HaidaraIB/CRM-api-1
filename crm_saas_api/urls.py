@@ -37,8 +37,11 @@ from accounts.views import (
     CustomTokenObtainPairView,
     register_company,
     phone_otp_requirement_settings,
+    registration_email_requirement_settings,
     register_phone_send_otp,
     register_phone_verify_otp,
+    register_email_send_otp,
+    register_email_verify_otp,
     impersonate,
     impersonate_exchange,
     impersonate_exchange_status,
@@ -74,6 +77,7 @@ from settings.views import (
     SystemAuditLogViewSet,
     SystemSettingsViewSet,
     PlatformTwilioSettingsViewSet,
+    PlatformWhatsAppSettingsViewSet,
     BillingSettingsViewSet,
 )
 from settings.views_public import MobileAppVersionPublicView
@@ -144,6 +148,11 @@ router.register(
     r"settings/platform-twilio", PlatformTwilioSettingsViewSet, basename="platformtwiliosettings"
 )
 router.register(
+    r"settings/platform-whatsapp",
+    PlatformWhatsAppSettingsViewSet,
+    basename="platformwhatsappsettings",
+)
+router.register(
     r"settings/billing", BillingSettingsViewSet, basename="billingsettings"
 )
 
@@ -204,8 +213,15 @@ v1_patterns = [
         phone_otp_requirement_settings,
         name="phone_otp_requirement_settings",
     ),
+    path(
+        "auth/register/email-verification-requirement/",
+        registration_email_requirement_settings,
+        name="registration_email_requirement_settings",
+    ),
     path("auth/register/phone/send-otp/", register_phone_send_otp, name="register_phone_send_otp"),
     path("auth/register/phone/verify-otp/", register_phone_verify_otp, name="register_phone_verify_otp"),
+    path("auth/register/email/send-otp/", register_email_send_otp, name="register_email_send_otp"),
+    path("auth/register/email/verify-otp/", register_email_verify_otp, name="register_email_verify_otp"),
     path("auth/impersonate/", impersonate, name="impersonate"),
     path("auth/impersonate-exchange/status/", impersonate_exchange_status, name="impersonate_exchange_status"),
     path("auth/impersonate-exchange/", impersonate_exchange, name="impersonate_exchange"),

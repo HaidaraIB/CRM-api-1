@@ -114,6 +114,9 @@ class TestOwner2faPolicy:
     def test_request_2fa_allows_non_owner_for_legacy_mobile_compat(self, api_client, admin_user, subscription):
         from django.core.cache import cache
         cache.clear()
+        admin_user.email_verified = True
+        admin_user.phone_verified = True
+        admin_user.save(update_fields=["email_verified", "phone_verified"])
         response = api_client.post(
             "/api/v1/auth/request-2fa/",
             {"username": admin_user.username, "password": "testpass123"},

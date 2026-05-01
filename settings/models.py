@@ -455,6 +455,88 @@ class PlatformTwilioSettings(models.Model):
         return obj
 
 
+class PlatformWhatsAppSettings(models.Model):
+    """
+    Platform-level WhatsApp Cloud API (signup OTP + admin → tenant owner).
+    Singleton (pk=1). Non-empty DB fields override django.conf env defaults.
+    """
+
+    phone_number_id = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="WhatsApp Cloud API phone_number_id",
+    )
+    access_token = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Permanent access token (stored encrypted)",
+    )
+    graph_api_version = models.CharField(
+        max_length=16,
+        blank=True,
+        null=True,
+        default="v25.0",
+        help_text="Graph API version, e.g. v25.0",
+    )
+    otp_template_name = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        help_text="Approved authentication template name for OTP",
+    )
+    otp_template_lang = models.CharField(
+        max_length=16,
+        blank=True,
+        null=True,
+        default="en",
+        help_text="Template language code",
+    )
+    admin_template_name = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        help_text="Optional utility template for admin outbound messages",
+    )
+    admin_template_lang = models.CharField(
+        max_length=16,
+        blank=True,
+        null=True,
+        default="en",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_platform_whatsapp_settings"
+        verbose_name = "Platform WhatsApp Settings"
+        verbose_name_plural = "Platform WhatsApp Settings"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return "Platform WhatsApp (Cloud API)"
+
+    def get_access_token(self):
+        if not self.access_token:
+            return None
+        from integrations.encryption import decrypt_token
+
+        return decrypt_token(self.access_token)
+
+    def set_access_token(self, token):
+        if token:
+            from integrations.encryption import encrypt_token
+
+            self.access_token = encrypt_token(token)
+        else:
+            self.access_token = None
+
+    @classmethod
+    def get_settings(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class BillingSettings(models.Model):
     """
     Platform issuer details and logo for SaaS subscription invoices (PDF / email).

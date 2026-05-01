@@ -27,6 +27,7 @@ from .models import (
     SystemAuditLog,
     SystemSettings,
     PlatformTwilioSettings,
+    PlatformWhatsAppSettings,
     BillingSettings,
 )
 from .serializers import (
@@ -42,6 +43,7 @@ from .serializers import (
     VisitTypeListSerializer,
     SMTPSettingsSerializer,
     PlatformTwilioSettingsSerializer,
+    PlatformWhatsAppSettingsSerializer,
     SystemBackupSerializer,
     SystemAuditLogSerializer,
     SystemSettingsSerializer,
@@ -272,6 +274,30 @@ class PlatformTwilioSettingsViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         """Return the singleton data."""
         instance = PlatformTwilioSettings.get_settings()
+        serializer = self.get_serializer(instance)
+        return success_response(data=serializer.data)
+
+
+class PlatformWhatsAppSettingsViewSet(viewsets.ModelViewSet):
+    """
+    Platform WhatsApp Cloud API settings (signup OTP + admin messaging).
+    Singleton (pk=1). GET and PUT only.
+    """
+
+    permission_classes = [IsAuthenticated, CanManageSettings]
+    serializer_class = PlatformWhatsAppSettingsSerializer
+    http_method_names = ["get", "put", "head", "options"]
+
+    def get_queryset(self):
+        return PlatformWhatsAppSettings.objects.filter(pk=1)
+
+    def get_object(self):
+        if self.kwargs.get("pk") == "1" or self.kwargs.get("pk") == 1:
+            return PlatformWhatsAppSettings.get_settings()
+        return super().get_object()
+
+    def list(self, request, *args, **kwargs):
+        instance = PlatformWhatsAppSettings.get_settings()
         serializer = self.get_serializer(instance)
         return success_response(data=serializer.data)
 

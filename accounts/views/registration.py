@@ -28,6 +28,18 @@ from ..serializers import (
     build_user_auth_payload,
 )
 from ..permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
+from ..phone_otp_policy import (
+    PHONE_OTP_CHANNEL_CACHE_KEY,
+    PHONE_OTP_REQUIRED_CACHE_KEY,
+    VALID_CHANNELS,
+    channel_is_configured,
+    effective_phone_otp_channel,
+    effective_phone_otp_required,
+)
+from ..email_registration_policy import (
+    EMAIL_VERIFICATION_REQUIRED_CACHE_KEY,
+    effective_registration_email_verification_required,
+)
 from companies.models import Company
 from django.conf import settings
 from django.core.cache import cache
@@ -43,7 +55,6 @@ from ..utils import (
 import logging
 
 logger = logging.getLogger(__name__)
-PHONE_OTP_REQUIRED_CACHE_KEY = "platform_whatsapp_otp_required_override"
 
 
 def _request_can_manage_settings(request) -> bool:
@@ -58,10 +69,6 @@ def _request_can_manage_settings(request) -> bool:
     except Exception:
         return False
 
-
-def _effective_phone_otp_required() -> bool:
-    # Source of truth is runtime admin toggle only; default is disabled.
-    return bool(cache.get(PHONE_OTP_REQUIRED_CACHE_KEY, False))
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -163,9 +170,12 @@ def register_company(request):
 @permission_classes([AllowAny])
 def phone_otp_requirement_settings(request):
     if request.method == "GET":
+        req = effective_phone_otp_required()
+        ch = effective_phone_otp_channel() if req else None
         return success_response(
             data={
-                "phone_otp_required": _effective_phone_otp_required(),
+                "phone_otp_required": req,
+                "phone_otp_channel": ch,
             }
         )
 
@@ -179,11 +189,72 @@ def phone_otp_requirement_settings(request):
     value = request.data.get("phone_otp_required", None)
     if value is None:
         return validation_error_response({"phone_otp_required": ["This field is required."]})
-    normalized = value
+    normalized_req = value
     if isinstance(value, str):
-        normalized = value.strip().lower() in ("1", "true", "yes", "on")
-    normalized = bool(normalized)
-    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, normalized, timeout=None)
-    return success_response(data={"phone_otp_required": normalized})
+        normalized_req = value.strip().lower() in ("1", "true", "yes", "on")
+    normalized_req = bool(normalized_req)
+
+    if not normalized_req:
+        cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, False, timeout=None)
+        cache.delete(PHONE_OTP_CHANNEL_CACHE_KEY)
+        return success_response(
+            data={"phone_otp_required": False, "phone_otp_channel": None}
+        )
+
+    raw_ch = request.data.get("phone_otp_channel")
+    ch = (raw_ch if isinstance(raw_ch, str) else "") or ""
+    ch = ch.strip().lower()
+    if ch not in VALID_CHANNELS:
+        return validation_error_response(
+            {
+                "phone_otp_channel": [
+                    "Select whatsapp or twilio_sms when phone OTP is required."
+                ]
+            }
+        )
+    if not channel_is_configured(ch):
+        code = "whatsapp_otp_not_configured" if ch == "whatsapp" else "twilio_otp_not_configured"
+        return error_response(
+            "Selected channel is not configured.",
+            code=code,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, True, timeout=None)
+    cache.set(PHONE_OTP_CHANNEL_CACHE_KEY, ch, timeout=None)
+    return success_response(
+        data={"phone_otp_required": True, "phone_otp_channel": ch}
+    )
+
+
+@api_view(["GET", "POST"])
+@permission_classes([AllowAny])
+def registration_email_requirement_settings(request):
+    if request.method == "GET":
+        return success_response(
+            data={
+                "email_verification_required": effective_registration_email_verification_required(),
+            }
+        )
+
+    if not _request_can_manage_settings(request):
+        return error_response(
+            "Permission denied",
+            code="permission_denied",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    value = request.data.get("email_verification_required", None)
+    if value is None:
+        return validation_error_response({"email_verification_required": ["This field is required."]})
+    normalized_req = value
+    if isinstance(value, str):
+        normalized_req = value.strip().lower() in ("1", "true", "yes", "on")
+    normalized_req = bool(normalized_req)
+
+    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, normalized_req, timeout=None)
+    return success_response(
+        data={"email_verification_required": normalized_req}
+    )
 
 

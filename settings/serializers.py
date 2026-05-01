@@ -12,6 +12,7 @@ from .models import (
     SystemAuditLog,
     SystemSettings,
     PlatformTwilioSettings,
+    PlatformWhatsAppSettings,
     BillingSettings,
 )
 from integrations.policy import (
@@ -301,6 +302,44 @@ class PlatformTwilioSettingsSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         if auth is not None:
             instance.set_auth_token(auth)
+        instance.save()
+        return instance
+
+
+class PlatformWhatsAppSettingsSerializer(serializers.ModelSerializer):
+    """Platform WhatsApp Cloud API. Access token is write-only and stored encrypted."""
+
+    access_token_masked = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = PlatformWhatsAppSettings
+        fields = [
+            "id",
+            "phone_number_id",
+            "access_token",
+            "access_token_masked",
+            "graph_api_version",
+            "otp_template_name",
+            "otp_template_lang",
+            "admin_template_name",
+            "admin_template_lang",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {"access_token": {"write_only": True, "required": False}}
+
+    def get_access_token_masked(self, obj):
+        if obj.access_token:
+            return "********"
+        return None
+
+    def update(self, instance, validated_data):
+        token = validated_data.pop("access_token", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if token is not None:
+            instance.set_access_token(token)
         instance.save()
         return instance
 

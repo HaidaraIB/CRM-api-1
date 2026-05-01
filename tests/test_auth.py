@@ -38,9 +38,13 @@ def _with_active_subscription(user, make_owner=True):
     )
     if not make_owner:
         owner.company = company
-        owner.save(update_fields=["company"])
+        owner.email_verified = True
+        owner.phone_verified = True
+        owner.save(update_fields=["company", "email_verified", "phone_verified"])
     user.company = company
-    user.save(update_fields=["company"])
+    user.email_verified = True
+    user.phone_verified = True
+    user.save(update_fields=["company", "email_verified", "phone_verified"])
     plan = Plan.objects.create(
         name=f"Plan {user.username}",
         description="test",
@@ -128,6 +132,8 @@ def test_non_owner_login_does_not_trigger_2fa(api_client):
         password="securepassword123",
         role="employee",
         company=company,
+        email_verified=True,
+        phone_verified=True,
     )
 
     url = reverse("token_obtain_pair")
@@ -245,6 +251,58 @@ def test_owner_expired_trusted_device_requires_2fa(api_client):
     )
     assert response.status_code == status.HTTP_200_OK
     assert response.data.get("requires_two_factor") is True
+
+
+@pytest.mark.django_db
+def test_login_blocked_when_email_not_verified(api_client):
+    user = User.objects.create_user(
+        username="email_unverified_user",
+        email="email_unverified_user@example.com",
+        password="securepassword123",
+        role="employee",
+        email_verified=False,
+        phone_verified=True,
+    )
+    _with_active_subscription(user, make_owner=False)
+    user.email_verified = False
+    user.phone_verified = True
+    user.save(update_fields=["email_verified", "phone_verified"])
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": user.username, "password": "securepassword123"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    payload_text = str(response.data).lower()
+    assert "email verification is required before login" in payload_text
+
+
+@pytest.mark.django_db
+def test_login_blocked_when_phone_not_verified(api_client):
+    user = User.objects.create_user(
+        username="phone_unverified_user",
+        email="phone_unverified_user@example.com",
+        password="securepassword123",
+        role="employee",
+        email_verified=True,
+        phone_verified=False,
+    )
+    _with_active_subscription(user, make_owner=False)
+    user.email_verified = True
+    user.phone_verified = False
+    user.save(update_fields=["email_verified", "phone_verified"])
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": user.username, "password": "securepassword123"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    payload_text = str(response.data).lower()
+    assert "phone verification is required before login" in payload_text
 
 
 @pytest.mark.django_db
