@@ -91,6 +91,7 @@ class UserSerializer(serializers.ModelSerializer):
             "last_seen_at",
             "last_seen_source",
             "is_online",
+            "weekly_day_off",
         ]
         read_only_fields = [
             "id",
@@ -143,6 +144,38 @@ class UserSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("SUPER_ADMIN role is only allowed for superusers.")
         return value
 
+    def validate_weekly_day_off(self, value):
+        if value is None:
+            return value
+        if value < 0 or value > 6:
+            raise serializers.ValidationError(
+                "weekly_day_off must be between 0 (Monday) and 6 (Sunday), or null."
+            )
+        return value
+
+    def validate(self, attrs):
+        if "weekly_day_off" not in attrs:
+            return attrs
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        inst = getattr(self, "instance", None)
+        can_set = bool(user and user.is_authenticated and user.is_super_admin())
+        if not can_set and user and user.is_authenticated and user.is_admin():
+            if inst is None or inst.company_id == user.company_id:
+                can_set = True
+        if (
+            not can_set
+            and user
+            and user.is_authenticated
+            and user.is_supervisor()
+            and user.supervisor_has_permission("manage_users")
+        ):
+            if inst is None or inst.company_id == user.company_id:
+                can_set = True
+        if not can_set:
+            attrs.pop("weekly_day_off", None)
+        return attrs
+
     @extend_schema_field(serializers.BooleanField())
     def get_is_me(self, obj):
         """Check if this user is the current user"""
@@ -178,6 +211,7 @@ class UserSerializer(serializers.ModelSerializer):
             "re_assign_enabled": company.re_assign_enabled,
             "re_assign_hours": company.re_assign_hours,
             "free_trial_consumed": getattr(company, "free_trial_consumed", False),
+            "timezone": getattr(company, "timezone", "UTC") or "UTC",
         }
         
         if subscription:
@@ -296,6 +330,7 @@ class UserListSerializer(serializers.ModelSerializer):
 
     company_name = serializers.CharField(source="company.name", read_only=True)
     company_specialization = serializers.CharField(source="company.specialization", read_only=True)
+    company_timezone = serializers.SerializerMethodField()
     is_me = serializers.SerializerMethodField()
     is_online = serializers.SerializerMethodField()
 
@@ -313,6 +348,8 @@ class UserListSerializer(serializers.ModelSerializer):
             "company",
             "company_name",
             "company_specialization",
+            "company_timezone",
+            "weekly_day_off",
             "is_active",
             "email_verified",
             "date_joined",
@@ -329,6 +366,12 @@ class UserListSerializer(serializers.ModelSerializer):
         if request and request.user:
             return obj.id == request.user.id
         return False
+
+    def get_company_timezone(self, obj):
+        c = getattr(obj, "company", None)
+        if not c:
+            return "UTC"
+        return getattr(c, "timezone", None) or "UTC"
 
     @extend_schema_field(serializers.BooleanField())
     def get_is_online(self, obj):

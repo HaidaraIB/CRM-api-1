@@ -60,7 +60,11 @@ def custom_exception_handler(exc, context):
             details = data
 
         if "error_key" in data:
-            code = data["error_key"]
+            ek = data["error_key"]
+            if isinstance(ek, (list, tuple)) and ek:
+                code = str(ek[0])
+            else:
+                code = str(ek)
     else:
         message = str(data)
 

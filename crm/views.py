@@ -3,13 +3,13 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import (
-    CanAccessClient, CanAccessDeal, CanAccessTask,
+    CanAccessClient, CanAccessDeal, CanAccessTask, DenyDataEntryNonLeadAPI,
     IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee,
     IsAdminOrSupervisorLeadsOrReadOnlyForEmployee,
 )
 from crm_saas_api.responses import success_response, error_response
 from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientVisit, ClientEvent
-from accounts.models import User
+from accounts.models import User, Role
 from notifications.models import NotificationType
 from notifications.services import NotificationService
 from notifications.team_activity import notify_owner_team_activity
@@ -46,6 +46,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         "type",
         "communication_way__name",
         "status__name",
+        "notes",
     ]
     ordering_fields = ["created_at", "name", "priority"]
     ordering = ["-created_at"]
@@ -53,7 +54,7 @@ class ClientViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = super().get_queryset().select_related(
-            "company", "assigned_to", "communication_way", "status", "campaign",
+            "company", "assigned_to", "created_by", "communication_way", "status", "campaign",
             "integration_account",
         ).prefetch_related(
             "phone_numbers",
@@ -97,7 +98,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                 message="You have reached your plan leads limit. Please upgrade your plan to add more leads.",
                 error_key="plan_quota_max_clients_exceeded",
             )
-        serializer.save(company=company)
+        serializer.save(company=company, created_by=user)
         client = serializer.instance
         if user.is_data_entry() and company and client and not client.assigned_to:
             from crm.signals import get_next_data_entry_round_robin_employee
@@ -171,8 +172,17 @@ class ClientViewSet(viewsets.ModelViewSet):
                 code="auto_assign_disabled",
             )
 
+        has_employees = User.objects.filter(
+            company=company, role=Role.EMPLOYEE.value, is_active=True
+        ).exists()
         employee = get_least_busy_employee(company)
         if not employee:
+            if has_employees:
+                return error_response(
+                    "No employees are available for assignment today (weekly day off).",
+                    code="no_available_employees_day_off",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
             return error_response(
                 "No active employees found in your company.",
                 code="no_employees",
@@ -210,6 +220,7 @@ class ClientViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def bulk_assign(self, request):
         """Assign multiple clients to a specific user or unassign them."""
+        from crm.availability import user_accepts_new_assignments
         from django.utils import timezone
 
         client_ids = request.data.get("client_ids", [])
@@ -237,6 +248,12 @@ class ClientViewSet(viewsets.ModelViewSet):
                     "User not found or does not belong to your company.",
                     code="not_found",
                     status_code=status.HTTP_404_NOT_FOUND,
+                )
+            if not user_accepts_new_assignments(target_user):
+                return error_response(
+                    "Cannot assign to this user on their weekly day off.",
+                    code="employee_weekly_day_off",
+                    status_code=status.HTTP_400_BAD_REQUEST,
                 )
 
         clients_to_update = list(
@@ -289,7 +306,9 @@ class DealViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Deal instances (CRUD)."""
 
     queryset = Deal.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessDeal]
+    permission_classes = [
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessDeal,
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["client__name", "stage", "company__name"]
     ordering_fields = ["created_at", "updated_at", "stage"]
@@ -340,7 +359,9 @@ class TaskViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Task instances (CRUD)."""
 
     queryset = Task.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessTask]
+    permission_classes = [
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessTask,
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "stage__name", "deal__client__name"]
     ordering_fields = ["created_at", "reminder_date", "stage__name"]
@@ -436,7 +457,9 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ClientTask instances (CRUD)."""
 
     queryset = ClientTask.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    permission_classes = [
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessClient,
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "stage__name", "client__name"]
     ordering_fields = ["created_at", "reminder_date", "stage__name"]
@@ -472,7 +495,9 @@ class ClientVisitViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ClientVisit instances (real_estate / services)."""
 
     queryset = ClientVisit.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    permission_classes = [
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessClient,
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["summary", "visit_type__name", "client__name"]
     ordering_fields = ["created_at", "visit_datetime", "visit_type__name"]
@@ -512,7 +537,9 @@ class ClientCallViewSet(viewsets.ModelViewSet):
     """ViewSet for managing ClientCall instances (CRUD)."""
 
     queryset = ClientCall.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    permission_classes = [
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessClient,
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "call_method__name", "client__name"]
     ordering_fields = ["created_at", "follow_up_date", "call_method__name"]
@@ -549,7 +576,9 @@ class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = ClientEvent.objects.all()
     serializer_class = ClientEventSerializer
-    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    permission_classes = [
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessClient,
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["event_type", "notes", "client__name"]
     ordering_fields = ["created_at"]

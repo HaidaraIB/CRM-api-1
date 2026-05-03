@@ -3,6 +3,7 @@ from django.db.models import Count
 from django.db import transaction
 from django.dispatch import receiver
 from django.utils import timezone
+from crm.availability import user_accepts_new_assignments
 from .models import Client, ClientTask, ClientCall, ClientEvent, ClientVisit, Deal
 from accounts.models import User, Role
 from notifications.services import NotificationService
@@ -15,15 +16,23 @@ logger = logging.getLogger(__name__)
 
 def get_least_busy_employee(company):
     """
-    Get the employee with the least number of assigned clients (Round Robin)
+    Get the employee with the least number of assigned clients (Round Robin),
+    skipping anyone on their weekly day off (company-local calendar).
     """
-    return User.objects.filter(
-        company=company,
-        role=Role.EMPLOYEE.value,
-        is_active=True
-    ).annotate(
-        client_count=Count('assigned_clients')
-    ).order_by('client_count').first()
+    queryset = (
+        User.objects.filter(
+            company=company,
+            role=Role.EMPLOYEE.value,
+            is_active=True,
+        )
+        .annotate(client_count=Count("assigned_clients"))
+        .order_by("client_count", "id")
+        .select_related("company")
+    )
+    for employee in queryset:
+        if user_accepts_new_assignments(employee):
+            return employee
+    return None
 
 
 def get_next_data_entry_round_robin_employee(company):
@@ -41,9 +50,10 @@ def get_next_data_entry_round_robin_employee(company):
                 role=Role.EMPLOYEE.value,
                 is_active=True,
             )
+            .select_related("company")
             .order_by("id")
-            .only("id")
         )
+        employees = [e for e in employees if user_accepts_new_assignments(e)]
 
         if not employees:
             if locked_company.last_data_entry_assigned_employee_id is not None:

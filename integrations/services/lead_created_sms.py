@@ -38,16 +38,26 @@ def build_lead_sms_placeholder_values(client: Client) -> dict[str, str]:
     status_name = (client.status.name or "").strip() if client.status_id and client.status else ""
     company_name = (client.company.name or "").strip() if client.company_id and client.company else ""
     budget_s = ""
-    if client.budget is not None:
+    if client.budget is not None or getattr(client, "budget_max", None) is not None:
         try:
-            budget_s = str(client.budget.normalize()) if isinstance(client.budget, Decimal) else str(client.budget)
+            lo = client.budget
+            hi = getattr(client, "budget_max", None)
+            if lo is not None and hi is not None and hi != lo:
+                lo_s = str(lo.normalize()) if isinstance(lo, Decimal) else str(lo)
+                hi_s = str(hi.normalize()) if isinstance(hi, Decimal) else str(hi)
+                budget_s = f"{lo_s}–{hi_s}"
+            elif lo is not None:
+                budget_s = str(lo.normalize()) if isinstance(lo, Decimal) else str(lo)
+            elif hi is not None:
+                budget_s = str(hi.normalize()) if isinstance(hi, Decimal) else str(hi)
         except Exception:
-            budget_s = str(client.budget)
+            budget_s = str(client.budget or client.budget_max or "")
     return {
         "name": name,
         "first_name": _first_name_from_client_name(name) or name,
         "phone": phone,
         "lead_company_name": (client.lead_company_name or "").strip(),
+        "profession": (client.profession or "").strip(),
         "status": status_name,
         "company_name": company_name,
         "budget": budget_s,

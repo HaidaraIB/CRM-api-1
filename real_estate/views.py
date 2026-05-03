@@ -94,7 +94,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = super().get_queryset().select_related("company", "developer")
-        return queryset.filter(company=user.company)
+        queryset = queryset.filter(company=user.company)
+        developer_id = self.request.query_params.get("developer")
+        if developer_id:
+            queryset = queryset.filter(developer_id=developer_id)
+        return queryset
 
     def perform_create(self, serializer):
         company = serializer.validated_data['company']
@@ -154,7 +158,11 @@ class UnitViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = super().get_queryset().select_related("company", "project", "project__developer")
-        return queryset.filter(company=user.company)
+        queryset = queryset.filter(company=user.company)
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            queryset = queryset.filter(project_id=project_id)
+        return queryset
 
     @staticmethod
     def _generate_unit_code(company):

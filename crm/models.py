@@ -89,6 +89,13 @@ class Client(models.Model):
     )
 
     budget = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    budget_max = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        help_text="Optional upper bound when budget is a range; null means single value (budget only).",
+    )
     phone_number = models.CharField(
         max_length=20, blank=True, null=True
     )  # Keep for backward compatibility
@@ -96,6 +103,41 @@ class Client(models.Model):
     lead_company_name = models.CharField(
         max_length=255, blank=True, null=True,
         help_text="اسم شركة العميل / الليد (اختياري)",
+    )
+    profession = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="المهنة (اختياري)",
+    )
+    notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Optional free-form notes on this lead (not activity/task notes).",
+    )
+    interested_developer = models.ForeignKey(
+        "real_estate.Developer",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="interested_leads",
+        help_text="Optional developer the lead is interested in (real estate).",
+    )
+    interested_project = models.ForeignKey(
+        "real_estate.Project",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="interested_leads",
+        help_text="Optional project the lead is interested in (real estate).",
+    )
+    interested_unit = models.ForeignKey(
+        "real_estate.Unit",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="interested_leads",
+        help_text="Optional unit the lead is interested in (real estate).",
     )
 
     company = models.ForeignKey(
@@ -151,6 +193,15 @@ class Client(models.Model):
         help_text="حساب التكامل المرتبط بهذا العميل"
     )
 
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_clients",
+        help_text="CRM user who created this lead; null for Meta/TikTok/WhatsApp or legacy rows",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -161,6 +212,51 @@ class Client(models.Model):
             models.Index(fields=["company", "status"], name="idx_client_company_status"),
             models.Index(fields=["company", "source"], name="idx_client_company_source"),
         ]
+
+    def save(self, *args, **kwargs):
+        """
+        Enforce weekly day off on assignee changes. bulk_update() bypasses save(); use normal
+        save(update_fields=[...,'assigned_to',...]) for bulk assign so this always runs.
+        """
+        skip = kwargs.pop("_skip_assignee_availability_check", False)
+        update_fields = kwargs.get("update_fields")
+
+        if (
+            not skip
+            and self.assigned_to_id
+            and (update_fields is None or "assigned_to" in update_fields)
+        ):
+            from django.core.exceptions import ValidationError
+
+            from crm.availability import user_accepts_new_assignments
+
+            old_aid = None
+            if self.pk:
+                old_aid = (
+                    type(self)
+                    .objects.filter(pk=self.pk)
+                    .values_list("assigned_to_id", flat=True)
+                    .first()
+                )
+            if old_aid != self.assigned_to_id:
+                assignee = self.assigned_to
+                cal = getattr(self, "company", None)
+                if cal is None and self.company_id:
+                    from companies.models import Company
+
+                    cal = Company.objects.filter(pk=self.company_id).first()
+                cal = cal or getattr(assignee, "company", None)
+                if not user_accepts_new_assignments(
+                    assignee, company_for_calendar=cal
+                ):
+                    raise ValidationError(
+                        {
+                            "assigned_to": "Cannot assign to this user on their weekly day off.",
+                            "error_key": "employee_weekly_day_off",
+                        }
+                    )
+
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

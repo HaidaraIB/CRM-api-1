@@ -24,6 +24,7 @@ class ClientAdmin(admin.ModelAdmin):
         "phone_number",
         "company",
         "assigned_to",
+        "created_by",
         "created_at",
     ]
     list_filter = [
@@ -40,6 +41,7 @@ class ClientAdmin(admin.ModelAdmin):
         "phone_numbers__phone_number",
         "company__name",
         "assigned_to__username",
+        "notes",
     ]
     ordering = ["-created_at"]
     readonly_fields = ["created_at", "updated_at"]
@@ -55,7 +57,14 @@ class ClientAdmin(admin.ModelAdmin):
                     "type",
                     "communication_way",
                     "budget",
+                    "budget_max",
                     "phone_number",
+                    "lead_company_name",
+                    "profession",
+                    "notes",
+                    "interested_developer",
+                    "interested_project",
+                    "interested_unit",
                 )
             },
         ),
@@ -65,6 +74,7 @@ class ClientAdmin(admin.ModelAdmin):
                 "fields": (
                     "company",
                     "assigned_to",
+                    "created_by",
                 )
             },
         ),

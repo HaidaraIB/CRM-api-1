@@ -50,6 +50,12 @@ class User(AbstractUser):
         ],
         default="unknown",
     )
+    # Monday=0 .. Sunday=6 (datetime.weekday); null = no fixed weekly day off
+    weekly_day_off = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Weekly day off: 0=Monday .. 6=Sunday. Null means no recurring weekly off.",
+    )
 
     def __str__(self):
         return self.username

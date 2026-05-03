@@ -44,6 +44,11 @@ class Company(models.Model):
     )
     # After any paid conversion or expired/forfeited trial, user cannot start another time-limited trial.
     free_trial_consumed = models.BooleanField(default=False)
+    timezone = models.CharField(
+        max_length=64,
+        default="UTC",
+        help_text="IANA timezone for business calendar (weekly day off, etc.).",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

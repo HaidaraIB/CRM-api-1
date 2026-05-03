@@ -1,5 +1,7 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_serializer
+
+from crm.availability import user_accepts_new_assignments
 from .models import (
     Client,
     Deal,
@@ -76,6 +78,20 @@ class ClientActivitySummaryMixin:
         return activity.created_at if activity else None
 
 
+class ClientCreatorDisplayMixin(serializers.Serializer):
+    """Who created the lead (API users); integrations leave created_by null."""
+
+    created_by = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
+    created_by_name = serializers.SerializerMethodField()
+
+    def get_created_by_name(self, obj):
+        user = getattr(obj, "created_by", None)
+        if not user:
+            return None
+        full = (user.get_full_name() or "").strip()
+        return full or user.username
+
+
 class CamelToSnakeMixin:
     """Mixin that auto-converts camelCase keys to snake_case."""
     camel_to_snake_fields = {}  # {'camelCase': 'snake_case'}
@@ -134,7 +150,7 @@ class ClientPhoneNumberSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
+class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
     assigned_to_username = serializers.CharField(
         source="assigned_to.username", read_only=True
@@ -147,6 +163,18 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
     last_feedback = serializers.SerializerMethodField()
     last_stage = serializers.SerializerMethodField()
     last_feedback_at = serializers.SerializerMethodField()
+    interested_developer_name = serializers.CharField(
+        source="interested_developer.name", read_only=True, allow_null=True
+    )
+    interested_project_name = serializers.CharField(
+        source="interested_project.name", read_only=True, allow_null=True
+    )
+    interested_unit_name = serializers.CharField(
+        source="interested_unit.name", read_only=True, allow_null=True
+    )
+    interested_unit_code = serializers.CharField(
+        source="interested_unit.code", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = Client
@@ -160,9 +188,19 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
             "status",
             "status_name",
             "budget",
+            "budget_max",
             "phone_number",  # Keep for backward compatibility
             "phone_numbers",  # New field for multiple phone numbers
             "lead_company_name",
+            "profession",
+            "notes",
+            "interested_developer",
+            "interested_developer_name",
+            "interested_project",
+            "interested_project_name",
+            "interested_unit",
+            "interested_unit_name",
+            "interested_unit_code",
             "company",
             "company_name",
             "assigned_to",
@@ -170,13 +208,15 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
             "campaign",
             "source",
             "integration_account",
+            "created_by",
+            "created_by_name",
             "created_at",
             "updated_at",
             "last_feedback",
             "last_stage",
             "last_feedback_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at", "created_by", "created_by_name"]
 
     def validate_communication_way(self, value):
         """Ensure communication_way belongs to the same company"""
@@ -210,7 +250,95 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
                 )
         return value
 
+    def _validate_interested_real_estate(self, attrs):
+        """Optional developer → project → unit; enforce company and hierarchy."""
+        if "interested_developer" in attrs and attrs.get("interested_developer") is None:
+            attrs["interested_project"] = None
+            attrs["interested_unit"] = None
+        if "interested_project" in attrs and attrs.get("interested_project") is None:
+            attrs["interested_unit"] = None
+
+        inst = self.instance
+
+        def pick(field):
+            if field in attrs:
+                return attrs[field]
+            if inst is not None:
+                return getattr(inst, field)
+            return None
+
+        dev = pick("interested_developer")
+        proj = pick("interested_project")
+        unit = pick("interested_unit")
+
+        if dev is None and proj is None and unit is None:
+            return
+
+        company = None
+        if inst is not None:
+            company = inst.company
+        elif "company" in attrs:
+            company = attrs["company"]
+        else:
+            req = self.context.get("request")
+            if req and req.user.is_authenticated:
+                company = getattr(req.user, "company", None)
+        if company is None:
+            raise serializers.ValidationError(
+                {
+                    "interested_developer": "Company is required to validate inventory interest.",
+                }
+            )
+        cid = company.id if hasattr(company, "id") else company
+
+        def assert_same_company(obj, field_name):
+            if obj is not None and getattr(obj, "company_id", None) != cid:
+                raise serializers.ValidationError(
+                    {field_name: "Selection must belong to your company."}
+                )
+
+        assert_same_company(dev, "interested_developer")
+        assert_same_company(proj, "interested_project")
+        assert_same_company(unit, "interested_unit")
+
+        if unit is not None:
+            if proj is not None and unit.project_id != proj.id:
+                raise serializers.ValidationError(
+                    {"interested_unit": "Unit must belong to the selected project."}
+                )
+            if dev is not None and unit.project.developer_id != dev.id:
+                raise serializers.ValidationError(
+                    {
+                        "interested_developer": "Developer must match the unit's project developer.",
+                    }
+                )
+            attrs["interested_project"] = unit.project
+            attrs["interested_developer"] = unit.project.developer
+        elif proj is not None:
+            if dev is not None and proj.developer_id != dev.id:
+                raise serializers.ValidationError(
+                    {"interested_project": "Project must belong to the selected developer."}
+                )
+            attrs["interested_developer"] = proj.developer
+
     def validate(self, attrs):
+        budget = attrs["budget"] if "budget" in attrs else (self.instance.budget if self.instance else None)
+        budget_max = (
+            attrs["budget_max"]
+            if "budget_max" in attrs
+            else (self.instance.budget_max if self.instance else None)
+        )
+        if budget_max is not None and budget is None:
+            raise serializers.ValidationError(
+                {"budget": "Minimum budget is required when a maximum budget is set."}
+            )
+        if budget is not None and budget_max is not None and budget_max < budget:
+            raise serializers.ValidationError(
+                {"budget_max": "Maximum budget must be greater than or equal to minimum budget."}
+            )
+
+        self._validate_interested_real_estate(attrs)
+
         request = self.context.get("request")
         if request and request.user.is_authenticated and request.user.is_data_entry():
             attrs.pop("assigned_to", None)
@@ -220,6 +348,23 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
                     {"company": "Data entry users must belong to a company."}
                 )
             # Assignment (least-busy employee, else company owner) runs in ClientViewSet.perform_create.
+            return attrs
+
+        if "assigned_to" in attrs:
+            assignee = attrs.get("assigned_to")
+            if assignee:
+                same_as_before = (
+                    self.instance is not None
+                    and self.instance.assigned_to_id is not None
+                    and self.instance.assigned_to_id == assignee.pk
+                )
+                if not same_as_before and not user_accepts_new_assignments(assignee):
+                    raise serializers.ValidationError(
+                        {
+                            "assigned_to": "Cannot assign to this user on their weekly day off.",
+                            "error_key": "employee_weekly_day_off",
+                        }
+                    )
         return attrs
 
     def create(self, validated_data):
@@ -300,7 +445,20 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
                 })
 
         # Generic edit detection for other important fields
-        other_fields = ['name', 'priority', 'type', 'budget', 'communication_way', 'lead_company_name']
+        other_fields = [
+            'name',
+            'priority',
+            'type',
+            'budget',
+            'budget_max',
+            'communication_way',
+            'lead_company_name',
+            'profession',
+            'notes',
+            'interested_developer',
+            'interested_project',
+            'interested_unit',
+        ]
         for field in other_fields:
             if field in validated_data and getattr(instance, field) != validated_data[field]:
                 field_name = field.replace('_', ' ').capitalize()
@@ -346,7 +504,7 @@ class ClientSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
         return instance
 
 
-class ClientListSerializer(ClientActivitySummaryMixin, serializers.ModelSerializer):
+class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, serializers.ModelSerializer):
     """Simplified serializer for list views"""
 
     company_name = serializers.CharField(source="company.name", read_only=True)
@@ -361,6 +519,18 @@ class ClientListSerializer(ClientActivitySummaryMixin, serializers.ModelSerializ
     last_feedback = serializers.SerializerMethodField()
     last_stage = serializers.SerializerMethodField()
     last_feedback_at = serializers.SerializerMethodField()
+    interested_developer_name = serializers.CharField(
+        source="interested_developer.name", read_only=True, allow_null=True
+    )
+    interested_project_name = serializers.CharField(
+        source="interested_project.name", read_only=True, allow_null=True
+    )
+    interested_unit_name = serializers.CharField(
+        source="interested_unit.name", read_only=True, allow_null=True
+    )
+    interested_unit_code = serializers.CharField(
+        source="interested_unit.code", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = Client
@@ -374,9 +544,19 @@ class ClientListSerializer(ClientActivitySummaryMixin, serializers.ModelSerializ
             "status",
             "status_name",
             "budget",
+            "budget_max",
             "phone_number",  # Keep for backward compatibility
             "phone_numbers",  # New field for multiple phone numbers
             "lead_company_name",
+            "profession",
+            "notes",
+            "interested_developer",
+            "interested_developer_name",
+            "interested_project",
+            "interested_project_name",
+            "interested_unit",
+            "interested_unit_name",
+            "interested_unit_code",
             "company",
             "company_name",
             "assigned_to",
@@ -384,6 +564,8 @@ class ClientListSerializer(ClientActivitySummaryMixin, serializers.ModelSerializ
             "campaign",
             "source",
             "integration_account",
+            "created_by",
+            "created_by_name",
             "created_at",
             "last_feedback",
             "last_stage",
@@ -453,6 +635,24 @@ class DealSerializer(CamelToSnakeMixin, serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        if "employee" in attrs:
+            emp = attrs.get("employee")
+            if emp:
+                same_as_before = (
+                    self.instance is not None
+                    and self.instance.employee_id is not None
+                    and self.instance.employee_id == emp.pk
+                )
+                if not same_as_before and not user_accepts_new_assignments(emp):
+                    raise serializers.ValidationError(
+                        {
+                            "employee": "Cannot assign to this user on their weekly day off.",
+                            "error_key": "employee_weekly_day_off",
+                        }
+                    )
+        return attrs
 
     def create(self, validated_data):
         """Create deal and ensure started_by and closed_by are set"""
@@ -718,12 +918,6 @@ class ClientCallSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
-    def validate_follow_up_date(self, value):
-        """Validate that follow_up_date is required"""
-        if value is None:
-            raise serializers.ValidationError("Follow up date is required for call tasks.")
-        return value
-    
     def validate_call_method(self, value):
         """Ensure call_method belongs to the same company as the client"""
         if value:

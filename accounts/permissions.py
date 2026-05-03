@@ -201,6 +201,21 @@ class CanAccessClient(permissions.BasePermission):
         return False
 
 
+class DenyDataEntryNonLeadAPI(permissions.BasePermission):
+    """
+    Data-entry users may only use client (lead) list/create and related settings.
+    Deny deals, tasks, and client activity APIs at the view level.
+    """
+
+    message = "This action is not available for data entry users."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return True
+        return not user.is_data_entry()
+
+
 class CanAccessDeal(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user and request.user.is_authenticated

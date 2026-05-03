@@ -159,8 +159,24 @@ class TestDataEntryClient:
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_data_entry_create_assigns_to_employee(
-        self, authenticated_data_entry, company, employee_user
+        self, authenticated_data_entry, company, employee_user, data_entry_user
     ):
+        from crm.models import Client
+
+        # Both roles are in the auto-assign pool; give the data-entry user a heavier
+        # workload so the least-busy pick is unambiguously the employee.
+        for i in range(5):
+            Client.objects.create(
+                name=f"Seed {i}",
+                company=company,
+                priority="low",
+                type="cold",
+                assigned_to=data_entry_user,
+            )
+        # Round-robin order is by user id; data_entry may be created before employee depending on
+        # fixture resolution order. Point past data_entry so the next intake assignee is the employee.
+        company.last_data_entry_assigned_employee = data_entry_user
+        company.save(update_fields=["last_data_entry_assigned_employee"])
         data = {
             "name": "Intake Lead",
             "priority": "high",
@@ -175,9 +191,9 @@ class TestDataEntryClient:
         assert lead.assigned_to_id == employee_user.id
 
     def test_data_entry_create_round_robin_sequence_and_wrap(
-        self, authenticated_data_entry, company, employee_user
+        self, authenticated_data_entry, company, employee_user, data_entry_user
     ):
-        from accounts.models import User
+        from accounts.models import User, Role
         from crm.models import Client
 
         employee_two = User.objects.create_user(
@@ -196,6 +212,24 @@ class TestDataEntryClient:
             role="employee",
             is_active=True,
         )
+
+        pool_ids = list(
+            User.objects.filter(
+                company=company,
+                role__in=(Role.EMPLOYEE.value, Role.DATA_ENTRY.value),
+                is_active=True,
+            )
+            .order_by("id")
+            .values_list("id", flat=True)
+        )
+        assert len(pool_ids) == 4
+        # Deterministic cycle: pointer starts unset -> first is pool_ids[0], then +1 each create.
+        expected_assigned = [
+            pool_ids[0],
+            pool_ids[1],
+            pool_ids[2],
+            pool_ids[3],
+        ]
 
         created_ids = []
         for idx in range(4):
@@ -217,17 +251,12 @@ class TestDataEntryClient:
             .order_by("id")
             .values_list("assigned_to_id", flat=True)
         )
-        assert assigned_ids == [
-            employee_user.id,
-            employee_two.id,
-            employee_three.id,
-            employee_user.id,
-        ]
+        assert assigned_ids == expected_assigned
 
     def test_data_entry_round_robin_recovers_when_last_employee_inactive(
         self, authenticated_data_entry, company, employee_user
     ):
-        from accounts.models import User
+        from accounts.models import User, Role
         from crm.models import Client
 
         employee_two = User.objects.create_user(
@@ -244,6 +273,16 @@ class TestDataEntryClient:
         employee_two.is_active = False
         employee_two.save(update_fields=["is_active"])
 
+        expected_first = (
+            User.objects.filter(
+                company=company,
+                role__in=(Role.EMPLOYEE.value, Role.DATA_ENTRY.value),
+                is_active=True,
+            )
+            .order_by("id")
+            .first()
+        )
+
         response = authenticated_data_entry.post(
             "/api/v1/clients/",
             {
@@ -258,19 +297,40 @@ class TestDataEntryClient:
 
         lead = Client.objects.get(id=api_body(response)["id"])
         company.refresh_from_db()
-        assert lead.assigned_to_id == employee_user.id
-        assert company.last_data_entry_assigned_employee_id == employee_user.id
+        assert lead.assigned_to_id == expected_first.id
+        assert company.last_data_entry_assigned_employee_id == expected_first.id
 
-    def test_data_entry_create_assigns_to_owner_when_no_sales_employee(
-        self, authenticated_data_entry, company, employee_user, owner_user
+    def test_data_entry_create_assigns_to_active_data_entry_when_no_employee(
+        self, authenticated_data_entry, company, employee_user, data_entry_user
     ):
-        from accounts.models import User
         from crm.models import Client
 
         employee_user.is_active = False
         employee_user.save(update_fields=["is_active"])
         data = {
             "name": "No Emp",
+            "priority": "low",
+            "type": "cold",
+            "company": company.id,
+        }
+        response = authenticated_data_entry.post("/api/v1/clients/", data, format="json")
+        assert response.status_code == status.HTTP_201_CREATED
+        lead = Client.objects.get(id=api_body(response)["id"])
+        company.refresh_from_db()
+        assert lead.assigned_to_id == data_entry_user.id
+        assert company.last_data_entry_assigned_employee_id == data_entry_user.id
+
+    def test_data_entry_create_assigns_to_owner_when_no_assignable_staff(
+        self, authenticated_data_entry, company, employee_user, owner_user, data_entry_user
+    ):
+        from crm.models import Client
+
+        employee_user.is_active = False
+        employee_user.save(update_fields=["is_active"])
+        data_entry_user.is_active = False
+        data_entry_user.save(update_fields=["is_active"])
+        data = {
+            "name": "No Pool",
             "priority": "low",
             "type": "cold",
             "company": company.id,
@@ -327,6 +387,78 @@ class TestDealCRUD:
         response = authenticated_admin.get("/api/v1/deals/")
         assert response.status_code == status.HTTP_200_OK
         assert api_body(response)["count"] == 1
+
+
+@pytest.mark.django_db
+class TestDataEntryNonLeadAPI:
+    """Data entry may not use deals, deal tasks, or client activity APIs."""
+
+    def test_data_entry_deals_forbidden(
+        self, authenticated_data_entry, company, admin_user
+    ):
+        from crm.models import Client, Deal
+
+        client = Client.objects.create(
+            name="C", company=company, priority="low", type="cold"
+        )
+        Deal.objects.create(
+            client=client, company=company, employee=admin_user, stage="in_progress"
+        )
+        assert authenticated_data_entry.get("/api/v1/deals/").status_code == (
+            status.HTTP_403_FORBIDDEN
+        )
+        response = authenticated_data_entry.post(
+            "/api/v1/deals/",
+            {
+                "client": client.id,
+                "company": company.id,
+                "employee": admin_user.id,
+                "stage": "in_progress",
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_data_entry_tasks_forbidden(
+        self, authenticated_data_entry, company, admin_user
+    ):
+        from crm.models import Client, Deal, Task
+
+        client = Client.objects.create(
+            name="C", company=company, priority="low", type="cold"
+        )
+        deal = Deal.objects.create(
+            client=client, company=company, employee=admin_user, stage="in_progress"
+        )
+        Task.objects.create(deal=deal, notes="t")
+        assert authenticated_data_entry.get("/api/v1/tasks/").status_code == (
+            status.HTTP_403_FORBIDDEN
+        )
+
+    def test_data_entry_client_tasks_forbidden(
+        self, authenticated_data_entry, company, employee_user
+    ):
+        from crm.models import Client
+
+        client = Client.objects.create(
+            name="C",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=employee_user,
+        )
+        assert authenticated_data_entry.get("/api/v1/client-tasks/").status_code == (
+            status.HTTP_403_FORBIDDEN
+        )
+        assert authenticated_data_entry.get("/api/v1/client-calls/").status_code == (
+            status.HTTP_403_FORBIDDEN
+        )
+        assert authenticated_data_entry.get("/api/v1/client-visits/").status_code == (
+            status.HTTP_403_FORBIDDEN
+        )
+        assert authenticated_data_entry.get("/api/v1/client-events/").status_code == (
+            status.HTTP_403_FORBIDDEN
+        )
 
 
 @pytest.mark.django_db

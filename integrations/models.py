@@ -372,7 +372,7 @@ class TwilioSettings(models.Model):
         default="Hello [first_name], we'll contact you soon!",
         help_text=(
             "SMS body template for new leads. Placeholders: [name], [first_name], [phone], "
-            "[lead_company_name], [status], [company_name], [budget], [priority], [type], [source]."
+            "[lead_company_name], [profession], [status], [company_name], [budget], [priority], [type], [source]."
         ),
     )
     created_at = models.DateTimeField(auto_now_add=True)

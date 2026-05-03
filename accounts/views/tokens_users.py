@@ -106,6 +106,9 @@ class UserViewSet(viewsets.ModelViewSet):
         if exclude_roles:
             queryset = queryset.exclude(role__in=exclude_roles)
 
+        if self.action == "list":
+            queryset = queryset.select_related("company")
+
         return queryset
 
     def perform_create(self, serializer):

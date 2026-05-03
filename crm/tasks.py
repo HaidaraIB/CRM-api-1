@@ -11,33 +11,7 @@ from .models import (
     Deal,
 )
 from accounts.models import User
-
-
-def get_least_busy_employee(company):
-    """
-    Get the employee with the least number of assigned clients (Round Robin)
-    """
-    employees = User.objects.filter(
-        company=company,
-        role='employee',
-        is_active=True
-    )
-    
-    if not employees.exists():
-        return None
-    
-    # Get employee with minimum assigned clients
-    employees_with_counts = []
-    for employee in employees:
-        count = Client.objects.filter(
-            company=company,
-            assigned_to=employee
-        ).count()
-        employees_with_counts.append((employee, count))
-    
-    # Sort by count and return the one with least clients
-    employees_with_counts.sort(key=lambda x: x[1])
-    return employees_with_counts[0][0] if employees_with_counts else None
+from crm.signals import get_least_busy_employee
 
 
 def re_assign_inactive_clients():

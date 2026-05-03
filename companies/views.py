@@ -147,9 +147,12 @@ class CompanyViewSet(viewsets.ModelViewSet):
         Body: {
             "auto_assign_enabled": true/false,
             "re_assign_enabled": true/false,
-            "re_assign_hours": 24
+            "re_assign_hours": 24,
+            "timezone": "Asia/Baghdad"
         }
         """
+        from zoneinfo import ZoneInfo
+
         company = self.get_object()
         user = request.user
         
@@ -165,6 +168,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
         auto_assign_enabled = request.data.get('auto_assign_enabled')
         re_assign_enabled = request.data.get('re_assign_enabled')
         re_assign_hours = request.data.get('re_assign_hours')
+        tz_value = request.data.get('timezone')
         
         if auto_assign_enabled is not None:
             company.auto_assign_enabled = bool(auto_assign_enabled)
@@ -184,8 +188,19 @@ class CompanyViewSet(viewsets.ModelViewSet):
                     "re_assign_hours must be a valid integer.",
                     code="invalid_re_assign_hours",
                 )
-        
-        company.save(update_fields=['auto_assign_enabled', 're_assign_enabled', 're_assign_hours'])
+        if tz_value is not None:
+            name = str(tz_value).strip() or "UTC"
+            try:
+                ZoneInfo(name)
+            except Exception:
+                return error_response(
+                    "timezone must be a valid IANA name (e.g. Asia/Baghdad).",
+                    code="invalid_timezone",
+                )
+            company.timezone = name
+
+        update_fields = ['auto_assign_enabled', 're_assign_enabled', 're_assign_hours', 'timezone']
+        company.save(update_fields=update_fields)
         
         serializer = CompanySerializer(company, context={'request': request})
         return success_response(data=serializer.data)

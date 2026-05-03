@@ -1,6 +1,6 @@
 """Tests for automated welcome SMS on new Client (lead) creation."""
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from rest_framework.exceptions import ValidationError
@@ -252,7 +252,11 @@ def test_send_after_phones_like_post_commit_order(company):
     assert "Pat" in (rec.body or "")
 
 
-def test_schedule_registers_transaction_on_commit(mocker):
-    on_commit = mocker.patch("django.db.transaction.on_commit")
+def test_schedule_registers_transaction_on_commit(monkeypatch):
+    on_commit = MagicMock()
+    monkeypatch.setattr(
+        "integrations.services.lead_created_sms.transaction.on_commit",
+        on_commit,
+    )
     schedule_lead_created_welcome_sms(99)
     on_commit.assert_called_once()
