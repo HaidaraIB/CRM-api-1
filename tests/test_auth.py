@@ -13,6 +13,8 @@ from django.core.cache import cache
 from companies.models import Company
 from subscriptions.models import Plan, Subscription, BillingCycle
 from accounts.models import OwnerTrustedDevice
+from accounts.email_registration_policy import EMAIL_VERIFICATION_REQUIRED_CACHE_KEY
+from accounts.phone_otp_policy import PHONE_OTP_REQUIRED_CACHE_KEY
 from accounts.two_factor_policy import OWNER_TRUST_COOKIE_NAME, hash_device_token, hash_user_agent
 
 User = get_user_model()
@@ -254,7 +256,7 @@ def test_owner_expired_trusted_device_requires_2fa(api_client):
 
 
 @pytest.mark.django_db
-def test_login_blocked_when_email_not_verified(api_client):
+def test_employee_login_allowed_when_email_not_verified(api_client):
     user = User.objects.create_user(
         username="email_unverified_user",
         email="email_unverified_user@example.com",
@@ -274,13 +276,12 @@ def test_login_blocked_when_email_not_verified(api_client):
         {"username": user.username, "password": "securepassword123"},
         format="json",
     )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    payload_text = str(response.data).lower()
-    assert "email verification is required before login" in payload_text
+    assert response.status_code == status.HTTP_200_OK
+    assert "access" in response.data
 
 
 @pytest.mark.django_db
-def test_login_blocked_when_phone_not_verified(api_client):
+def test_employee_login_allowed_when_phone_not_verified(api_client):
     user = User.objects.create_user(
         username="phone_unverified_user",
         email="phone_unverified_user@example.com",
@@ -300,9 +301,119 @@ def test_login_blocked_when_phone_not_verified(api_client):
         {"username": user.username, "password": "securepassword123"},
         format="json",
     )
+    assert response.status_code == status.HTTP_200_OK
+    assert "access" in response.data
+
+
+@pytest.mark.django_db
+def test_owner_login_blocked_when_email_not_verified(api_client):
+    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, True, timeout=None)
+    owner = User.objects.create_user(
+        username="owner_email_unverified",
+        email="owner_email_unverified@example.com",
+        password="securepassword123",
+        role="admin",
+        email_verified=False,
+        phone_verified=True,
+    )
+    _with_active_subscription(owner, make_owner=True)
+    owner.email_verified = False
+    owner.phone_verified = True
+    owner.save(update_fields=["email_verified", "phone_verified"])
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": owner.username, "password": "securepassword123"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    payload_text = str(response.data).lower()
+    assert "email verification is required before login" in payload_text
+
+
+@pytest.mark.django_db
+def test_owner_login_blocked_when_phone_not_verified(api_client):
+    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, True, timeout=None)
+    owner = User.objects.create_user(
+        username="owner_phone_unverified",
+        email="owner_phone_unverified@example.com",
+        password="securepassword123",
+        role="admin",
+        email_verified=True,
+        phone_verified=False,
+    )
+    _with_active_subscription(owner, make_owner=True)
+    owner.email_verified = True
+    owner.phone_verified = False
+    owner.save(update_fields=["email_verified", "phone_verified"])
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": owner.username, "password": "securepassword123"},
+        format="json",
+    )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     payload_text = str(response.data).lower()
     assert "phone verification is required before login" in payload_text
+
+
+@pytest.mark.django_db
+def test_owner_login_allowed_when_registration_otp_toggles_disabled(api_client):
+    """Matches super-admin Registration OTP: both off => no pre-login verification gate."""
+    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, False, timeout=None)
+    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, False, timeout=None)
+    owner = User.objects.create_user(
+        username="owner_both_flags_off",
+        email="owner_both_flags_off@example.com",
+        password="securepassword123",
+        role="admin",
+        email_verified=False,
+        phone_verified=False,
+    )
+    _with_active_subscription(owner, make_owner=True)
+    owner.email_verified = False
+    owner.phone_verified = False
+    owner.save(update_fields=["email_verified", "phone_verified"])
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": owner.username, "password": "securepassword123"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_200_OK
+    payload_text = str(response.data).lower()
+    assert "verification is required before login" not in payload_text
+
+
+@pytest.mark.django_db
+def test_owner_login_blocked_when_both_platform_verification_flags_enabled(api_client):
+    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, True, timeout=None)
+    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, True, timeout=None)
+    owner = User.objects.create_user(
+        username="owner_both_unverified",
+        email="owner_both_unverified@example.com",
+        password="securepassword123",
+        role="admin",
+        email_verified=False,
+        phone_verified=False,
+    )
+    _with_active_subscription(owner, make_owner=True)
+    owner.email_verified = False
+    owner.phone_verified = False
+    owner.save(update_fields=["email_verified", "phone_verified"])
+
+    url = reverse("token_obtain_pair")
+    response = api_client.post(
+        url,
+        {"username": owner.username, "password": "securepassword123"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    payload_text = str(response.data).lower()
+    assert "email and phone verification are required before login" in payload_text
 
 
 @pytest.mark.django_db
