@@ -126,10 +126,16 @@ class LeadStatusSerializer(serializers.ModelSerializer):
             "company_name",
             "is_active",
             "automation_key",
+            "auto_delete_after_hours",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "automation_key"]
+
+    def validate_auto_delete_after_hours(self, value):
+        if value is not None and value < 1:
+            raise serializers.ValidationError("Must be at least 1 or null to disable.")
+        return value
 
 
 class LeadStatusListSerializer(serializers.ModelSerializer):
@@ -150,9 +156,15 @@ class LeadStatusListSerializer(serializers.ModelSerializer):
             "company_name",
             "is_active",
             "automation_key",
+            "auto_delete_after_hours",
             "created_at",
         ]
         read_only_fields = ["automation_key"]
+
+    def validate_auto_delete_after_hours(self, value):
+        if value is not None and value < 1:
+            raise serializers.ValidationError("Must be at least 1 or null to disable.")
+        return value
 
 
 @extend_schema_serializer(component_name="CallMethod")

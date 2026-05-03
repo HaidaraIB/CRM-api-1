@@ -196,6 +196,10 @@ class TestDataEntryClient:
         from accounts.models import User, Role
         from crm.models import Client
 
+        # Deterministic first pick: other tests may leave the round-robin pointer set.
+        company.last_data_entry_assigned_employee = None
+        company.save(update_fields=["last_data_entry_assigned_employee"])
+
         employee_two = User.objects.create_user(
             username="employee_two",
             email="employee_two@test.com",
@@ -213,22 +217,22 @@ class TestDataEntryClient:
             is_active=True,
         )
 
+        # Round-robin assignee list matches get_next_data_entry_round_robin_employee (employees only).
         pool_ids = list(
             User.objects.filter(
                 company=company,
-                role__in=(Role.EMPLOYEE.value, Role.DATA_ENTRY.value),
+                role=Role.EMPLOYEE.value,
                 is_active=True,
             )
             .order_by("id")
             .values_list("id", flat=True)
         )
-        assert len(pool_ids) == 4
-        # Deterministic cycle: pointer starts unset -> first is pool_ids[0], then +1 each create.
+        assert len(pool_ids) == 3
         expected_assigned = [
             pool_ids[0],
             pool_ids[1],
             pool_ids[2],
-            pool_ids[3],
+            pool_ids[0],
         ]
 
         created_ids = []
@@ -276,7 +280,7 @@ class TestDataEntryClient:
         expected_first = (
             User.objects.filter(
                 company=company,
-                role__in=(Role.EMPLOYEE.value, Role.DATA_ENTRY.value),
+                role=Role.EMPLOYEE.value,
                 is_active=True,
             )
             .order_by("id")
@@ -300,9 +304,10 @@ class TestDataEntryClient:
         assert lead.assigned_to_id == expected_first.id
         assert company.last_data_entry_assigned_employee_id == expected_first.id
 
-    def test_data_entry_create_assigns_to_active_data_entry_when_no_employee(
-        self, authenticated_data_entry, company, employee_user, data_entry_user
+    def test_data_entry_create_assigns_to_owner_when_no_active_employee(
+        self, authenticated_data_entry, company, employee_user, owner_user
     ):
+        """Round-robin pool is employees only; with none active, perform_create falls back to company owner."""
         from crm.models import Client
 
         employee_user.is_active = False
@@ -317,8 +322,8 @@ class TestDataEntryClient:
         assert response.status_code == status.HTTP_201_CREATED
         lead = Client.objects.get(id=api_body(response)["id"])
         company.refresh_from_db()
-        assert lead.assigned_to_id == data_entry_user.id
-        assert company.last_data_entry_assigned_employee_id == data_entry_user.id
+        assert lead.assigned_to_id == owner_user.id
+        assert company.last_data_entry_assigned_employee_id is None
 
     def test_data_entry_create_assigns_to_owner_when_no_assignable_staff(
         self, authenticated_data_entry, company, employee_user, owner_user, data_entry_user

@@ -100,3 +100,6 @@
 
 # 17. فحص الاشتراكات المنتهية - يومياً في منتصف الليل
 0 0 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_subscription_expired --deactivate >> /var/log/crm-api-subscription-expired.log 2>&1
+
+# 18. حذف الليدات التي بقيت في حالة معينة أكثر من المدة المحددة - كل ساعة
+0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py delete_leads_stale_in_status >> /var/log/crm-api-lead-stale-status-delete.log 2>&1

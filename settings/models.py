@@ -97,6 +97,11 @@ class LeadStatus(models.Model):
         null=True,
         help_text="Reserved key for system automation (e.g. visited). Display name may differ.",
     )
+    auto_delete_after_hours = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="If set, leads in this status longer than this many hours are deleted by a scheduled job.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

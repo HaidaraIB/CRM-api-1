@@ -172,10 +172,22 @@ def on_client_visit_post_save(sender, instance, created, **kwargs):
 
     visited = get_visited_lead_status(company) or ensure_visited_lead_status(company)
     if visited:
-        Client.objects.filter(pk=client.pk).update(status_id=visited.pk)
+        now = timezone.now()
+        Client.objects.filter(pk=client.pk).update(
+            status_id=visited.pk,
+            status_entered_at=now,
+        )
 
 
 # ==================== Notification Signals ====================
+
+@receiver(post_save, sender=Client)
+def align_status_entered_at_on_client_create(sender, instance, created, **kwargs):
+    """Match status_entered_at to created_at for new leads (consistent with migration backfill)."""
+    if not created:
+        return
+    Client.objects.filter(pk=instance.pk).update(status_entered_at=instance.created_at)
+
 
 @receiver(post_save, sender=Client)
 def notify_new_lead(sender, instance, created, **kwargs):
@@ -216,11 +228,14 @@ def handle_client_pre_save(sender, instance, **kwargs):
     # --- Check for status changes ---
     old_status_id = old_instance.status.id if old_instance.status else None
     new_status_id = instance.status.id if instance.status else None
-    
+
+    if old_status_id != new_status_id:
+        instance.status_entered_at = timezone.now()
+
     if old_status_id != new_status_id and instance.status:
         # Status changed - update last_contacted_at
         instance.last_contacted_at = timezone.now()
-        
+
         # Send notification
         if instance.assigned_to:
             try:

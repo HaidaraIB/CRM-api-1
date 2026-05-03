@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from enum import Enum
 
 # Create your models here.
@@ -162,6 +163,10 @@ class Client(models.Model):
         blank=True,
         help_text="تاريخ ووقت آخر تواصل مع العميل"
     )
+    status_entered_at = models.DateTimeField(
+        default=timezone.now,
+        help_text="When the lead entered the current status (used for stale-status auto-delete).",
+    )
 
     # Integration fields
     campaign = models.ForeignKey(
@@ -210,6 +215,10 @@ class Client(models.Model):
             models.Index(fields=["company", "assigned_to"], name="idx_client_company_assigned"),
             models.Index(fields=["company", "created_at"], name="idx_client_company_created"),
             models.Index(fields=["company", "status"], name="idx_client_company_status"),
+            models.Index(
+                fields=["company", "status", "status_entered_at"],
+                name="idx_client_co_stat_entered",
+            ),
             models.Index(fields=["company", "source"], name="idx_client_company_source"),
         ]
 

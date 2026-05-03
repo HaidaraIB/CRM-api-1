@@ -89,3 +89,5 @@ def test_client_visit_creates_and_sets_visited_status(authenticated_admin, compa
     client.refresh_from_db()
     assert client.status is not None
     assert client.status.automation_key == VISITED_AUTOMATION_KEY
+    assert client.status_entered_at is not None
+    assert (timezone.now() - client.status_entered_at).total_seconds() < 120
