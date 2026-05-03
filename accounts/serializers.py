@@ -419,11 +419,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Validate using parent class
         data = super().validate(attrs)
         request = self.context.get("request")
-        from .login_verification_policy import login_verification_error
+        from .exceptions import LoginVerificationRequired
+        from .login_verification_policy import login_verification_failure
 
-        verification_error = login_verification_error(self.user)
-        if verification_error:
-            raise serializers.ValidationError(verification_error)
+        verification_payload = login_verification_failure(self.user)
+        if verification_payload:
+            raise LoginVerificationRequired(
+                message=verification_payload["message"],
+                business_code=verification_payload["code"],
+                verify_email_url=verification_payload.get("verify_email_url"),
+                verify_phone_url=verification_payload.get("verify_phone_url"),
+            )
 
         # Keep login subscription-safe to match 2FA endpoint behavior.
         if not self.user.is_super_admin():

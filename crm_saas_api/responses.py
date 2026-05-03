@@ -42,6 +42,12 @@ def error_response(
     code="error",
     details=None,
     status_code=http_status.HTTP_400_BAD_REQUEST,
+    *,
+    hint=None,
+    actions=None,
+    change_credentials_note=None,
+    verify_email_url=None,
+    verify_phone_url=None,
 ):
     """Return a consistently shaped error response."""
     payload = {
@@ -53,6 +59,16 @@ def error_response(
     }
     if details is not None:
         payload["error"]["details"] = details
+    if hint:
+        payload["error"]["hint"] = hint
+    if actions:
+        payload["error"]["actions"] = actions
+    if change_credentials_note:
+        payload["error"]["change_credentials_note"] = change_credentials_note
+    if verify_email_url:
+        payload["error"]["verify_email_url"] = verify_email_url
+    if verify_phone_url:
+        payload["error"]["verify_phone_url"] = verify_phone_url
     return Response(payload, status=status_code)
 
 

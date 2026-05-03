@@ -96,13 +96,16 @@ def request_two_factor_auth(request):
             user.role,
         )
 
-    from ..login_verification_policy import login_verification_error
-    verification_error = login_verification_error(user)
-    if verification_error:
+    from ..login_verification_policy import login_verification_failure
+
+    verification_payload = login_verification_failure(user)
+    if verification_payload:
         return error_response(
-            verification_error["error"],
-            code=verification_error["code"],
+            verification_payload["message"],
+            code=verification_payload["code"],
             status_code=status.HTTP_403_FORBIDDEN,
+            verify_email_url=verification_payload.get("verify_email_url"),
+            verify_phone_url=verification_payload.get("verify_phone_url"),
         )
 
     # Check subscription before sending 2FA code (for all users except Super Admin)
@@ -261,13 +264,16 @@ def verify_two_factor_auth(request):
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    from ..login_verification_policy import login_verification_error
-    verification_error = login_verification_error(user)
-    if verification_error:
+    from ..login_verification_policy import login_verification_failure
+
+    verification_payload = login_verification_failure(user)
+    if verification_payload:
         return error_response(
-            verification_error["error"],
-            code=verification_error["code"],
+            verification_payload["message"],
+            code=verification_payload["code"],
             status_code=status.HTTP_403_FORBIDDEN,
+            verify_email_url=verification_payload.get("verify_email_url"),
+            verify_phone_url=verification_payload.get("verify_phone_url"),
         )
 
     # Now verify 2FA code

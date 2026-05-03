@@ -327,9 +327,13 @@ def test_owner_login_blocked_when_email_not_verified(api_client):
         {"username": owner.username, "password": "securepassword123"},
         format="json",
     )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_403_FORBIDDEN
     payload_text = str(response.data).lower()
-    assert "email verification is required before login" in payload_text
+    assert "email verification required" in payload_text
+    assert response.data.get("success") is False
+    err = response.data.get("error") or {}
+    assert err.get("code") == "email_not_verified"
+    assert "/verify-email" in (err.get("verify_email_url") or "")
 
 
 @pytest.mark.django_db
@@ -354,9 +358,9 @@ def test_owner_login_blocked_when_phone_not_verified(api_client):
         {"username": owner.username, "password": "securepassword123"},
         format="json",
     )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_403_FORBIDDEN
     payload_text = str(response.data).lower()
-    assert "phone verification is required before login" in payload_text
+    assert "phone verification required" in payload_text
 
 
 @pytest.mark.django_db
@@ -411,9 +415,9 @@ def test_owner_login_blocked_when_both_platform_verification_flags_enabled(api_c
         {"username": owner.username, "password": "securepassword123"},
         format="json",
     )
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_403_FORBIDDEN
     payload_text = str(response.data).lower()
-    assert "email and phone verification are required before login" in payload_text
+    assert "email and phone verification required" in payload_text
 
 
 @pytest.mark.django_db

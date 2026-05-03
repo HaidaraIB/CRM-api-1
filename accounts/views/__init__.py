@@ -18,6 +18,13 @@ from .phone_registration import register_phone_send_otp, register_phone_verify_o
 from .email_registration import register_email_send_otp, register_email_verify_otp
 from .tokens_users import CustomTokenObtainPairView, UserViewSet
 from .two_factor import request_two_factor_auth, verify_two_factor_auth
+from .pre_login_verification import (
+    pre_login_email_change,
+    pre_login_email_resend,
+    pre_login_phone_change,
+    pre_login_phone_send_otp,
+    pre_login_phone_verify_otp,
+)
 
 __all__ = [
     "CustomTokenObtainPairView",
@@ -41,6 +48,11 @@ __all__ = [
     "reset_password",
     "request_two_factor_auth",
     "verify_two_factor_auth",
+    "pre_login_email_resend",
+    "pre_login_email_change",
+    "pre_login_phone_send_otp",
+    "pre_login_phone_verify_otp",
+    "pre_login_phone_change",
     "update_fcm_token",
     "remove_fcm_token",
     "update_language",
