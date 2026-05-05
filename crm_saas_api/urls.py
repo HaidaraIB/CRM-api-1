@@ -58,6 +58,7 @@ from accounts.views import (
     pre_login_phone_change,
     update_fcm_token,
     remove_fcm_token,
+    remove_fcm_token_device,
     update_language,
     fcm_diagnostics_full,
 )
@@ -208,6 +209,11 @@ v1_patterns = [
     path("subscriptions/schedule-downgrade/", schedule_subscription_downgrade, name="schedule_subscription_downgrade"),
     path("users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
     path("users/remove-fcm-token/", remove_fcm_token, name="remove_fcm_token"),
+    path(
+        "users/remove-fcm-token-device/",
+        remove_fcm_token_device,
+        name="remove_fcm_token_device",
+    ),
     path("users/update-language/", update_language, name="update_language"),
     path("users/fcm-diagnostics-full/", fcm_diagnostics_full, name="fcm_diagnostics_full"),
     path("", include(router.urls)),

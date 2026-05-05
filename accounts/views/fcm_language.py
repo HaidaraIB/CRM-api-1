@@ -41,9 +41,58 @@ from ..utils import (
     send_two_factor_auth_email,
 )
 import logging
-from django.db import transaction
+from django.db import connection, transaction
+from django.db.models import Q
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_fcm_token_from_all_users(normalized_token: str) -> int:
+    """
+    Remove the given FCM token from every user row (legacy column + JSON list).
+    Used for device unlink when JWT may be unavailable (session expired).
+
+    PostgreSQL: uses JSON ``contains`` for an efficient OR query.
+    SQLite / others: ``contains`` on JSONField is not supported — match legacy
+    column in SQL, then scan rows with a non-empty ``fcm_tokens`` list in Python.
+    """
+    if not normalized_token:
+        return 0
+
+    updated = 0
+
+    def _save_if_removed(user) -> None:
+        nonlocal updated
+        if user.remove_fcm_token(normalized_token):
+            user.save(update_fields=["fcm_token", "fcm_tokens"])
+            updated += 1
+
+    if connection.vendor == "postgresql":
+        qs = User.objects.filter(
+            Q(fcm_token=normalized_token)
+            | Q(fcm_tokens__contains=[normalized_token])
+        ).only("id", "fcm_token", "fcm_tokens")
+        for user in qs.iterator(chunk_size=200):
+            _save_if_removed(user)
+        return updated
+
+    # SQLite and other backends: no JSONField __contains
+    for user in (
+        User.objects.filter(fcm_token=normalized_token)
+        .only("id", "fcm_token", "fcm_tokens")
+        .iterator(chunk_size=200)
+    ):
+        _save_if_removed(user)
+
+    non_empty = (
+        User.objects.exclude(fcm_tokens__isnull=True)
+        .exclude(fcm_tokens=[])
+        .only("id", "fcm_token", "fcm_tokens")
+    )
+    for user in non_empty.iterator(chunk_size=200):
+        _save_if_removed(user)
+
+    return updated
 
 
 def _revoke_token_from_other_users(current_user, token):
@@ -148,6 +197,47 @@ def remove_fcm_token(request):
     if changed:
         user.save(update_fields=["fcm_token", "fcm_tokens"])
 
+    return success_response(message="FCM token removed successfully")
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def remove_fcm_token_device(request):
+    """
+    Unregister this device's FCM token without JWT authentication.
+
+    Secured only by ``X-API-Key`` (APIKeyValidationMiddleware), same as other API
+    routes. Allows the mobile app to clear server-side registrations when the access
+    token is expired and refresh already failed.
+
+    Removing this token globally is intentional: each FCM registration string is
+    unique to one app/device install — it cannot legitimately belong to two users.
+    """
+    fcm_token = request.data.get("fcm_token", "").strip()
+    if not fcm_token:
+        return error_response("fcm_token is required", code="bad_request")
+
+    normalized = User._normalize_fcm_token(fcm_token)
+    prefix = normalized[:12] if normalized else "-"
+    try:
+        stripped = _strip_fcm_token_from_all_users(normalized)
+    except Exception:
+        logger.exception(
+            "FCM device-remove failed "
+            f"token_len={len(fcm_token)} token_prefix={prefix}"
+        )
+        return error_response(
+            "Failed to remove fcm_token",
+            code="server_error",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    logger.info(
+        "FCM device-remove ok rows_updated=%s token_len=%s token_prefix=%s",
+        stripped,
+        len(normalized),
+        prefix,
+    )
     return success_response(message="FCM token removed successfully")
 
 

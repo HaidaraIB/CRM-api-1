@@ -3,6 +3,7 @@ from .email_verify import check_registration_availability, resend_verification, 
 from .fcm_language import (
     fcm_diagnostics_full,
     remove_fcm_token,
+    remove_fcm_token_device,
     update_fcm_token,
     update_language,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "pre_login_phone_change",
     "update_fcm_token",
     "remove_fcm_token",
+    "remove_fcm_token_device",
     "update_language",
     "fcm_diagnostics_full",
 ]
