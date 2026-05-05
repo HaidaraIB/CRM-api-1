@@ -497,6 +497,38 @@ class TestPagination:
         assert response.status_code == status.HTTP_200_OK
         assert len(api_body(response)["results"]) == 5
 
+    def test_custom_page_size(self, authenticated_admin, company):
+        from crm.models import Client
+
+        for i in range(25):
+            Client.objects.create(
+                name=f"Lead {i}", company=company, priority="low", type="cold"
+            )
+
+        response = authenticated_admin.get("/api/v1/clients/?page_size=50")
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["count"] == 25
+        assert len(body["results"]) == 25
+
+    def test_page_size_capped_at_max(self, authenticated_admin, company):
+        from django.conf import settings as django_settings
+        from crm.models import Client
+
+        max_sz = int(getattr(django_settings, "DRF_MAX_PAGE_SIZE", 200))
+
+        for i in range(max_sz + 15):
+            Client.objects.create(
+                name=f"Lead cap {i}", company=company, priority="low", type="cold"
+            )
+
+        response = authenticated_admin.get(
+            f"/api/v1/clients/?page_size={max_sz + 999}"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert len(body["results"]) == max_sz
+
 
 @pytest.mark.django_db
 class TestPermissions:

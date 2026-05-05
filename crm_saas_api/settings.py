@@ -382,6 +382,17 @@ _REST_FRAMEWORK_RENDERERS = [
 if DEBUG or os.getenv("ENABLE_BROWSABLE_API", "").lower() == "true":
     _REST_FRAMEWORK_RENDERERS.append("rest_framework.renderers.BrowsableAPIRenderer")
 
+
+def _drf_throttle_rate(env_key: str, default: str) -> str:
+    """Non-empty env overrides DRF throttle rate (e.g. ``600/minute``)."""
+    v = os.getenv(env_key, "").strip()
+    return v if v else default
+
+
+# Optional overrides: DRF_PAGE_SIZE, DRF_MAX_PAGE_SIZE (cap for ?page_size=)
+DRF_PAGE_SIZE = max(1, min(500, int(os.getenv("DRF_PAGE_SIZE", "20"))))
+DRF_MAX_PAGE_SIZE = max(DRF_PAGE_SIZE, min(500, int(os.getenv("DRF_MAX_PAGE_SIZE", "200"))))
+
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -394,15 +405,15 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": "30/minute",
-        "user": "120/minute",
-        "auth": "5/minute",
+        "anon": _drf_throttle_rate("DRF_THROTTLE_ANON", "30/minute"),
+        "user": _drf_throttle_rate("DRF_THROTTLE_USER", "600/minute"),
+        "auth": _drf_throttle_rate("DRF_THROTTLE_AUTH", "5/minute"),
     },
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_PAGINATION_CLASS": "crm_saas_api.pagination.FlexiblePageNumberPagination",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "crm_saas_api.exception_handler.custom_exception_handler",
     "DEFAULT_RENDERER_CLASSES": _REST_FRAMEWORK_RENDERERS,
-    "PAGE_SIZE": 20,
+    "PAGE_SIZE": DRF_PAGE_SIZE,
 }
 
 # ============================================================================
