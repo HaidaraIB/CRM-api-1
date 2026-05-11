@@ -122,7 +122,7 @@ from subscriptions.views import (
 )
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
-from tenant_chat.views import TenantChatConversationViewSet
+from tenant_chat.views import TenantChatConversationViewSet, TenantChatMessageAttachmentView
 
 # Create a router and register viewsets
 router = DefaultRouter()
@@ -222,6 +222,11 @@ v1_patterns = [
     ),
     path("users/update-language/", update_language, name="update_language"),
     path("users/fcm-diagnostics-full/", fcm_diagnostics_full, name="fcm_diagnostics_full"),
+    path(
+        "tenant-chat/messages/<int:pk>/attachment/",
+        TenantChatMessageAttachmentView.as_view(),
+        name="tenant_chat_message_attachment",
+    ),
     path("", include(router.urls)),
     path("auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("auth/register/", register_company, name="register_company"),

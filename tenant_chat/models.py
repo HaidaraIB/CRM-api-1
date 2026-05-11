@@ -49,6 +49,12 @@ class ChatConversation(models.Model):
 
 
 class ChatMessage(models.Model):
+    class AttachmentKind(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+        AUDIO = "audio", "Audio"
+        DOCUMENT = "document", "Document"
+
     conversation = models.ForeignKey(
         ChatConversation,
         on_delete=models.CASCADE,
@@ -73,6 +79,27 @@ class ChatMessage(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="forwards",
+    )
+    attachment = models.FileField(
+        upload_to="tenant_chat/%Y/%m/%d/",
+        max_length=500,
+        null=True,
+        blank=True,
+    )
+    attachment_kind = models.CharField(
+        max_length=16,
+        choices=AttachmentKind.choices,
+        null=True,
+        blank=True,
+    )
+    attachment_mime = models.CharField(max_length=128, blank=True, default="")
+    attachment_size = models.PositiveIntegerField(null=True, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True, default="")
+    attachment_object_key = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="Supabase Storage object path when TENANT_CHAT_STORAGE=supabase (empty for local FileField).",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -328,6 +328,12 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 (MEDIA_ROOT / "fonts").mkdir(parents=True, exist_ok=True)
 
+# Tenant chat attachments: "local" (Django FileField under MEDIA_ROOT) or "supabase"
+TENANT_CHAT_STORAGE = (os.getenv("TENANT_CHAT_STORAGE", "local") or "local").strip().lower()
+SUPABASE_URL = (os.getenv("SUPABASE_URL", "") or "").strip().rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()
+SUPABASE_CHAT_BUCKET = (os.getenv("SUPABASE_CHAT_BUCKET", "tenant-chat") or "tenant-chat").strip()
+
 # Backups directory
 BACKUP_ROOT = Path(MEDIA_ROOT / "backups")
 BACKUP_ROOT.mkdir(parents=True, exist_ok=True)

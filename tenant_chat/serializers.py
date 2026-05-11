@@ -1,10 +1,13 @@
 from datetime import timedelta
 
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import User
+from .attachments import media_preview_label
 from .models import ChatConversation, ChatConversationReadState, ChatMessage, ChatPinnedMessage
+from .presence import VALID_ACTIONS
 
 
 def _body_snippet(text: str | None, n: int = 200) -> str:
@@ -12,6 +15,28 @@ def _body_snippet(text: str | None, n: int = 200) -> str:
     if len(s) > n:
         return s[: n - 1] + "…"
     return s
+
+
+def _message_list_snippet(msg: ChatMessage) -> str:
+    if getattr(msg, "attachment_kind", None):
+        return media_preview_label(msg.attachment_kind, msg.body)
+    return _body_snippet(msg.body)
+
+
+def _attachment_download_url(request, message_id: int) -> str | None:
+    if not request:
+        return None
+    path = reverse("tenant_chat_message_attachment", kwargs={"pk": message_id})
+    return request.build_absolute_uri(path)
+
+
+def _message_has_attachment_payload(m: ChatMessage | None) -> bool:
+    if m is None:
+        return False
+    if (getattr(m, "attachment_object_key", None) or "").strip():
+        return True
+    att = getattr(m, "attachment", None)
+    return bool(att and getattr(att, "name", None))
 
 
 class ChatPeerSerializer(serializers.ModelSerializer):
@@ -47,6 +72,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     read_by_peer = serializers.SerializerMethodField()
     reply_to = serializers.SerializerMethodField()
     forwarded_from = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
@@ -58,6 +84,11 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "read_by_peer",
             "reply_to",
             "forwarded_from",
+            "attachment_kind",
+            "attachment_mime",
+            "attachment_size",
+            "original_filename",
+            "attachment_url",
         )
         read_only_fields = fields
 
@@ -72,15 +103,25 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             return False
         return peer_lr >= obj.id
 
+    def get_attachment_url(self, obj):
+        if not _message_has_attachment_payload(obj):
+            return None
+        return _attachment_download_url(self.context.get("request"), obj.id)
+
     def _message_quote(self, m: ChatMessage | None):
         if m is None:
             return None
-        return {
+        out = {
             "id": m.id,
             "sender": ChatPeerSerializer(m.sender, context=self.context).data,
             "body": _body_snippet(m.body),
             "created_at": m.created_at,
+            "attachment_kind": m.attachment_kind,
+            "attachment_url": _attachment_download_url(self.context.get("request"), m.id)
+            if _message_has_attachment_payload(m)
+            else None,
         }
+        return out
 
     def get_reply_to(self, obj):
         return self._message_quote(obj.reply_to)
@@ -93,6 +134,7 @@ class ChatConversationSerializer(serializers.ModelSerializer):
     other_user = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
+    last_read_message_id = serializers.SerializerMethodField()
     pinned_messages = serializers.SerializerMethodField()
 
     class Meta:
@@ -103,6 +145,7 @@ class ChatConversationSerializer(serializers.ModelSerializer):
             "last_message",
             "updated_at",
             "unread_count",
+            "last_read_message_id",
             "pinned_messages",
         )
         read_only_fields = fields
@@ -124,11 +167,13 @@ class ChatConversationSerializer(serializers.ModelSerializer):
             msg = obj.messages.order_by("-created_at").first()
         if not msg:
             return None
+        preview = _message_list_snippet(msg)
         return {
             "id": msg.id,
-            "body": msg.body[:500],
+            "body": preview[:500],
             "created_at": msg.created_at,
             "sender_id": msg.sender_id,
+            "attachment_kind": msg.attachment_kind or None,
         }
 
     def get_unread_count(self, obj):
@@ -142,6 +187,13 @@ class ChatConversationSerializer(serializers.ModelSerializer):
         if last_id:
             qs = qs.filter(id__gt=last_id)
         return qs.count()
+
+    def get_last_read_message_id(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+        state = ChatConversationReadState.objects.filter(conversation=obj, user=request.user).first()
+        return state.last_read_message_id if state else None
 
     def get_pinned_messages(self, obj):
         pins = getattr(obj, "_prefetched_chat_pins", None)
@@ -158,10 +210,11 @@ class ChatConversationSerializer(serializers.ModelSerializer):
                 {
                     "pin_id": pin.id,
                     "message_id": m.id,
-                    "body": _body_snippet(m.body),
+                    "body": _message_list_snippet(m),
                     "sender": ChatPeerSerializer(m.sender, context=self.context).data,
                     "pinned_at": pin.pinned_at,
                     "pinned_by_id": pin.pinned_by_id,
+                    "attachment_kind": m.attachment_kind or None,
                 }
             )
         return out
@@ -181,6 +234,8 @@ class SendMessageSerializer(serializers.Serializer):
         body = body_raw.strip() if isinstance(body_raw, str) else ""
         rid = attrs.get("reply_to_message_id")
         fid = attrs.get("forward_from_message_id")
+        has_file = bool(self.context.get("has_uploaded_file"))
+
         if rid is not None and fid is not None:
             raise serializers.ValidationError("Cannot combine reply_to_message_id with forward_from_message_id.")
 
@@ -191,9 +246,9 @@ class SendMessageSerializer(serializers.Serializer):
             attrs["body"] = body
             return attrs
 
-        if rid is not None and not body:
+        if rid is not None and not body and not has_file:
             raise serializers.ValidationError({"body": "Message body cannot be empty."})
-        if rid is None and fid is None and not body:
+        if rid is None and fid is None and not body and not has_file:
             raise serializers.ValidationError({"body": "Message body cannot be empty."})
         attrs["body"] = body
         return attrs
@@ -205,6 +260,10 @@ class MarkReadSerializer(serializers.Serializer):
 
 class PinMessageSerializer(serializers.Serializer):
     message_id = serializers.IntegerField(min_value=1)
+
+
+class ChatPresenceSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=[(a, a) for a in sorted(VALID_ACTIONS)])
 
 
 def normalize_dm_participants(user_a: User, user_b: User):

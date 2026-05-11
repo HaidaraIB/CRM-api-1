@@ -1,9 +1,14 @@
 """Tests for tenant internal DM authorization and flows."""
 
+import base64
 from datetime import timedelta
+from unittest.mock import patch
+from urllib.parse import urlparse
 
 import pytest
+from django.test import override_settings
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -16,6 +21,13 @@ from tenant_chat.authorization import can_chat, chat_role_bucket, supervisor_cha
 from tenant_chat.models import ChatConversation, ChatConversationReadState, ChatMessage, ChatPinnedMessage
 
 User = get_user_model()
+
+
+def _unwrap_data(resp):
+    d = getattr(resp, "data", None) or {}
+    if isinstance(d, dict) and d.get("success") is True and isinstance(d.get("data"), dict):
+        return d["data"]
+    return d
 
 
 def _company_with_subscription(domain_suffix="chat"):
@@ -190,6 +202,7 @@ def test_unread_count_and_mark_read():
     r_list_emp = emp_client.get(url)
     row_emp = next(x for x in r_list_emp.data["results"] if x["id"] == conv_id)
     assert row_emp["unread_count"] == 1
+    assert row_emp.get("last_read_message_id") in (None, 0)
 
     read_url = reverse("tenant_chat_conversation-mark-read", kwargs={"pk": conv_id})
     r_read = emp_client.post(read_url, {"message_id": mid}, format="json")
@@ -199,6 +212,7 @@ def test_unread_count_and_mark_read():
     r_list_emp2 = emp_client.get(url)
     row_emp2 = next(x for x in r_list_emp2.data["results"] if x["id"] == conv_id)
     assert row_emp2["unread_count"] == 0
+    assert row_emp2.get("last_read_message_id") == mid
 
     assert ChatConversationReadState.objects.filter(conversation_id=conv_id, user=emp).exists()
 
@@ -296,4 +310,302 @@ def test_reply_forward_and_pin_messages():
     r_unpin = owner_client.post(unpin_url, {"message_id": oid}, format="json")
     assert r_unpin.status_code == status.HTTP_200_OK
     assert not ChatPinnedMessage.objects.filter(conversation_id=conv_a_id, message_id=oid).exists()
+
+
+MINI_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.django_db
+def test_multipart_image_message_attachment_url_and_download():
+    company, owner = _company_with_subscription("t_img")
+    emp = _user(company, "emp_img", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    emp_client = APIClient()
+    emp_client.force_authenticate(user=emp)
+    url = reverse("tenant_chat_conversation-list")
+    r = owner_client.post(url, {"with_user_id": emp.id}, format="json")
+    conv_id = r.data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    r2 = owner_client.post(msg_url, {"body": "hello pic", "file": up}, format="multipart")
+    assert r2.status_code == status.HTTP_201_CREATED
+    assert r2.data.get("attachment_kind") == "image"
+    assert r2.data.get("attachment_url")
+    assert r2.data.get("body") == "hello pic"
+    att_path = urlparse(r2.data["attachment_url"]).path
+    dl = emp_client.get(att_path)
+    assert dl.status_code == status.HTTP_200_OK
+    assert "image" in (dl.get("Content-Type") or "")
+
+
+@pytest.mark.django_db
+def test_attachment_download_forbidden_non_participant():
+    company, owner = _company_with_subscription("t_att403")
+    emp = _user(company, "emp_att403", Role.EMPLOYEE.value)
+    other = _user(company, "other_admin_att403", Role.ADMIN.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    conv_id = r.data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    r2 = owner_client.post(msg_url, {"body": "x", "file": up}, format="multipart")
+    mid = r2.data["id"]
+    att_path = urlparse(r2.data["attachment_url"]).path
+    other_client = APIClient()
+    other_client.force_authenticate(user=other)
+    assert other_client.get(att_path).status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_multipart_file_too_large_rejected():
+    company, owner = _company_with_subscription("t_big")
+    emp = _user(company, "emp_big", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    conv_id = r.data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    big = b"\x00" + (b"x" * (9 * 1024 * 1024))
+    up = SimpleUploadedFile("big.png", big, content_type="image/png")
+    r2 = owner_client.post(msg_url, {"body": "nope", "file": up}, format="multipart")
+    assert r2.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_multipart_invalid_type_rejected():
+    company, owner = _company_with_subscription("t_bad")
+    emp = _user(company, "emp_bad", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    conv_id = r.data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    up = SimpleUploadedFile("evil.exe", b"MZ\x00\x00", content_type="application/octet-stream")
+    r2 = owner_client.post(msg_url, {"body": "nope", "file": up}, format="multipart")
+    assert r2.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_cannot_combine_forward_with_file_upload():
+    company, owner = _company_with_subscription("t_ffile")
+    emp = _user(company, "emp_ffile", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    conv_id = r.data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    origin = owner_client.post(msg_url, {"body": "orig"}, format="json")
+    oid = origin.data["id"]
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    r2 = owner_client.post(
+        msg_url,
+        {"body": "", "forward_from_message_id": oid, "file": up},
+        format="multipart",
+    )
+    assert r2.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_reply_with_attachment_only_empty_body():
+    company, owner = _company_with_subscription("t_reply_att")
+    emp = _user(company, "emp_reply_att", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    conv_id = r.data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    first = owner_client.post(msg_url, {"body": "thread start"}, format="json")
+    rid = first.data["id"]
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    r2 = owner_client.post(
+        msg_url,
+        {"reply_to_message_id": rid, "file": up},
+        format="multipart",
+    )
+    assert r2.status_code == status.HTTP_201_CREATED
+    assert r2.data.get("reply_to", {}).get("id") == rid
+    assert r2.data.get("attachment_kind") == "image"
+
+
+@pytest.mark.django_db
+def test_forward_copies_attachment_to_new_message():
+    company, owner = _company_with_subscription("t_fwdcopy")
+    emp = _user(company, "emp_fwdcopy", Role.EMPLOYEE.value)
+    solo = _user(company, "solo_fwdcopy", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    url = reverse("tenant_chat_conversation-list")
+    r1 = owner_client.post(url, {"with_user_id": emp.id}, format="json")
+    conv_a = r1.data["id"]
+    msg_url_a = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_a})
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    origin = owner_client.post(msg_url_a, {"body": "pic", "file": up}, format="multipart")
+    assert origin.status_code == status.HTTP_201_CREATED
+    oid = origin.data["id"]
+    conv_b = owner_client.post(url, {"with_user_id": solo.id}, format="json").data["id"]
+    msg_url_b = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_b})
+    fwd = owner_client.post(
+        msg_url_b,
+        {"body": "look", "forward_from_message_id": oid},
+        format="json",
+    )
+    assert fwd.status_code == status.HTTP_201_CREATED
+    assert fwd.data.get("attachment_kind") == "image"
+    assert fwd.data.get("attachment_url")
+    assert fwd.data["forwarded_from"]["id"] == oid
+
+
+@pytest.mark.django_db
+@override_settings(
+    TENANT_CHAT_STORAGE="supabase",
+    SUPABASE_URL="https://example.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY="test-service-role",
+    SUPABASE_CHAT_BUCKET="tenant-chat",
+)
+@patch("tenant_chat.supabase_storage.upload_bytes")
+def test_supabase_mode_multipart_sets_object_key(mock_upload):
+    company, owner = _company_with_subscription("t_sb_up")
+    emp = _user(company, "emp_sb_up", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    conv_id = r.data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    r2 = owner_client.post(msg_url, {"body": "sb", "file": up}, format="multipart")
+    assert r2.status_code == status.HTTP_201_CREATED
+    mock_upload.assert_called_once()
+    args, _kwargs = mock_upload.call_args
+    assert args[0].startswith(f"company_{company.id}/")
+    assert r2.data.get("attachment_url")
+    msg = ChatMessage.objects.get(pk=r2.data["id"])
+    assert msg.attachment_object_key == args[0]
+    assert not (msg.attachment and getattr(msg.attachment, "name", None))
+
+
+@pytest.mark.django_db
+@override_settings(
+    TENANT_CHAT_STORAGE="supabase",
+    SUPABASE_URL="https://example.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY="test-service-role",
+    SUPABASE_CHAT_BUCKET="tenant-chat",
+)
+@patch("tenant_chat.supabase_storage.upload_bytes")
+@patch("tenant_chat.supabase_storage.download_bytes", return_value=MINI_PNG_BYTES)
+def test_supabase_mode_forward_copies_via_storage(mock_download, mock_upload):
+    company, owner = _company_with_subscription("t_sb_fwd")
+    emp = _user(company, "emp_sb_fwd", Role.EMPLOYEE.value)
+    solo = _user(company, "solo_sb_fwd", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    url = reverse("tenant_chat_conversation-list")
+    r1 = owner_client.post(url, {"with_user_id": emp.id}, format="json")
+    conv_a = r1.data["id"]
+    msg_url_a = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_a})
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    origin = owner_client.post(msg_url_a, {"body": "pic", "file": up}, format="multipart")
+    assert origin.status_code == status.HTTP_201_CREATED
+    oid = origin.data["id"]
+    conv_b = owner_client.post(url, {"with_user_id": solo.id}, format="json").data["id"]
+    msg_url_b = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_b})
+    fwd = owner_client.post(
+        msg_url_b,
+        {"body": "look", "forward_from_message_id": oid},
+        format="json",
+    )
+    assert fwd.status_code == status.HTTP_201_CREATED
+    assert mock_download.call_count == 1
+    assert mock_upload.call_count == 2
+    assert fwd.data.get("attachment_url")
+
+
+@pytest.mark.django_db
+@override_settings(
+    TENANT_CHAT_STORAGE="supabase",
+    SUPABASE_URL="",
+    SUPABASE_SERVICE_ROLE_KEY="",
+    SUPABASE_CHAT_BUCKET="tenant-chat",
+)
+def test_supabase_misconfigured_rejects_file_upload():
+    company, owner = _company_with_subscription("t_sb_bad")
+    emp = _user(company, "emp_sb_bad", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": r.data["id"]})
+    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
+    r2 = owner_client.post(msg_url, {"body": "x", "file": up}, format="multipart")
+    assert r2.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.django_db
+@override_settings(
+    TENANT_CHAT_STORAGE="supabase",
+    SUPABASE_URL="https://example.supabase.co",
+    SUPABASE_SERVICE_ROLE_KEY="test-service-role",
+    SUPABASE_CHAT_BUCKET="tenant-chat",
+)
+@patch("tenant_chat.supabase_storage.create_signed_url", return_value="https://signed.example/file?token=1")
+def test_supabase_attachment_get_redirects(mock_sign):
+    company, owner = _company_with_subscription("t_sb_redir")
+    emp = _user(company, "emp_sb_redir", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    emp_client = APIClient()
+    emp_client.force_authenticate(user=emp)
+    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
+    conv = ChatConversation.objects.get(pk=r.data["id"])
+    msg = ChatMessage.objects.create(
+        conversation=conv,
+        sender=owner,
+        body="x",
+        attachment_kind="image",
+        attachment_mime="image/png",
+        attachment_size=len(MINI_PNG_BYTES),
+        attachment_object_key=f"company_{company.id}/m0_test.png",
+    )
+    att_url = reverse("tenant_chat_message_attachment", kwargs={"pk": msg.id})
+    dl = emp_client.get(att_url)
+    assert dl.status_code == status.HTTP_302_FOUND
+    assert dl["Location"] == "https://signed.example/file?token=1"
+    mock_sign.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_peer_presence_post_and_get_between_participants():
+    company, owner = _company_with_subscription("t_pres")
+    emp = _user(company, "emp_pres", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    emp_client = APIClient()
+    emp_client.force_authenticate(user=emp)
+    conv_id = owner_client.post(
+        reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json"
+    ).data["id"]
+    pres = reverse("tenant_chat_conversation-peer-presence", kwargs={"pk": conv_id})
+    assert owner_client.post(pres, {"action": "typing"}, format="json").status_code == status.HTTP_200_OK
+    got = _unwrap_data(emp_client.get(pres))
+    assert got.get("peer_user_id") == owner.id
+    assert got.get("activity") == "typing"
+    assert owner_client.post(pres, {"action": "idle"}, format="json").status_code == status.HTTP_200_OK
+    cleared = _unwrap_data(emp_client.get(pres))
+    assert cleared.get("activity") is None
+
+
+@pytest.mark.django_db
+def test_peer_presence_invalid_action():
+    company, owner = _company_with_subscription("t_pres_bad")
+    emp = _user(company, "emp_pres_bad", Role.EMPLOYEE.value)
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    conv_id = owner_client.post(
+        reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json"
+    ).data["id"]
+    pres = reverse("tenant_chat_conversation-peer-presence", kwargs={"pk": conv_id})
+    r = owner_client.post(pres, {"action": "nope"}, format="json")
+    assert r.status_code == status.HTTP_400_BAD_REQUEST
 
