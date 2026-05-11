@@ -122,6 +122,7 @@ from subscriptions.views import (
 )
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
+from tenant_chat.views import TenantChatConversationViewSet
 
 # Create a router and register viewsets
 router = DefaultRouter()
@@ -189,6 +190,11 @@ router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
 router.register(r"supervisors", SupervisorViewSet, basename="supervisor")
 router.register(r"support-tickets", SupportTicketViewSet, basename="supportticket")
+router.register(
+    r"tenant-chat/conversations",
+    TenantChatConversationViewSet,
+    basename="tenant_chat_conversation",
+)
 
 # --- Versioned API patterns (v1) ---
 v1_patterns = [

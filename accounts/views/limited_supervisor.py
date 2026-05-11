@@ -30,6 +30,7 @@ from ..serializers import (
 from ..permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
 from companies.models import Company
 from django.conf import settings
+from django.db import transaction
 from django.core.cache import cache
 from django.utils import timezone
 from datetime import timedelta
@@ -138,6 +139,37 @@ class SupervisorViewSet(viewsets.ModelViewSet):
             status_code=status.HTTP_201_CREATED,
             headers=headers,
         )
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Remove the supervisor's User account, not only SupervisorPermission.
+        Default ModelViewSet.destroy would delete only SupervisorPermission; the User
+        row would remain and still appear on the employees list.
+        """
+        sp = self.get_object()
+        subject = sp.user
+        if subject.id == request.user.id:
+            return error_response(
+                "You cannot delete your own account.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        if subject.role != Role.SUPERVISOR.value:
+            return error_response(
+                "This record is not linked to a supervisor user.",
+                code="invalid_target",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        company = request.user.company
+        if company and getattr(company, "owner_id", None) == subject.id:
+            return error_response(
+                "Cannot delete the company owner.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        with transaction.atomic():
+            subject.delete()
+        return success_response(status_code=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'])
     def toggle_active(self, request, pk=None):

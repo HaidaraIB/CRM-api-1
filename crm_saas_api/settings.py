@@ -222,6 +222,7 @@ INSTALLED_APPS = [
     "integrations",
     "notifications",
     "support",
+    "tenant_chat",
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_q",

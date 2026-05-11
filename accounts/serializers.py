@@ -1409,6 +1409,7 @@ class SupervisorSerializer(serializers.ModelSerializer):
             'email': obj.user.email,
             'first_name': obj.user.first_name,
             'last_name': obj.user.last_name,
+            'phone': obj.user.phone or '',
         }
 
     def update(self, instance, validated_data):
@@ -1427,7 +1428,8 @@ class CreateSupervisorSerializer(serializers.Serializer):
     email = serializers.EmailField(required=True)
     password = serializers.CharField(required=True, write_only=True)
     first_name = serializers.CharField(required=True)
-    last_name = serializers.CharField(required=True)
+    last_name = serializers.CharField(required=False, allow_blank=True, default='')
+    phone = serializers.CharField(required=True)
     is_active = serializers.BooleanField(default=True)
     can_manage_leads = serializers.BooleanField(default=False)
     can_manage_deals = serializers.BooleanField(default=False)
@@ -1455,6 +1457,18 @@ class CreateSupervisorSerializer(serializers.Serializer):
         except ValidationError as e:
             raise serializers.ValidationError(list(e.messages))
         return value
+
+    def validate_phone(self, value):
+        if value is None or not str(value).strip():
+            raise serializers.ValidationError('Phone is required.')
+        s = str(value).strip()
+        from .platform_whatsapp import normalize_phone_digits
+        pn = normalize_phone_digits(s)
+        if not pn:
+            raise serializers.ValidationError('Phone is required.')
+        if User.objects.filter(phone=pn).exists():
+            raise serializers.ValidationError('Phone number already exists.')
+        return pn
 
     def create(self, validated_data):
         company = validated_data.pop('company')
