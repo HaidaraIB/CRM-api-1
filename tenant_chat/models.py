@@ -94,6 +94,16 @@ class ChatMessage(models.Model):
     )
     attachment_mime = models.CharField(max_length=128, blank=True, default="")
     attachment_size = models.PositiveIntegerField(null=True, blank=True)
+    attachment_width = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Pixel width of image attachment after server processing (for client layout).",
+    )
+    attachment_height = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Pixel height of image attachment after server processing (for client layout).",
+    )
     original_filename = models.CharField(max_length=255, blank=True, default="")
     attachment_object_key = models.CharField(
         max_length=512,

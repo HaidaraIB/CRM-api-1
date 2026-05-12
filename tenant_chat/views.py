@@ -20,6 +20,7 @@ from . import supabase_storage as chat_storage
 from .attachments import (
     KIND_IMAGE,
     copy_chat_attachment_from_source,
+    image_upload_pixel_dimensions,
     media_preview_label,
     message_has_stored_attachment,
     normalize_chat_image_upload,
@@ -254,6 +255,8 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         size_final = 0
         kind = None
         name_hint = ""
+        attachment_width = None
+        attachment_height = None
         if uploaded_file:
             try:
                 kind, ct, size = validate_uploaded_file(uploaded_file)
@@ -267,7 +270,11 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                 try:
                     normalized = normalize_chat_image_upload(uploaded_file)
                     if normalized:
-                        processed, mime_final, size_final = normalized
+                        processed, mime_final, size_final, attachment_width, attachment_height = normalized
+                    else:
+                        dims = image_upload_pixel_dimensions(uploaded_file)
+                        if dims:
+                            attachment_width, attachment_height = dims
                 except ValueError as e:
                     return error_response(str(e), code="invalid_file_type")
             name_hint = (
@@ -286,6 +293,8 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                         attachment_kind=kind,
                         attachment_mime=mime_final,
                         attachment_size=size_final,
+                        attachment_width=attachment_width,
+                        attachment_height=attachment_height,
                         original_filename=safe_original_filename(uploaded_file.name),
                     )
                     if chat_storage.is_supabase_chat_storage():

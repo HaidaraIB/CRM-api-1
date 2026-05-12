@@ -87,6 +87,8 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "attachment_kind",
             "attachment_mime",
             "attachment_size",
+            "attachment_width",
+            "attachment_height",
             "original_filename",
             "attachment_url",
         )

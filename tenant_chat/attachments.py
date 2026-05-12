@@ -170,9 +170,31 @@ def validate_uploaded_file(uploaded: UploadedFile) -> tuple[str, str, int]:
     return kind, ct, size
 
 
-def normalize_chat_image_upload(uploaded: UploadedFile) -> tuple[ContentFile, str, int] | None:
+def image_upload_pixel_dimensions(uploaded: UploadedFile) -> tuple[int, int] | None:
     """
-    Raster images only. Returns (ContentFile, mime, size) or None to use original bytes (e.g. GIF).
+    Read (width, height) from an image upload using Pillow (EXIF orientation applied).
+    Returns None if the file cannot be decoded as an image.
+    """
+    from PIL import Image, ImageOps
+
+    try:
+        uploaded.seek(0)
+        img = Image.open(uploaded)
+        img.load()
+        img = ImageOps.exif_transpose(img)
+        w, h = img.size
+        if w > 0 and h > 0:
+            return (int(w), int(h))
+    except Exception:
+        return None
+    return None
+
+
+def normalize_chat_image_upload(uploaded: UploadedFile) -> tuple[ContentFile, str, int, int, int] | None:
+    """
+    Raster images only.
+    Returns (ContentFile, mime, size_bytes, width, height) of the normalized output,
+    or None to use original bytes (e.g. GIF) — callers should use [image_upload_pixel_dimensions].
     """
     raw_ct = (getattr(uploaded, "content_type", None) or "").split(";")[0].strip().lower()
     if raw_ct == "image/gif":
@@ -192,6 +214,8 @@ def normalize_chat_image_upload(uploaded: UploadedFile) -> tuple[ContentFile, st
         new_h = max(1, int(h * ratio))
         img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
+    out_w, out_h = img.size
+
     buf = BytesIO()
     out_mime = "image/webp"
     try:
@@ -210,7 +234,7 @@ def normalize_chat_image_upload(uploaded: UploadedFile) -> tuple[ContentFile, st
 
     out = ContentFile(data)
     out.name = "chat.webp" if out_mime == "image/webp" else "chat.jpg"
-    return out, out_mime, len(data)
+    return out, out_mime, len(data), int(out_w), int(out_h)
 
 
 def safe_original_filename(name: str | None, max_len: int = 200) -> str:
@@ -240,6 +264,8 @@ def copy_chat_attachment_from_source(src, dst) -> None:
         dst.attachment_kind = src.attachment_kind
         dst.attachment_mime = src.attachment_mime or ""
         dst.attachment_size = src.attachment_size
+        dst.attachment_width = getattr(src, "attachment_width", None)
+        dst.attachment_height = getattr(src, "attachment_height", None)
         dst.original_filename = src.original_filename or ""
 
         data: bytes | None = None
@@ -262,6 +288,8 @@ def copy_chat_attachment_from_source(src, dst) -> None:
                 "attachment_kind",
                 "attachment_mime",
                 "attachment_size",
+                "attachment_width",
+                "attachment_height",
                 "original_filename",
                 "attachment_object_key",
             ]
@@ -279,6 +307,8 @@ def copy_chat_attachment_from_source(src, dst) -> None:
     dst.attachment_kind = src.attachment_kind
     dst.attachment_mime = src.attachment_mime
     dst.attachment_size = src.attachment_size
+    dst.attachment_width = getattr(src, "attachment_width", None)
+    dst.attachment_height = getattr(src, "attachment_height", None)
     dst.original_filename = src.original_filename
     dst.attachment.save(name, ContentFile(data), save=True)
 
