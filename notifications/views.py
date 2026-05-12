@@ -18,6 +18,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def exclude_tenant_chat_push_notifications(queryset):
+    """Tenant DM pushes use FCM only; legacy rows may still have data.kind=tenant_chat."""
+    return queryset.exclude(data__kind="tenant_chat")
+
+
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for viewing and managing user notifications
@@ -41,7 +46,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         if notification_type:
             queryset = queryset.filter(type=notification_type)
 
-        return queryset
+        return exclude_tenant_chat_push_notifications(queryset)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -58,10 +63,12 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
         """Mark all notifications as read (only non soft-deleted)"""
-        count = Notification.objects.filter(
-            user=request.user,
-            read=False,
-            deleted_at__isnull=True,
+        count = exclude_tenant_chat_push_notifications(
+            Notification.objects.filter(
+                user=request.user,
+                read=False,
+                deleted_at__isnull=True,
+            )
         ).update(read=True, read_at=timezone.now())
 
         return success_response(
@@ -72,10 +79,12 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def unread_count(self, request):
         """Get count of unread notifications (exclude soft-deleted)"""
-        count = Notification.objects.filter(
-            user=request.user,
-            read=False,
-            deleted_at__isnull=True,
+        count = exclude_tenant_chat_push_notifications(
+            Notification.objects.filter(
+                user=request.user,
+                read=False,
+                deleted_at__isnull=True,
+            )
         ).count()
 
         return success_response(data={"unread_count": count})
@@ -83,10 +92,12 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['delete'])
     def delete_all_read(self, request):
         """Soft-delete all read notifications (set deleted_at, do not remove from DB)"""
-        qs = Notification.objects.filter(
-            user=request.user,
-            read=True,
-            deleted_at__isnull=True,
+        qs = exclude_tenant_chat_push_notifications(
+            Notification.objects.filter(
+                user=request.user,
+                read=True,
+                deleted_at__isnull=True,
+            )
         )
         count = qs.update(deleted_at=timezone.now())
 

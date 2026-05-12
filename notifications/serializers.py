@@ -35,6 +35,7 @@ class NotificationListSerializer(serializers.ModelSerializer):
             'type_display',
             'title',
             'body',
+            'data',
             'read',
             'sent_at',
             'created_at',

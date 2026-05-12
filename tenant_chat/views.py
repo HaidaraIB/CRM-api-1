@@ -454,7 +454,7 @@ class TenantChatMessageAttachmentView(APIView):
 
 
 def _notify_recipient_chat_message(sender: User, recipient: User, message: ChatMessage):
-    """Push + in-app notification (best-effort)."""
+    """FCM push only (no in-app Notification row; team chat has its own unread UI)."""
     try:
         label = (sender.get_full_name() or sender.username or "").strip() or "Team"
         if getattr(message, "attachment_kind", None):
@@ -474,6 +474,7 @@ def _notify_recipient_chat_message(sender: User, recipient: User, message: ChatM
         if len(preview) > 160:
             preview = preview[:157] + "..."
 
+        # Push only: do not create Notification rows (team chat has its own UI + unread).
         NotificationService.send_notification(
             recipient,
             NotificationType.GENERAL.value,
@@ -486,6 +487,7 @@ def _notify_recipient_chat_message(sender: User, recipient: User, message: ChatM
                 "sender_id": sender.id,
             },
             skip_settings_check=True,
+            skip_database_insert=True,
         )
     except Exception as e:
         logger.warning("Chat push notification failed: %s", e, exc_info=True)
