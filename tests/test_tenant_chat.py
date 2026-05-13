@@ -609,3 +609,79 @@ def test_peer_presence_invalid_action():
     r = owner_client.post(pres, {"action": "nope"}, format="json")
     assert r.status_code == status.HTTP_400_BAD_REQUEST
 
+
+@pytest.mark.django_db
+def test_company_group_in_list_and_metadata():
+    company, owner = _company_with_subscription("t_cg_meta")
+    _user(company, "emp_cg_meta", Role.EMPLOYEE.value)
+    cg = ChatConversation.objects.get(company=company, kind=ChatConversation.Kind.COMPANY_GROUP)
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    r = client.get(reverse("tenant_chat_conversation-list"))
+    assert r.status_code == status.HTTP_200_OK
+    row = next(x for x in r.data["results"] if x["id"] == cg.id)
+    assert row["kind"] == "company_group"
+    assert row["other_user"] is None
+    assert row.get("group_title") == company.name
+    assert (row.get("member_count") or 0) >= 2
+
+
+@pytest.mark.django_db
+def test_employee_can_post_to_company_group():
+    company, owner = _company_with_subscription("t_cg_post")
+    emp = _user(company, "emp_cg_post", Role.EMPLOYEE.value)
+    cg = ChatConversation.objects.get(company=company, kind=ChatConversation.Kind.COMPANY_GROUP)
+    api = APIClient()
+    api.force_authenticate(user=emp)
+    url = reverse("tenant_chat_conversation-messages", kwargs={"pk": cg.id})
+    r = api.post(url, {"body": "hello room"}, format="json")
+    assert r.status_code == status.HTTP_201_CREATED
+    assert r.data["body"] == "hello room"
+    assert r.data.get("read_by_peer") is False
+
+
+@pytest.mark.django_db
+@patch("tenant_chat.views._notify_recipient_chat_message")
+def test_company_group_notify_fanout(mock_notify):
+    company, owner = _company_with_subscription("t_cg_fan")
+    _user(company, "e_cg_f1", Role.EMPLOYEE.value)
+    _user(company, "e_cg_f2", Role.EMPLOYEE.value)
+    cg = ChatConversation.objects.get(company=company, kind=ChatConversation.Kind.COMPANY_GROUP)
+    api = APIClient()
+    api.force_authenticate(user=owner)
+    url = reverse("tenant_chat_conversation-messages", kwargs={"pk": cg.id})
+    r = api.post(url, {"body": "all"}, format="json")
+    assert r.status_code == status.HTTP_201_CREATED
+    assert mock_notify.call_count == 2
+
+
+@pytest.mark.django_db
+def test_company_group_peer_presence():
+    company, owner = _company_with_subscription("t_cg_pres")
+    emp = _user(company, "emp_cg_pres", Role.EMPLOYEE.value)
+    cg = ChatConversation.objects.get(company=company, kind=ChatConversation.Kind.COMPANY_GROUP)
+    oc = APIClient()
+    oc.force_authenticate(user=owner)
+    ec = APIClient()
+    ec.force_authenticate(user=emp)
+    pres = reverse("tenant_chat_conversation-peer-presence", kwargs={"pk": cg.id})
+    assert oc.post(pres, {"action": "typing"}, format="json").status_code == status.HTTP_200_OK
+    got = ec.get(pres).data
+    assert got.get("mode") == "group"
+    peers = got.get("peers") or []
+    assert any(p["user_id"] == owner.id and p["activity"] == "typing" for p in peers)
+
+
+@pytest.mark.django_db
+def test_inactive_supervisor_does_not_see_company_group():
+    company, _owner = _company_with_subscription("t_cg_inact")
+    sup = _user(company, "sup_inact_cg", Role.SUPERVISOR.value)
+    SupervisorPermission.objects.create(user=sup, is_active=False)
+    ChatConversation.objects.get(company=company, kind=ChatConversation.Kind.COMPANY_GROUP)
+    api = APIClient()
+    api.force_authenticate(user=sup)
+    r = api.get(reverse("tenant_chat_conversation-list"))
+    assert r.status_code == status.HTTP_200_OK
+    kinds = [x.get("kind") for x in r.data["results"]]
+    assert "company_group" not in kinds
+

@@ -101,10 +101,14 @@ def eligible_company_users_queryset(base_qs):
 
 
 def user_participates_in_conversation(user: "User", conversation) -> bool:
+    from .models import ChatConversation
+
     if not user or not getattr(user, "id", None) or not getattr(conversation, "company_id", None):
         return False
     if user.company_id != conversation.company_id:
         return False
+    if getattr(conversation, "kind", None) == ChatConversation.Kind.COMPANY_GROUP:
+        return chat_role_bucket(user) != "ineligible"
     return user.id in (
         conversation.participant_low_id,
         conversation.participant_high_id,

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from django.conf import settings
 from django.db import models
 from django.db.models import F, Q
@@ -7,24 +9,38 @@ from companies.models import Company
 
 class ChatConversation(models.Model):
     """
-    One row per unordered pair of participants within a company.
-    participant_low_id is always strictly less than participant_high_id.
+    Direct message: unordered pair (participant_low_id < participant_high_id).
+    Company group: one row per company, both participants null, kind=company_group.
     """
+
+    class Kind(models.TextChoices):
+        DIRECT = "direct", "Direct"
+        COMPANY_GROUP = "company_group", "Company group"
 
     company = models.ForeignKey(
         Company,
         on_delete=models.CASCADE,
         related_name="chat_conversations",
     )
+    kind = models.CharField(
+        max_length=20,
+        choices=Kind.choices,
+        default=Kind.DIRECT,
+        db_index=True,
+    )
     participant_low = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="+",
+        null=True,
+        blank=True,
     )
     participant_high = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="+",
+        null=True,
+        blank=True,
     )
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -33,11 +49,29 @@ class ChatConversation(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["company", "participant_low", "participant_high"],
-                name="uniq_tenant_chat_pair_per_company",
+                name="uniq_tenant_chat_dm_triplet",
+                condition=Q(kind="direct"),
+            ),
+            models.UniqueConstraint(
+                fields=["company"],
+                name="uniq_tenant_chat_company_group_per_company",
+                condition=Q(kind="company_group"),
             ),
             models.CheckConstraint(
-                check=Q(participant_low_id__lt=F("participant_high_id")),
-                name="tenant_chat_low_lt_high",
+                condition=(
+                    Q(
+                        kind="direct",
+                        participant_low_id__isnull=False,
+                        participant_high_id__isnull=False,
+                        participant_low_id__lt=F("participant_high_id"),
+                    )
+                    | Q(
+                        kind="company_group",
+                        participant_low_id__isnull=True,
+                        participant_high_id__isnull=True,
+                    )
+                ),
+                name="tenant_chat_kind_participant_rules",
             ),
         ]
         indexes = [
@@ -45,7 +79,21 @@ class ChatConversation(models.Model):
         ]
 
     def __str__(self):
+        if self.kind == self.Kind.COMPANY_GROUP:
+            return f"CompanyGroup {self.company_id}"
         return f"Chat {self.company_id}: {self.participant_low_id}-{self.participant_high_id}"
+
+
+def ensure_company_group_conversation(company: Company) -> tuple[ChatConversation, bool]:
+    """Idempotent: one company-wide group thread per company."""
+    return ChatConversation.objects.get_or_create(
+        company_id=company.id,
+        kind=ChatConversation.Kind.COMPANY_GROUP,
+        defaults={
+            "participant_low_id": None,
+            "participant_high_id": None,
+        },
+    )
 
 
 class ChatMessage(models.Model):

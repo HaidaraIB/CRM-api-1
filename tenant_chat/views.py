@@ -29,6 +29,7 @@ from .attachments import (
 )
 from .authorization import (
     can_chat,
+    chat_role_bucket,
     eligible_company_users_queryset,
     user_can_access_chat_message,
     user_participates_in_conversation,
@@ -74,12 +75,18 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         pin_qs = ChatPinnedMessage.objects.order_by("-pinned_at").select_related(
             "message", "message__sender", "pinned_by"
         )
-        return (
-            ChatConversation.objects.filter(
-                Q(participant_low=user) | Q(participant_high=user),
-                company_id=user.company_id,
+        bucket = chat_role_bucket(user)
+        if bucket != "ineligible":
+            conv_filter = (
+                Q(kind=ChatConversation.Kind.COMPANY_GROUP)
+                | Q(participant_low=user)
+                | Q(participant_high=user)
             )
-            .select_related("participant_low", "participant_high")
+        else:
+            conv_filter = Q(participant_low=user) | Q(participant_high=user)
+        return (
+            ChatConversation.objects.filter(conv_filter, company_id=user.company_id)
+            .select_related("participant_low", "participant_high", "company")
             .prefetch_related(Prefetch("chat_pins", queryset=pin_qs, to_attr="_prefetched_chat_pins"))
             .order_by("-updated_at")
         )
@@ -113,6 +120,7 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         low, high = normalize_dm_participants(request.user, other)
         conv, _created = ChatConversation.objects.get_or_create(
             company_id=request.user.company_id,
+            kind=ChatConversation.Kind.DIRECT,
             participant_low=low,
             participant_high=high,
         )
@@ -141,6 +149,23 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         """
         conversation = self.get_object()
         if request.method == "GET":
+            if conversation.kind == ChatConversation.Kind.COMPANY_GROUP:
+                peers_out = []
+                base = eligible_company_users_queryset(
+                    User.objects.filter(company_id=conversation.company_id)
+                ).exclude(pk=request.user.id)[:100]
+                for u in base:
+                    act = get_user_presence(conversation.id, u.id)
+                    if not act:
+                        continue
+                    peers_out.append(
+                        {
+                            "user_id": u.id,
+                            "activity": act,
+                            "peer": ChatPeerSerializer(u, context=self.get_serializer_context()).data,
+                        }
+                    )
+                return Response({"mode": "group", "peers": peers_out})
             peer_id = other_participant_id(conversation, request.user.id)
             activity = get_user_presence(conversation.id, peer_id)
             return Response({"peer_user_id": peer_id, "activity": activity})
@@ -171,15 +196,18 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                 .order_by(order)
             )
             page = self.paginate_queryset(qs)
-            other_id = (
-                conversation.participant_high_id
-                if conversation.participant_low_id == request.user.id
-                else conversation.participant_low_id
-            )
-            peer_state = ChatConversationReadState.objects.filter(
-                conversation=conversation, user_id=other_id
-            ).first()
-            peer_lr = peer_state.last_read_message_id if peer_state else None
+            if conversation.kind == ChatConversation.Kind.COMPANY_GROUP:
+                peer_lr = None
+            else:
+                other_id = (
+                    conversation.participant_high_id
+                    if conversation.participant_low_id == request.user.id
+                    else conversation.participant_low_id
+                )
+                peer_state = ChatConversationReadState.objects.filter(
+                    conversation=conversation, user_id=other_id
+                ).first()
+                peer_lr = peer_state.last_read_message_id if peer_state else None
             ctx = {
                 **self.get_serializer_context(),
                 "conversation": conversation,
@@ -204,18 +232,27 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
 
             return validation_error_response(ser.errors)
 
-        other_id = (
-            conversation.participant_high_id
-            if conversation.participant_low_id == request.user.id
-            else conversation.participant_low_id
-        )
-        other = get_object_or_404(User, pk=other_id)
-        if not can_chat(request.user, other):
-            return error_response(
-                "You are not allowed to send messages in this conversation.",
-                code="chat_not_allowed",
-                status_code=status.HTTP_403_FORBIDDEN,
+        if conversation.kind == ChatConversation.Kind.COMPANY_GROUP:
+            if chat_role_bucket(request.user) == "ineligible":
+                return error_response(
+                    "You are not allowed to send messages in this conversation.",
+                    code="chat_not_allowed",
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+            other = None
+        else:
+            other_id = (
+                conversation.participant_high_id
+                if conversation.participant_low_id == request.user.id
+                else conversation.participant_low_id
             )
+            other = get_object_or_404(User, pk=other_id)
+            if not can_chat(request.user, other):
+                return error_response(
+                    "You are not allowed to send messages in this conversation.",
+                    code="chat_not_allowed",
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
 
         reply_to = None
         rid = ser.validated_data.get("reply_to_message_id")
@@ -336,11 +373,15 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        _notify_recipient_chat_message(request.user, other, msg)
-        peer_state = ChatConversationReadState.objects.filter(
-            conversation=conversation, user_id=other.id
-        ).first()
-        peer_lr = peer_state.last_read_message_id if peer_state else None
+        if conversation.kind == ChatConversation.Kind.COMPANY_GROUP:
+            _notify_company_group_chat_message(request.user, conversation, msg)
+            peer_lr = None
+        else:
+            _notify_recipient_chat_message(request.user, other, msg)
+            peer_state = ChatConversationReadState.objects.filter(
+                conversation=conversation, user_id=other.id
+            ).first()
+            peer_lr = peer_state.last_read_message_id if peer_state else None
         msg_ctx = {
             **self.get_serializer_context(),
             "conversation": conversation,
@@ -491,3 +532,13 @@ def _notify_recipient_chat_message(sender: User, recipient: User, message: ChatM
         )
     except Exception as e:
         logger.warning("Chat push notification failed: %s", e, exc_info=True)
+
+
+def _notify_company_group_chat_message(sender: User, conversation: ChatConversation, message: ChatMessage):
+    recipients = eligible_company_users_queryset(
+        User.objects.filter(company_id=conversation.company_id)
+    ).exclude(pk=sender.id)
+    for recipient in recipients.iterator():
+        if chat_role_bucket(recipient) == "ineligible":
+            continue
+        _notify_recipient_chat_message(sender, recipient, message)

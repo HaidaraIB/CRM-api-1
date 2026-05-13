@@ -6,6 +6,7 @@ from rest_framework import serializers
 
 from accounts.models import User
 from .attachments import media_preview_label
+from .authorization import eligible_company_users_queryset
 from .models import ChatConversation, ChatConversationReadState, ChatMessage, ChatPinnedMessage
 from .presence import VALID_ACTIONS
 
@@ -138,12 +139,19 @@ class ChatConversationSerializer(serializers.ModelSerializer):
     unread_count = serializers.SerializerMethodField()
     last_read_message_id = serializers.SerializerMethodField()
     pinned_messages = serializers.SerializerMethodField()
+    group_title = serializers.SerializerMethodField()
+    member_count = serializers.SerializerMethodField()
+    online_count = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatConversation
         fields = (
             "id",
+            "kind",
             "other_user",
+            "group_title",
+            "member_count",
+            "online_count",
             "last_message",
             "updated_at",
             "unread_count",
@@ -152,7 +160,31 @@ class ChatConversationSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
+    def get_group_title(self, obj):
+        if obj.kind != ChatConversation.Kind.COMPANY_GROUP:
+            return None
+        return getattr(obj.company, "name", None) or ""
+
+    def get_member_count(self, obj):
+        if obj.kind != ChatConversation.Kind.COMPANY_GROUP:
+            return None
+        return eligible_company_users_queryset(
+            User.objects.filter(company_id=obj.company_id)
+        ).count()
+
+    def get_online_count(self, obj):
+        if obj.kind != ChatConversation.Kind.COMPANY_GROUP:
+            return None
+        threshold = timezone.now() - timedelta(seconds=90)
+        return (
+            eligible_company_users_queryset(
+                User.objects.filter(company_id=obj.company_id, last_seen_at__gte=threshold)
+            ).count()
+        )
+
     def get_other_user(self, obj):
+        if obj.kind == ChatConversation.Kind.COMPANY_GROUP:
+            return None
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
             return None
@@ -161,6 +193,8 @@ class ChatConversationSerializer(serializers.ModelSerializer):
             if obj.participant_low_id == request.user.id
             else obj.participant_low
         )
+        if other is None:
+            return None
         return ChatPeerSerializer(other, context=self.context).data
 
     def get_last_message(self, obj):

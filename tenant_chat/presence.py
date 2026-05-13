@@ -28,6 +28,8 @@ def _cache_key(conversation_id: int, user_id: int) -> str:
 
 
 def other_participant_id(conversation: ChatConversation, user_id: int) -> int:
+    if conversation.kind != ChatConversation.Kind.DIRECT:
+        raise ValueError("other_participant_id is only valid for direct conversations")
     if conversation.participant_low_id == user_id:
         return conversation.participant_high_id
     return conversation.participant_low_id
