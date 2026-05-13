@@ -13,6 +13,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_INTEGRATION_AUTO_ASSIGN_NOTES = {
+    "tiktok": "Auto-assigned from TikTok Lead Gen",
+    "meta_lead_form": "Auto-assigned from Meta Lead Form",
+    "whatsapp": "Auto-assigned from WhatsApp",
+}
+
+
+def _integration_auto_assign_event_notes(client):
+    return _INTEGRATION_AUTO_ASSIGN_NOTES.get(
+        (client.source or "").strip(), "Auto-assigned from integration"
+    )
+
 
 def get_least_busy_employee(company):
     """
@@ -79,29 +91,41 @@ def get_next_data_entry_round_robin_employee(company):
 @receiver(post_save, sender=Client)
 def auto_assign_client(sender, instance, created, **kwargs):
     """
-    Auto assign client to employee when created if auto_assign_enabled is True
+    Auto-assign new clients to the least busy employee when company.auto_assign_enabled
+    is True. Applies to all new leads (manual, API, and integration sources such as
+    Meta, TikTok, WhatsApp) so the Lead Assignment toggle is the single switch.
     """
     if not created:
         return  # Only for new clients
-    
-    if not instance.company:
+
+    if not instance.company_id:
         return
-    
-    # Check if auto assign is enabled for this company
-    if not instance.company.auto_assign_enabled:
+
+    company = instance.company
+    from_integration = bool(instance.integration_account_id)
+    if not company.auto_assign_enabled:
         return
-    
+
     # If already assigned, don't override
-    if instance.assigned_to:
+    if instance.assigned_to_id:
         return
-    
-    # Get the least busy employee
-    employee = get_least_busy_employee(instance.company)
-    
-    if employee:
-        instance.assigned_to = employee
-        instance.assigned_at = timezone.now()
-        instance.save(update_fields=['assigned_to', 'assigned_at'])
+
+    employee = get_least_busy_employee(company)
+    if not employee:
+        return
+
+    instance.assigned_to = employee
+    instance.assigned_at = timezone.now()
+    instance.save(update_fields=["assigned_to", "assigned_at"])
+
+    if from_integration:
+        ClientEvent.objects.create(
+            client=instance,
+            event_type="assignment",
+            old_value="Unassigned",
+            new_value=employee.get_full_name() or employee.username,
+            notes=_integration_auto_assign_event_notes(instance),
+        )
 
 
 @receiver(post_save, sender=ClientTask)

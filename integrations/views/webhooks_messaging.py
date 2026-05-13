@@ -789,7 +789,6 @@ def tiktok_leadgen_webhook(request):
         return HttpResponse('OK', status=200)
     from ..models import IntegrationAccount, IntegrationLog
     from crm.models import Client, ClientPhoneNumber, ClientEvent
-    from crm.signals import get_least_busy_employee
     account, _ = IntegrationAccount.objects.get_or_create(
         company=company,
         platform='tiktok',
@@ -870,19 +869,6 @@ def tiktok_leadgen_webhook(request):
                 phone_type='mobile',
                 is_primary=True,
             )
-        if company.auto_assign_enabled:
-            employee = get_least_busy_employee(company)
-            if employee:
-                client.assigned_to = employee
-                client.assigned_at = timezone.now()
-                client.save()
-                ClientEvent.objects.create(
-                    client=client,
-                    event_type='assignment',
-                    old_value='Unassigned',
-                    new_value=employee.get_full_name() or employee.username,
-                    notes='Auto-assigned from TikTok Lead Gen',
-                )
         created_notes = 'Lead from TikTok Instant Form (form_id=%s)' % (payload.get('form_id') or '')
         if payload.get('email'):
             created_notes += '. Email: %s' % payload['email']
@@ -1166,7 +1152,6 @@ def meta_webhook(request):
                             
                             # إنشاء Client جديد
                             from crm.models import Client, ClientPhoneNumber, ClientEvent
-                            from crm.signals import get_least_busy_employee
                             # Enforce plan quota for leads created via webhook
                             try:
                                 from subscriptions.entitlements import require_quota
@@ -1226,23 +1211,6 @@ def meta_webhook(request):
                                     phone_type='mobile',
                                     is_primary=True,
                                 )
-                            
-                            # Auto-assignment إذا كان مفعّل
-                            if account.company.auto_assign_enabled:
-                                employee = get_least_busy_employee(account.company)
-                                if employee:
-                                    client.assigned_to = employee
-                                    client.assigned_at = timezone.now()
-                                    client.save()
-                                    
-                                    # تسجيل الحدث
-                                    ClientEvent.objects.create(
-                                        client=client,
-                                        event_type='assignment',
-                                        old_value='Unassigned',
-                                        new_value=employee.get_full_name() or employee.username,
-                                        notes=f"Auto-assigned from Meta Lead Form",
-                                    )
                             
                             # تسجيل الحدث
                             ClientEvent.objects.create(

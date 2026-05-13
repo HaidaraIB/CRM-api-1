@@ -17,6 +17,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
+from crm_saas_api.utils import clean_int_query_param
 
 from accounts.permissions import HasActiveSubscription
 from ..decorators import rate_limit_webhook
@@ -1208,15 +1209,14 @@ class IntegrationLogViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """الحصول على سجلات حسابات الشركة فقط"""
         user = self.request.user
-        account_id = self.request.query_params.get('account', None)
-        
         queryset = IntegrationLog.objects.filter(
             account__company=user.company
         )
-        
-        if account_id:
+
+        account_id = clean_int_query_param(self.request, 'account')
+        if account_id is not None:
             queryset = queryset.filter(account_id=account_id)
-        
+
         return queryset.order_by('-created_at')
 
 

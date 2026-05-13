@@ -55,6 +55,30 @@ def get_smtp_connection():
     return ResendEmailBackend(api_key=api_key, fail_silently=False)
 
 
+_FILTER_SENTINEL_VALUES = frozenset({"all", "null", "undefined", "none"})
+
+
+def clean_int_query_param(request, name):
+    """Safely extract an int from ``request.query_params[name]``.
+
+    Returns ``None`` when the parameter is missing, blank, the literal strings
+    ``"All" / "null" / "undefined" / "none"`` (case-insensitive), or otherwise
+    not parseable as ``int``. Use this when forwarding a query param into an
+    integer/ForeignKey ``filter()`` lookup so a UI sending an "All" sentinel
+    can never trigger a 500.
+    """
+    raw = request.query_params.get(name) if hasattr(request, "query_params") else request.GET.get(name)
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not value or value.lower() in _FILTER_SENTINEL_VALUES:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def generate_sequential_code(model_class, company, prefix, max_attempts=1000):
     """
     Generate a unique sequential code like DEV001, PROJ002, etc.

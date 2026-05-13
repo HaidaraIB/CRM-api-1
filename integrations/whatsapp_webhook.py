@@ -10,7 +10,6 @@ from django.utils import timezone
 from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount, LeadWhatsAppMessage
 from .decorators import rate_limit_webhook
 from crm.models import Client, ClientPhoneNumber, ClientEvent
-from crm.signals import get_least_busy_employee
 import json
 import hmac
 import hashlib
@@ -313,22 +312,6 @@ def process_whatsapp_message(message, phone_number_id):
                 phone_type='mobile',
                 is_primary=True,
             )
-            
-            # Auto-assignment إذا كان مفعّل
-            if company.auto_assign_enabled:
-                employee = get_least_busy_employee(company)
-                if employee:
-                    client.assigned_to = employee
-                    client.assigned_at = timezone.now()
-                    client.save()
-                    
-                    ClientEvent.objects.create(
-                        client=client,
-                        event_type='assignment',
-                        old_value='Unassigned',
-                        new_value=employee.get_full_name() or employee.username,
-                        notes=f"Auto-assigned from WhatsApp",
-                    )
             
             # تسجيل الحدث
             ClientEvent.objects.create(

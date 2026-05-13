@@ -1,6 +1,7 @@
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsAdmin, CanAccessDeveloper, CanAccessProject, CanAccessUnit, CanAccessOwner, HasActiveSubscription
+from crm_saas_api.utils import clean_int_query_param
 from .models import Developer, Project, Unit, Owner
 from .serializers import (
     DeveloperSerializer,
@@ -95,8 +96,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset().select_related("company", "developer")
         queryset = queryset.filter(company=user.company)
-        developer_id = self.request.query_params.get("developer")
-        if developer_id:
+        developer_id = clean_int_query_param(self.request, "developer")
+        if developer_id is not None:
             queryset = queryset.filter(developer_id=developer_id)
         return queryset
 
@@ -159,9 +160,15 @@ class UnitViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset().select_related("company", "project", "project__developer")
         queryset = queryset.filter(company=user.company)
-        project_id = self.request.query_params.get("project")
-        if project_id:
+
+        project_id = clean_int_query_param(self.request, "project")
+        if project_id is not None:
             queryset = queryset.filter(project_id=project_id)
+
+        bedrooms = clean_int_query_param(self.request, "bedrooms")
+        if bedrooms is not None:
+            queryset = queryset.filter(bedrooms=bedrooms)
+
         return queryset
 
     @staticmethod

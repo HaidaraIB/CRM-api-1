@@ -8,6 +8,7 @@ from accounts.permissions import (
     IsAdminOrSupervisorLeadsOrReadOnlyForEmployee,
 )
 from crm_saas_api.responses import success_response, error_response
+from crm_saas_api.utils import clean_int_query_param
 from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientVisit, ClientEvent
 from accounts.models import User, Role
 from notifications.models import NotificationType
@@ -518,8 +519,8 @@ class ClientVisitViewSet(viewsets.ModelViewSet):
         else:
             queryset = queryset.none()
 
-        client_id = self.request.query_params.get("client", None)
-        if client_id:
+        client_id = clean_int_query_param(self.request, "client")
+        if client_id is not None:
             queryset = queryset.filter(client_id=client_id)
 
         return queryset
@@ -590,8 +591,8 @@ class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
             "client", "client__company", "created_by",
         )
 
-        client_id = self.request.query_params.get("client", None)
-        if client_id:
+        client_id = clean_int_query_param(self.request, "client")
+        if client_id is not None:
             queryset = queryset.filter(client_id=client_id)
 
         if user.is_admin():
