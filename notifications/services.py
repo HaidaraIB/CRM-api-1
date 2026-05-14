@@ -191,15 +191,33 @@ class NotificationService:
             
             if image_url:
                 message_data['image_url'] = image_url
+
+            # Team chat: data-only so the mobile app can merge multiple messages into one
+            # local notification (last 5 lines). A visible FCM "notification" payload would
+            # always create a separate tray entry per message on Android.
+            tenant_chat_data_only = (data or {}).get("kind") == "tenant_chat"
             
             success_count = 0
             for token in user_tokens:
                 try:
-                    message = messaging.Message(
-                        notification=notification_payload,
-                        data=message_data,
-                        token=token,
-                    )
+                    if tenant_chat_data_only:
+                        message = messaging.Message(
+                            data=message_data,
+                            token=token,
+                            android=messaging.AndroidConfig(priority="high"),
+                            apns=messaging.APNSConfig(
+                                headers={"apns-priority": "10"},
+                                payload=messaging.APNSPayload(
+                                    aps=messaging.Aps(content_available=True),
+                                ),
+                            ),
+                        )
+                    else:
+                        message = messaging.Message(
+                            notification=notification_payload,
+                            data=message_data,
+                            token=token,
+                        )
                     response = messaging.send(message)
                     logger.info(
                         f"Notification sent to {user.username} token={token[:12]}...: {response}"
