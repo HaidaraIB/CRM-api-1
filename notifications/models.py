@@ -39,7 +39,8 @@ class NotificationType(models.TextChoices):
     TASK_COMPLETED = 'task_completed', 'Task Completed'
     CALL_REMINDER = 'call_reminder', 'Call Reminder'
     VISIT_REMINDER = 'visit_reminder', 'Visit Reminder'
-    
+    RECEPTION_VISIT_REMINDER = 'reception_visit_reminder', 'Reception Visit Reminder'
+
     # Deals
     DEAL_CREATED = 'deal_created', 'Deal Created'
     DEAL_UPDATED = 'deal_updated', 'Deal Updated'

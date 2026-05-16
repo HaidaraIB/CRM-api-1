@@ -18,7 +18,7 @@ INVENTORY_PERM_KEYS = ('can_manage_products', 'can_manage_services', 'can_manage
 def filter_inventory_permissions_for_company(perms_dict, company):
     """
     Ensure only the inventory permission matching the company's specialization is allowed.
-    real_estate -> can_manage_real_estate only; products -> can_manage_products only; services -> can_manage_services only.
+    real_estate -> can_manage_real_estate only; products -> can_manage_products only; services/medical -> can_manage_services only.
     """
     if not company or not getattr(company, 'specialization', None):
         for k in INVENTORY_PERM_KEYS:
@@ -31,7 +31,7 @@ def filter_inventory_permissions_for_company(perms_dict, company):
     elif spec == 'products':
         perms_dict['can_manage_real_estate'] = False
         perms_dict['can_manage_services'] = False
-    elif spec == 'services':
+    elif spec == 'services' or spec == 'medical':
         perms_dict['can_manage_real_estate'] = False
         perms_dict['can_manage_products'] = False
     else:
@@ -447,7 +447,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     .order_by("-created_at")
                     .first()
                 )
-                is_employee_user = self.user.role in ("employee", "data_entry")
+                is_employee_user = self.user.role in (
+                    "employee",
+                    "data_entry",
+                    "doctor",
+                    "reception",
+                )
                 if is_employee_user:
                     raise serializers.ValidationError(
                         {"error": "Your account is temporarily inactive", "code": "ACCOUNT_TEMPORARILY_INACTIVE"}
@@ -845,7 +850,7 @@ class RegisterCompanySerializer(serializers.Serializer):
             if field not in value:
                 raise serializers.ValidationError(f"Company {field} is required")
         
-        if value['specialization'] not in ['real_estate', 'services', 'products']:
+        if value['specialization'] not in ['real_estate', 'services', 'products', 'medical']:
             raise serializers.ValidationError("Invalid specialization")
         
         # Check if domain already exists

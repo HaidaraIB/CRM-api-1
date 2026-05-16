@@ -1,5 +1,11 @@
 from django.contrib import admin
-from .models import Company
+from .models import Company, CompanyPatientCounter
+
+
+@admin.register(CompanyPatientCounter)
+class CompanyPatientCounterAdmin(admin.ModelAdmin):
+    list_display = ["company", "next_number"]
+    raw_id_fields = ["company"]
 
 
 @admin.register(Company)

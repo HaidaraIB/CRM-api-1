@@ -126,7 +126,12 @@ def request_two_factor_auth(request):
                 )
 
                 # Check user role - use role field directly to be sure
-                is_employee_user = user.role in ("employee", "data_entry")
+                is_employee_user = user.role in (
+                    "employee",
+                    "data_entry",
+                    "doctor",
+                    "reception",
+                )
 
                 if is_employee_user:
                     return error_response(
@@ -357,7 +362,12 @@ def verify_two_factor_auth(request):
                 .first()
             )
 
-            is_employee_user = user.role in ("employee", "data_entry")
+            is_employee_user = user.role in (
+                "employee",
+                "data_entry",
+                "doctor",
+                "reception",
+            )
 
             if is_employee_user:
                 return error_response(

@@ -17,6 +17,7 @@ class ClientAdmin(admin.ModelAdmin):
 
     list_display = [
         "name",
+        "patient_file_number",
         "priority",
         "type",
         "communication_way",
@@ -42,9 +43,11 @@ class ClientAdmin(admin.ModelAdmin):
         "company__name",
         "assigned_to__username",
         "notes",
+        "residence",
+        "patient_file_number",
     ]
     ordering = ["-created_at"]
-    readonly_fields = ["created_at", "updated_at"]
+    readonly_fields = ["created_at", "updated_at", "patient_file_number"]
     inlines = [ClientPhoneNumberInline]
 
     fieldsets = (
@@ -61,6 +64,8 @@ class ClientAdmin(admin.ModelAdmin):
                     "phone_number",
                     "lead_company_name",
                     "profession",
+                    "residence",
+                    "patient_file_number",
                     "notes",
                     "interested_developer",
                     "interested_project",

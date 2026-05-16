@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_serializer
 
+from accounts.models import Role
 from crm.availability import user_accepts_new_assignments
 from .models import (
     Client,
@@ -193,6 +194,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "phone_numbers",  # New field for multiple phone numbers
             "lead_company_name",
             "profession",
+            "residence",
+            "patient_file_number",
             "notes",
             "interested_developer",
             "interested_developer_name",
@@ -216,7 +219,14 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "last_stage",
             "last_feedback_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "created_by", "created_by_name"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "created_by",
+            "created_by_name",
+            "patient_file_number",
+        ]
 
     def validate_communication_way(self, value):
         """Ensure communication_way belongs to the same company"""
@@ -247,6 +257,21 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             if company_id and value.company_id != company_id:
                 raise serializers.ValidationError(
                     "Status must belong to the same company as the client."
+                )
+        return value
+
+    def validate_assigned_to(self, value):
+        if value is None:
+            return value
+        request = self.context.get("request")
+        u = getattr(request, "user", None) if request else None
+        company = getattr(u, "company", None)
+        if company and getattr(company, "specialization", None) == "medical":
+            if getattr(value, "company_id", None) != company.id:
+                raise serializers.ValidationError("Assignee must belong to your company.")
+            if value.role not in (Role.EMPLOYEE.value, Role.DOCTOR.value):
+                raise serializers.ValidationError(
+                    "Medical companies may assign patients only to users with employee or doctor role."
                 )
         return value
 
@@ -454,6 +479,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             'communication_way',
             'lead_company_name',
             'profession',
+            'residence',
             'notes',
             'interested_developer',
             'interested_project',
@@ -549,6 +575,8 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
             "phone_numbers",  # New field for multiple phone numbers
             "lead_company_name",
             "profession",
+            "residence",
+            "patient_file_number",
             "notes",
             "interested_developer",
             "interested_developer_name",
@@ -974,9 +1002,10 @@ class ClientVisitSerializer(serializers.ModelSerializer):
         if company and getattr(company, "specialization", None) not in (
             "real_estate",
             "services",
+            "medical",
         ):
             raise serializers.ValidationError(
-                "Visits are only available for real estate and services companies."
+                "Visits are only available for real estate, services, and medical companies."
             )
         if self.instance is None:
             if not data.get("visit_datetime"):

@@ -139,7 +139,50 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 4,
             },
         ]
-    if spec == Specialization.SERVICES.value:
+    if spec in (Specialization.SERVICES.value, Specialization.MEDICAL.value):
+        if spec == Specialization.MEDICAL.value:
+            return [
+                {
+                    "name": "New patient",
+                    "description": "",
+                    "color": "#3b82f6",
+                    "required": False,
+                    "auto_advance": False,
+                    "order": 0,
+                },
+                {
+                    "name": "Registered",
+                    "description": "",
+                    "color": "#8b5cf6",
+                    "required": False,
+                    "auto_advance": False,
+                    "order": 1,
+                },
+                {
+                    "name": "With doctor",
+                    "description": "",
+                    "color": "#f59e0b",
+                    "required": False,
+                    "auto_advance": False,
+                    "order": 2,
+                },
+                {
+                    "name": "Follow-up",
+                    "description": "",
+                    "color": "#ec4899",
+                    "required": False,
+                    "auto_advance": False,
+                    "order": 3,
+                },
+                {
+                    "name": "Completed",
+                    "description": "",
+                    "color": "#22c55e",
+                    "required": False,
+                    "auto_advance": False,
+                    "order": 4,
+                },
+            ]
         return [
             {
                 "name": "New lead",
@@ -281,6 +324,7 @@ def _statuses_for_spec(spec: str) -> list[dict]:
     if spec in (
         Specialization.REAL_ESTATE.value,
         Specialization.SERVICES.value,
+        Specialization.MEDICAL.value,
     ):
         visited = {
             "name": "Visited",
@@ -335,7 +379,25 @@ def _visit_types_for_spec(spec: str) -> list[dict]:
                 "color": "#f59e0b",
             },
         ]
-    if spec == Specialization.SERVICES.value:
+    if spec in (Specialization.SERVICES.value, Specialization.MEDICAL.value):
+        if spec == Specialization.MEDICAL.value:
+            return [
+                {
+                    "name": "First consultation",
+                    "description": "",
+                    "color": "#3b82f6",
+                },
+                {
+                    "name": "Follow-up visit",
+                    "description": "",
+                    "color": "#8b5cf6",
+                },
+                {
+                    "name": "Procedure / treatment",
+                    "description": "",
+                    "color": "#f59e0b",
+                },
+            ]
         return [
             {
                 "name": "On-site service",

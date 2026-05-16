@@ -31,10 +31,14 @@ def get_least_busy_employee(company):
     Get the employee with the least number of assigned clients (Round Robin),
     skipping anyone on their weekly day off (company-local calendar).
     """
+    role_filter = [Role.EMPLOYEE.value]
+    if getattr(company, "specialization", None) == "medical":
+        role_filter = [Role.EMPLOYEE.value, Role.DOCTOR.value]
+
     queryset = (
         User.objects.filter(
             company=company,
-            role=Role.EMPLOYEE.value,
+            role__in=role_filter,
             is_active=True,
         )
         .annotate(client_count=Count("assigned_clients"))
@@ -191,7 +195,7 @@ def on_client_visit_post_save(sender, instance, created, **kwargs):
     client = instance.client
     company = getattr(client, "company", None)
     spec = getattr(company, "specialization", None) if company else None
-    if spec not in ("real_estate", "services"):
+    if spec not in ("real_estate", "services", "medical"):
         return
 
     visited = get_visited_lead_status(company) or ensure_visited_lead_status(company)

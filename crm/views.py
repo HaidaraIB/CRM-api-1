@@ -48,6 +48,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         "communication_way__name",
         "status__name",
         "notes",
+        "residence",
     ]
     ordering_fields = ["created_at", "name", "priority"]
     ordering = ["-created_at"]
@@ -64,7 +65,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             "client_visits__visit_type",
         )
 
-        if user.is_admin():
+        if user.is_admin() or user.is_reception():
             return queryset.filter(company=user.company).distinct()
 
         if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
@@ -73,7 +74,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         if user.is_data_entry():
             return queryset.filter(company=user.company).distinct()
 
-        if user.is_employee():
+        if user.is_assigned_clinical_staff():
             return queryset.filter(assigned_to=user).distinct()
 
         return queryset.none()
@@ -173,8 +174,12 @@ class ClientViewSet(viewsets.ModelViewSet):
                 code="auto_assign_disabled",
             )
 
+        role_filter = [Role.EMPLOYEE.value]
+        if getattr(company, "specialization", None) == "medical":
+            role_filter.append(Role.DOCTOR.value)
+
         has_employees = User.objects.filter(
-            company=company, role=Role.EMPLOYEE.value, is_active=True
+            company=company, role__in=role_filter, is_active=True
         ).exists()
         employee = get_least_busy_employee(company)
         if not employee:
@@ -411,7 +416,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
         if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
             return queryset.filter(company=user.company)
 
-        if user.is_employee():
+        if user.is_employee() or user.is_doctor():
             return queryset.filter(company=user.company)
 
         return queryset.none()
@@ -472,14 +477,14 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
             "client", "client__company", "stage", "created_by",
         )
 
-        if user.is_admin():
+        if user.is_admin() or user.is_reception():
             return queryset.filter(client__company=user.company)
-
-        if user.is_employee():
-            return queryset.filter(client__assigned_to=user)
 
         if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
             return queryset.filter(client__company=user.company)
+
+        if user.is_assigned_clinical_staff():
+            return queryset.filter(client__assigned_to=user)
 
         return queryset.none()
 
@@ -510,9 +515,9 @@ class ClientVisitViewSet(viewsets.ModelViewSet):
             "client", "client__company", "visit_type", "created_by",
         )
 
-        if user.is_admin():
+        if user.is_admin() or user.is_reception():
             queryset = queryset.filter(client__company=user.company)
-        elif user.is_employee():
+        elif user.is_assigned_clinical_staff():
             queryset = queryset.filter(client__assigned_to=user)
         elif user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
             queryset = queryset.filter(client__company=user.company)
@@ -552,14 +557,14 @@ class ClientCallViewSet(viewsets.ModelViewSet):
             "client", "client__company", "call_method", "created_by",
         )
 
-        if user.is_admin():
+        if user.is_admin() or user.is_reception():
             return queryset.filter(client__company=user.company)
-
-        if user.is_employee():
-            return queryset.filter(client__assigned_to=user)
 
         if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
             return queryset.filter(client__company=user.company)
+
+        if user.is_assigned_clinical_staff():
+            return queryset.filter(client__assigned_to=user)
 
         return queryset.none()
 
@@ -595,10 +600,13 @@ class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
         if client_id is not None:
             queryset = queryset.filter(client_id=client_id)
 
-        if user.is_admin():
+        if user.is_admin() or user.is_reception():
             return queryset.filter(client__company=user.company)
 
-        if user.is_employee():
+        if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            return queryset.filter(client__company=user.company)
+
+        if user.is_assigned_clinical_staff():
             return queryset.filter(client__assigned_to=user)
 
         return queryset.none()

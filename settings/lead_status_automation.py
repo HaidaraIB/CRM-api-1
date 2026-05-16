@@ -11,6 +11,7 @@ def ensure_visited_lead_status(company):
     if not company or getattr(company, "specialization", None) not in (
         "real_estate",
         "services",
+        "medical",
     ):
         return None
 

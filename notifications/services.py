@@ -9,6 +9,10 @@ from django.contrib.auth import get_user_model
 from django.db.models import Q
 from .models import Notification, NotificationType, NotificationSettings
 from .translations import get_notification_text, normalize_notification_language
+from .fcm_android_channels import (
+    android_notification_channel_id,
+    android_notification_raw_sound_basename,
+)
 
 if TYPE_CHECKING:
     from django.contrib.auth.models import AbstractUser
@@ -213,10 +217,34 @@ class NotificationService:
                             ),
                         )
                     else:
+                        # Android 8+: system-displayed FCM uses the *channel* sound, not the
+                        # legacy per-notification sound, when posting to the default FCM channel.
+                        # So we must send channel_id matching flutter_local_notifications channels
+                        # (created on first app open). If those channels do not exist yet, Android
+                        # may drop the notification — user must open the app once after install.
+                        channel_id = android_notification_channel_id(notification_type)
+                        sound_base = android_notification_raw_sound_basename(notification_type)
+                        android_notif_kwargs: Dict[str, Any] = {
+                            "channel_id": channel_id,
+                        }
+                        if sound_base:
+                            android_notif_kwargs["sound"] = sound_base
                         message = messaging.Message(
                             notification=notification_payload,
                             data=message_data,
                             token=token,
+                            android=messaging.AndroidConfig(
+                                priority="high",
+                                notification=messaging.AndroidNotification(
+                                    **android_notif_kwargs,
+                                ),
+                            ),
+                        )
+                        logger.info(
+                            "FCM android channel_id=%s sound=%s type=%s",
+                            channel_id,
+                            sound_base or "(default)",
+                            notification_type,
                         )
                     response = messaging.send(message)
                     logger.info(

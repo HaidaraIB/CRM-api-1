@@ -14,6 +14,8 @@ class Role(Enum):
     SUPERVISOR = "supervisor"
     EMPLOYEE = "employee"
     DATA_ENTRY = "data_entry"
+    RECEPTION = "reception"
+    DOCTOR = "doctor"
 
     @classmethod
     def choices(cls):
@@ -68,6 +70,16 @@ class User(AbstractUser):
 
     def is_employee(self):
         return self.role == Role.EMPLOYEE.value
+
+    def is_doctor(self):
+        return self.role == Role.DOCTOR.value
+
+    def is_reception(self):
+        return self.role == Role.RECEPTION.value
+
+    def is_assigned_clinical_staff(self):
+        """Sales employee or clinic doctor: scoped to assigned clients."""
+        return self.is_employee() or self.is_doctor()
 
     def is_data_entry(self):
         return self.role == Role.DATA_ENTRY.value

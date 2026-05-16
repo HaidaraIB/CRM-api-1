@@ -49,7 +49,7 @@ def chat_role_bucket(user: "User") -> str:
         if not supervisor_chat_is_active(user):
             return "ineligible"
         return "supervisor"
-    if user.is_employee() or user.is_data_entry():
+    if user.is_employee() or user.is_data_entry() or user.is_doctor() or user.is_reception():
         return "employee_lane"
     return "ineligible"
 
@@ -95,6 +95,8 @@ def eligible_company_users_queryset(base_qs):
             )
             | Q(role="employee")
             | Q(role="data_entry")
+            | Q(role="doctor")
+            | Q(role="reception")
         )
         .distinct()
     )

@@ -6,6 +6,7 @@ class Specialization(Enum):
     REAL_ESTATE = "real_estate"
     SERVICES = "services"
     PRODUCTS = "products"
+    MEDICAL = "medical"
 
     @classmethod
     def choices(cls):
@@ -58,6 +59,26 @@ class Company(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class CompanyPatientCounter(models.Model):
+    """
+    Per-company monotonic counter for Client.patient_file_number (clinic file #).
+    Updated under select_for_update when creating new patients.
+    """
+
+    company = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="patient_counter",
+    )
+    next_number = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        db_table = "companies_patient_counter"
+
+    def __str__(self):
+        return f"CompanyPatientCounter(company={self.company_id}, next={self.next_number})"
 
 
 class AdminTenantWhatsAppMessage(models.Model):

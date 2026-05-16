@@ -111,6 +111,15 @@ class Client(models.Model):
         null=True,
         help_text="المهنة (اختياري)",
     )
+    residence = models.CharField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text="Address / residence (e.g. clinic patient).",
+    )
+    patient_file_number = models.PositiveIntegerField(
+        help_text="Per-company sequential clinic file number.",
+    )
     notes = models.TextField(
         blank=True,
         null=True,
@@ -221,12 +230,32 @@ class Client(models.Model):
             ),
             models.Index(fields=["company", "source"], name="idx_client_company_source"),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company", "patient_file_number"],
+                name="uniq_client_company_patient_file_number",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         """
         Enforce weekly day off on assignee changes. bulk_update() bypasses save(); use normal
         save(update_fields=[...,'assigned_to',...]) for bulk assign so this always runs.
         """
+        if self._state.adding and self.company_id and self.patient_file_number is None:
+            from django.db import transaction
+
+            from companies.models import CompanyPatientCounter
+
+            with transaction.atomic():
+                ctr, _ = CompanyPatientCounter.objects.select_for_update().get_or_create(
+                    company_id=self.company_id,
+                    defaults={"next_number": 1},
+                )
+                n = ctr.next_number
+                self.patient_file_number = n
+                CompanyPatientCounter.objects.filter(pk=ctr.pk).update(next_number=n + 1)
+
         skip = kwargs.pop("_skip_assignee_availability_check", False)
         update_fields = kwargs.get("update_fields")
 

@@ -103,8 +103,8 @@ class IsAdminOrReadOnlyForEmployee(permissions.BasePermission):
         if request.user.is_data_entry():
             return request.method in permissions.SAFE_METHODS
 
-        # Employee can only do GET requests
-        if request.user.is_employee():
+        # Employee / doctor / reception: read-only (GET/HEAD/OPTIONS)
+        if request.user.is_employee() or request.user.is_doctor() or request.user.is_reception():
             return request.method in permissions.SAFE_METHODS
 
         return False
@@ -141,7 +141,7 @@ class IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee(permissions.BasePerm
             return False
         if request.user.is_data_entry():
             return request.method in permissions.SAFE_METHODS
-        if request.user.is_employee():
+        if request.user.is_employee() or request.user.is_doctor() or request.user.is_reception():
             return request.method in permissions.SAFE_METHODS
         return False
 
@@ -186,7 +186,12 @@ class CanAccessClient(permissions.BasePermission):
         if request.user.is_data_entry():
             return False
 
-        if request.user.is_employee():
+        if request.user.is_reception():
+            if request.method == "DELETE":
+                return False
+            return getattr(obj, "company", None) == request.user.company
+
+        if request.user.is_employee() or request.user.is_doctor():
             if hasattr(obj, "assigned_to"):
                 return obj.assigned_to == request.user
             return False
@@ -221,7 +226,7 @@ class CanAccessDeal(permissions.BasePermission):
         return request.user and request.user.is_authenticated
 
     def has_object_permission(self, request, view, obj):
-        if request.user.is_employee():
+        if request.user.is_employee() or request.user.is_doctor():
             if hasattr(obj, "employee"):
                 return obj.employee == request.user
             return False
@@ -240,7 +245,7 @@ class CanAccessTask(permissions.BasePermission):
         return request.user and request.user.is_authenticated
 
     def has_object_permission(self, request, view, obj):
-        if request.user.is_employee():
+        if request.user.is_employee() or request.user.is_doctor():
             if hasattr(obj, "deal") and hasattr(obj.deal, "employee"):
                 return obj.deal.employee == request.user
             return False
