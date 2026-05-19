@@ -210,6 +210,7 @@ def test_send_creates_message_and_calls_twilio(company):
     rec = LeadSMSMessage.objects.filter(client=client).first()
     assert rec is not None
     assert rec.twilio_sid == "SMabc123"
+    assert rec.external_message_id == "SMabc123"
     assert rec.created_by_id is None
     assert "Sam" in rec.body
 

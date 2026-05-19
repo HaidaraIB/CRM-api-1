@@ -325,10 +325,14 @@ class WhatsAppAccount(models.Model):
             self.access_token = None
 
 
+class SmsProvider(models.TextChoices):
+    TWILIO = 'twilio', 'Twilio'
+    OTPIQ = 'otpiq', 'OTPIQ'
+
+
 class TwilioSettings(models.Model):
     """
-    إعدادات Twilio لإرسال SMS فقط.
-    نستخدم Twilio حصرياً لخدمة الرسائل القصيرة (SMS).
+    Per-company SMS settings (Twilio or OTPIQ).
     """
     company = models.OneToOneField(
         Company,
@@ -358,6 +362,22 @@ class TwilioSettings(models.Model):
         blank=True,
         null=True,
         help_text="اسم المرسل (Sender ID) - اختياري",
+    )
+    provider = models.CharField(
+        max_length=16,
+        choices=SmsProvider.choices,
+        default=SmsProvider.TWILIO,
+        help_text="Active SMS provider for this company",
+    )
+    otpiq_api_key = models.TextField(
+        blank=True,
+        null=True,
+        help_text="OTPIQ API key (stored encrypted)",
+    )
+    otpiq_route_provider = models.CharField(
+        max_length=32,
+        default='sms',
+        help_text="OTPIQ provider route (e.g. sms, whatsapp-sms)",
     )
     is_enabled = models.BooleanField(
         default=False,
@@ -397,6 +417,17 @@ class TwilioSettings(models.Model):
         else:
             self.auth_token = None
 
+    def get_otpiq_api_key(self):
+        if not self.otpiq_api_key:
+            return None
+        return decrypt_token(self.otpiq_api_key)
+
+    def set_otpiq_api_key(self, token):
+        if token:
+            self.otpiq_api_key = encrypt_token(token)
+        else:
+            self.otpiq_api_key = None
+
 
 class LeadSMSMessage(models.Model):
     """
@@ -426,6 +457,19 @@ class LeadSMSMessage(models.Model):
             (DIRECTION_INBOUND, 'Inbound'),
         ],
         default=DIRECTION_OUTBOUND,
+    )
+    provider = models.CharField(
+        max_length=16,
+        choices=SmsProvider.choices,
+        blank=True,
+        null=True,
+        help_text="SMS provider used to send this message",
+    )
+    external_message_id = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="Provider message id (Twilio SID or OTPIQ smsId)",
     )
     twilio_sid = models.CharField(
         max_length=64,

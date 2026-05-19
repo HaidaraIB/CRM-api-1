@@ -24,6 +24,7 @@ from ..models import (
     IntegrationAccount, IntegrationLog, IntegrationPlatform,
     WhatsAppAccount, OAuthState, TwilioSettings,
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
+    SmsProvider,
 )
 from ..oauth_utils import get_oauth_handler, MetaOAuth
 from ..serializers import (
@@ -39,12 +40,15 @@ from ..serializers import (
     LeadWhatsAppMessageSerializer,
     MessageTemplateSerializer,
 )
-from ..policy import get_effective_integration_policy, get_plan_integration_access
+from ..policy import (
+    get_effective_integration_policy,
+    get_plan_integration_access,
+    is_any_sms_integration_allowed,
+)
 from settings.models import SystemSettings
 
 logger = logging.getLogger(__name__)
-from ..services.twilio_phone import normalize_phone_to_e164
-from ..services.twilio_text import strip_ansi, twilio_error_to_key
+from ..services.company_sms import send_company_sms
 
 
 def _integration_gate(company, platform: str):
@@ -60,6 +64,14 @@ def _integration_gate(company, platform: str):
         return error_response(effective["message"], code="integration_disabled", status_code=403)
     return None
 
+
+def _sms_platform_for_settings(settings: TwilioSettings | None, request_data: dict | None = None) -> str:
+    if request_data and request_data.get("provider"):
+        return str(request_data["provider"]).strip() or SmsProvider.TWILIO
+    if settings and settings.provider:
+        return settings.provider
+    return SmsProvider.TWILIO
+
 @api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def twilio_settings_view(request):
@@ -68,18 +80,29 @@ def twilio_settings_view(request):
     PUT: إنشاء أو تحديث إعدادات Twilio. نستخدم Twilio حصرياً لإرسال SMS.
     """
     company = request.user.company
-    blocked = _integration_gate(company, "twilio")
-    if blocked is not None:
-        return blocked
     if request.method == 'GET':
         try:
             twilio_settings = TwilioSettings.objects.get(company=company)
         except TwilioSettings.DoesNotExist:
+            twilio_settings = None
+        if twilio_settings is None:
+            if not is_any_sms_integration_allowed(company):
+                blocked = _integration_gate(company, "twilio") or _integration_gate(company, "otpiq")
+                if blocked is not None:
+                    return blocked
+        else:
+            blocked = _integration_gate(company, _sms_platform_for_settings(twilio_settings))
+            if blocked is not None:
+                return blocked
+        if twilio_settings is None:
             return success_response(
                 data={
+                    'provider': SmsProvider.TWILIO,
                     'account_sid': '',
                     'twilio_number': '',
                     'auth_token_masked': None,
+                    'otpiq_api_key_masked': None,
+                    'otpiq_route_provider': 'sms',
                     'sender_id': '',
                     'is_enabled': False,
                     'lead_created_sms_enabled': False,
@@ -94,6 +117,10 @@ def twilio_settings_view(request):
             company=company,
             defaults={'is_enabled': False},
         )
+        platform = _sms_platform_for_settings(twilio_settings, request.data)
+        blocked = _integration_gate(company, platform)
+        if blocked is not None:
+            return blocked
         serializer = TwilioSettingsSerializer(twilio_settings, data=request.data, partial=True)
         if not serializer.is_valid():
             return validation_error_response(serializer.errors)
@@ -122,9 +149,6 @@ def send_lead_sms_view(request):
     body = data['body']
 
     company = request.user.company
-    blocked = _integration_gate(company, "twilio")
-    if blocked is not None:
-        return blocked
     # Plan gating: monthly usage only (integration access handled by integration gate).
     from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
     require_monthly_usage(
@@ -151,55 +175,31 @@ def send_lead_sms_view(request):
             code='sms_error_not_configured',
         )
 
-    account_sid = twilio_settings.account_sid
-    auth_token = twilio_settings.get_auth_token()
-    twilio_number = twilio_settings.twilio_number
-    sender_id = (twilio_settings.sender_id or '').strip()
-    # Prefer Sender ID (alphanumeric) when set; otherwise use Twilio number
-    from_value = sender_id if sender_id else (twilio_number or '')
-    if not account_sid or not auth_token or not from_value:
+    blocked = _integration_gate(company, twilio_settings.provider or SmsProvider.TWILIO)
+    if blocked is not None:
+        return blocked
+
+    ok, external_id, error_key, error_msg, provider_used = send_company_sms(
+        twilio_settings,
+        to_phone=phone_number,
+        body=body,
+    )
+    if not ok:
+        logger.warning("SMS send failed provider=%s key=%s", provider_used, error_key)
         return error_response(
-            'Account SID, Auth Token, and either Sender ID or sender number are required.',
-            code='sms_error_credentials_incomplete',
+            error_msg or 'SMS request was rejected. Please check your settings.',
+            code=error_key or 'sms_error_send_failed',
+            status_code=status.HTTP_502_BAD_GATEWAY if error_key == 'sms_error_send_failed' else status.HTTP_400_BAD_REQUEST,
         )
 
-    try:
-        from twilio.rest import Client as TwilioClient
-        from twilio.base.exceptions import TwilioRestException
-        twilio_client = TwilioClient(account_sid, auth_token)
-        to = normalize_phone_to_e164(phone_number)
-        message = twilio_client.messages.create(
-            body=body,
-            from_=from_value,
-            to=to,
-        )
-        twilio_sid = message.sid
-    except TwilioRestException as e:
-        logger.warning("Twilio API error (code=%s): %s", getattr(e, 'code', None), getattr(e, 'msg', str(e)))
-        error_key = twilio_error_to_key(e)
-        clean_msg = strip_ansi(getattr(e, 'msg', None) or str(e))
-        if clean_msg and len(clean_msg) > 400:
-            clean_msg = clean_msg.split('\n')[0]
-        return error_response(
-            clean_msg or 'SMS request was rejected. Please check your settings.',
-            code=error_key,
-        )
-    except Exception as e:
-        logger.exception("Twilio send SMS failed")
-        clean_msg = strip_ansi(str(e))
-        if len(clean_msg) > 400:
-            clean_msg = clean_msg.split('\n')[0]
-        return error_response(
-            clean_msg or 'Failed to send SMS. Please try again later.',
-            code='sms_error_send_failed',
-            status_code=status.HTTP_502_BAD_GATEWAY,
-        )
-
+    twilio_sid = external_id if provider_used == SmsProvider.TWILIO else None
     sms_record = LeadSMSMessage.objects.create(
         client=client,
         phone_number=phone_number,
         body=body,
         direction=LeadSMSMessage.DIRECTION_OUTBOUND,
+        provider=provider_used,
+        external_message_id=external_id,
         twilio_sid=twilio_sid,
         created_by=request.user,
     )

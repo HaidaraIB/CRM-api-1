@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from integrations.models import IntegrationAccount, TwilioSettings, WhatsAppAccount
+from integrations.models import IntegrationAccount, SmsProvider, TwilioSettings, WhatsAppAccount
+from settings.models import SystemSettings
 from subscriptions.entitlements import build_company_entitlements
 
-INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio")
+INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio", "otpiq")
 PLAN_INTEGRATION_FEATURE_MAP = {
     "meta": "integration_meta",
     "tiktok": "integration_tiktok",
     "whatsapp": "integration_whatsapp",
     "twilio": "integration_twilio",
+    "otpiq": "integration_otpiq",
 }
+SMS_INTEGRATION_PLATFORMS = ("twilio", "otpiq")
 INTEGRATION_POLICY_DEFAULTS = {
     "global_enabled": True,
     "global_message": "",
@@ -53,6 +56,26 @@ def get_effective_integration_policy(policies: dict[str, Any] | None, *, company
     return {"enabled": True, "message": "", "scope": "enabled"}
 
 
+def is_integration_allowed(company, platform: str) -> bool:
+    """True when plan and admin policy allow the integration platform."""
+    if not company:
+        return False
+    plan_gate = get_plan_integration_access(company, platform)
+    if not plan_gate["enabled"]:
+        return False
+    effective = get_effective_integration_policy(
+        SystemSettings.get_settings().integration_policies or {},
+        company_id=company.id,
+        platform=platform,
+    )
+    return bool(effective["enabled"])
+
+
+def is_any_sms_integration_allowed(company) -> bool:
+    """True if Twilio or OTPIQ SMS integration is allowed for this company."""
+    return any(is_integration_allowed(company, platform) for platform in SMS_INTEGRATION_PLATFORMS)
+
+
 def get_plan_integration_access(company, platform: str) -> dict[str, Any]:
     feature_key = PLAN_INTEGRATION_FEATURE_MAP.get(platform)
     if not feature_key:
@@ -83,7 +106,15 @@ def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] |
             if platform == "whatsapp":
                 WhatsAppAccount.objects.filter(status="connected").update(status="disconnected")
             if platform == "twilio":
-                TwilioSettings.objects.filter(is_enabled=True).update(is_enabled=False)
+                TwilioSettings.objects.filter(
+                    provider=SmsProvider.TWILIO,
+                    is_enabled=True,
+                ).update(is_enabled=False)
+            if platform == "otpiq":
+                TwilioSettings.objects.filter(
+                    provider=SmsProvider.OTPIQ,
+                    is_enabled=True,
+                ).update(is_enabled=False)
 
         # Company-level disable transitions
         prev_overrides = prev["company_overrides"]
@@ -100,4 +131,14 @@ def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] |
                 if platform == "whatsapp":
                     WhatsAppAccount.objects.filter(company_id=company_id, status="connected").update(status="disconnected")
                 if platform == "twilio":
-                    TwilioSettings.objects.filter(company_id=company_id, is_enabled=True).update(is_enabled=False)
+                    TwilioSettings.objects.filter(
+                        company_id=company_id,
+                        provider=SmsProvider.TWILIO,
+                        is_enabled=True,
+                    ).update(is_enabled=False)
+                if platform == "otpiq":
+                    TwilioSettings.objects.filter(
+                        company_id=company_id,
+                        provider=SmsProvider.OTPIQ,
+                        is_enabled=True,
+                    ).update(is_enabled=False)

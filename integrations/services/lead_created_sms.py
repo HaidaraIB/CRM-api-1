@@ -12,11 +12,9 @@ from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
 from crm.models import Client, ClientPhoneNumber
-from integrations.models import LeadSMSMessage, TwilioSettings
-from integrations.policy import get_effective_integration_policy, get_plan_integration_access
-from integrations.services.twilio_phone import normalize_phone_to_e164
-from integrations.services.twilio_text import strip_ansi
-from settings.models import SystemSettings
+from integrations.models import LeadSMSMessage, SmsProvider, TwilioSettings
+from integrations.policy import is_integration_allowed
+from integrations.services.company_sms import send_company_sms
 from subscriptions.entitlements import increment_monthly_usage, require_monthly_usage
 
 logger = logging.getLogger(__name__)
@@ -90,18 +88,8 @@ def resolve_client_sms_phone(client: Client) -> str | None:
     return None
 
 
-def _twilio_integration_allowed(company) -> bool:
-    if not company:
-        return False
-    plan_gate = get_plan_integration_access(company, "twilio")
-    if not plan_gate["enabled"]:
-        return False
-    effective = get_effective_integration_policy(
-        SystemSettings.get_settings().integration_policies or {},
-        company_id=company.id,
-        platform="twilio",
-    )
-    return bool(effective["enabled"])
+def _sms_integration_allowed(company, provider: str) -> bool:
+    return is_integration_allowed(company, provider or SmsProvider.TWILIO)
 
 
 def send_lead_created_welcome_sms(client_id: int) -> None:
@@ -142,8 +130,13 @@ def _send_lead_created_welcome_sms_impl(client_id: int) -> None:
         logger.info("lead_created_sms: Twilio integration disabled, skip client_id=%s", client_id)
         return
 
-    if not _twilio_integration_allowed(company):
-        logger.info("lead_created_sms: integration/plan gate blocked, skip client_id=%s", client_id)
+    sms_platform = twilio_settings.provider or SmsProvider.TWILIO
+    if not _sms_integration_allowed(company, sms_platform):
+        logger.info(
+            "lead_created_sms: integration/plan gate blocked provider=%s, skip client_id=%s",
+            sms_platform,
+            client_id,
+        )
         return
 
     try:
@@ -158,15 +151,6 @@ def _send_lead_created_welcome_sms_impl(client_id: int) -> None:
         logger.info("lead_created_sms: monthly SMS quota exceeded, skip client_id=%s", client_id)
         return
 
-    account_sid = twilio_settings.account_sid
-    auth_token = twilio_settings.get_auth_token()
-    twilio_number = twilio_settings.twilio_number
-    sender_id = (twilio_settings.sender_id or "").strip()
-    from_value = sender_id if sender_id else (twilio_number or "")
-    if not account_sid or not auth_token or not from_value:
-        logger.info("lead_created_sms: incomplete Twilio credentials, skip client_id=%s", client_id)
-        return
-
     phone_raw = resolve_client_sms_phone(client)
     if not phone_raw:
         logger.info("lead_created_sms: no phone for client_id=%s", client_id)
@@ -176,40 +160,29 @@ def _send_lead_created_welcome_sms_impl(client_id: int) -> None:
     if not (body or "").strip():
         return
 
-    to = normalize_phone_to_e164(phone_raw)
-
-    try:
-        from twilio.base.exceptions import TwilioRestException
-        from twilio.rest import Client as TwilioClient
-
-        twilio_client = TwilioClient(account_sid, auth_token)
-        message = twilio_client.messages.create(
-            body=body,
-            from_=from_value,
-            to=to,
-        )
-        twilio_sid = message.sid
-    except TwilioRestException as e:
+    ok, external_id, error_key, error_msg, provider_used = send_company_sms(
+        twilio_settings,
+        to_phone=phone_raw,
+        body=body,
+    )
+    if not ok:
         logger.warning(
-            "lead_created_sms Twilio error client_id=%s code=%s msg=%s",
+            "lead_created_sms send failed client_id=%s provider=%s key=%s msg=%s",
             client_id,
-            getattr(e, "code", None),
-            getattr(e, "msg", str(e)),
-        )
-        return
-    except Exception as e:
-        logger.exception(
-            "lead_created_sms Twilio send failed client_id=%s: %s",
-            client_id,
-            strip_ansi(str(e)),
+            provider_used,
+            error_key,
+            error_msg,
         )
         return
 
+    twilio_sid = external_id if provider_used == SmsProvider.TWILIO else None
     LeadSMSMessage.objects.create(
         client=client,
         phone_number=phone_raw,
         body=body,
         direction=LeadSMSMessage.DIRECTION_OUTBOUND,
+        provider=provider_used,
+        external_message_id=external_id,
         twilio_sid=twilio_sid,
         created_by=None,
     )

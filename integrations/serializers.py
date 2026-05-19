@@ -1,5 +1,14 @@
 from rest_framework import serializers
-from .models import IntegrationAccount, IntegrationLog, IntegrationPlatform, TwilioSettings, LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate
+from .models import (
+    IntegrationAccount,
+    IntegrationLog,
+    IntegrationPlatform,
+    TwilioSettings,
+    LeadSMSMessage,
+    LeadWhatsAppMessage,
+    MessageTemplate,
+    SmsProvider,
+)
 
 
 class IntegrationAccountSerializer(serializers.ModelSerializer):
@@ -154,17 +163,22 @@ class WhatsAppEmbeddedSignupCompleteSerializer(serializers.Serializer):
 # --------------- Twilio SMS ---------------
 
 class TwilioSettingsSerializer(serializers.ModelSerializer):
-    """إعدادات Twilio لعرض/تحديث. Auth Token لا يُعاد في الاستجابة؛ عند التحديث إذا وُجد auth_token يُحفظ مشفراً."""
+    """Per-company SMS settings (Twilio or OTPIQ). Secrets are write-only with masked read fields."""
     auth_token_masked = serializers.SerializerMethodField(read_only=True)
+    otpiq_api_key_masked = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TwilioSettings
         fields = [
             'id',
+            'provider',
             'account_sid',
             'twilio_number',
             'auth_token',
             'auth_token_masked',
+            'otpiq_api_key',
+            'otpiq_api_key_masked',
+            'otpiq_route_provider',
             'sender_id',
             'is_enabled',
             'lead_created_sms_enabled',
@@ -174,6 +188,7 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             'auth_token': {'write_only': True, 'required': False},
+            'otpiq_api_key': {'write_only': True, 'required': False},
         }
 
     def get_auth_token_masked(self, obj):
@@ -181,10 +196,64 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
             return '••••••••••••••••••••••••••••••••••••••••'
         return None
 
-    def update(self, instance, validated_data):
+    def get_otpiq_api_key_masked(self, obj):
+        if obj.otpiq_api_key:
+            return '••••••••••••••••••••••••••••••••••••••••'
+        return None
+
+    def validate(self, attrs):
+        provider = attrs.get('provider')
+        if provider is None and self.instance:
+            provider = self.instance.provider
+        provider = provider or SmsProvider.TWILIO
+
+        instance = self.instance
+        account_sid = attrs.get('account_sid', getattr(instance, 'account_sid', None) if instance else None)
+        twilio_number = attrs.get('twilio_number', getattr(instance, 'twilio_number', None) if instance else None)
+        sender_id = attrs.get('sender_id', getattr(instance, 'sender_id', None) if instance else None)
+        auth_token = attrs.get('auth_token')
+        otpiq_key = attrs.get('otpiq_api_key')
+        has_auth = bool(getattr(instance, 'auth_token', None) if instance else False) or bool(auth_token)
+        has_otpiq = bool(getattr(instance, 'otpiq_api_key', None) if instance else False) or bool(otpiq_key)
+
+        if 'is_enabled' in attrs:
+            enabled = bool(attrs['is_enabled'])
+        elif instance:
+            enabled = bool(instance.is_enabled)
+        else:
+            enabled = False
+        if enabled:
+                if provider == SmsProvider.TWILIO:
+                    from_value = (sender_id or '').strip() or (twilio_number or '').strip()
+                    if not account_sid or not has_auth or not from_value:
+                        raise serializers.ValidationError(
+                            'Twilio requires Account SID, Auth Token, and Sender ID or sender number when enabled.'
+                        )
+                elif provider == SmsProvider.OTPIQ:
+                    if not has_otpiq:
+                        raise serializers.ValidationError(
+                            'OTPIQ requires an API key when enabled.'
+                        )
+        return attrs
+
+    def create(self, validated_data):
         auth = validated_data.pop('auth_token', None)
+        otpiq = validated_data.pop('otpiq_api_key', None)
+        instance = TwilioSettings(**validated_data)
         if auth is not None:
             instance.set_auth_token(auth)
+        if otpiq is not None:
+            instance.set_otpiq_api_key(otpiq)
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        auth = validated_data.pop('auth_token', None)
+        otpiq = validated_data.pop('otpiq_api_key', None)
+        if auth is not None:
+            instance.set_auth_token(auth)
+        if otpiq is not None:
+            instance.set_otpiq_api_key(otpiq)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
@@ -203,12 +272,21 @@ class LeadSMSMessageSerializer(serializers.ModelSerializer):
             'phone_number',
             'body',
             'direction',
+            'provider',
+            'external_message_id',
             'twilio_sid',
             'created_by',
             'created_by_username',
             'created_at',
         ]
-        read_only_fields = ['id', 'created_at', 'direction', 'twilio_sid']
+        read_only_fields = [
+            'id',
+            'created_at',
+            'direction',
+            'provider',
+            'external_message_id',
+            'twilio_sid',
+        ]
 
     def get_created_by_username(self, obj):
         if obj.created_by_id is None:
