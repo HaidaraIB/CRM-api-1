@@ -68,6 +68,9 @@
 # 7. فحص Leads بدون متابعة - 4 مرات في اليوم (كل 6 ساعات)
 0 */6 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_no_follow_up >> /var/log/crm-api-lead-no-follow-up.log 2>&1
 
+# 7b. AI lead analysis (OpenAI BYOK) - every 6 hours
+0 */6 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py run_ai_lead_analysis >> /var/log/crm-api-ai-analysis.log 2>&1
+
 # 8. فحص تذكيرات Leads - كل 15 دقيقة (نافذة 15 دقيقة لتفادي تفويت التذكيرات)
 */15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_reminders --minutes-before 15 --window-minutes 15 >> /var/log/crm-api-lead-reminders.log 2>&1
 

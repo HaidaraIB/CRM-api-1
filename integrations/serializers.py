@@ -4,6 +4,8 @@ from .models import (
     IntegrationLog,
     IntegrationPlatform,
     TwilioSettings,
+    OpenAISettings,
+    ClientAIInsight,
     LeadSMSMessage,
     LeadWhatsAppMessage,
     MessageTemplate,
@@ -372,4 +374,125 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
             return value
         _template_name_english_only(value)
         return value.strip()
+
+
+class OpenAISettingsSerializer(serializers.ModelSerializer):
+    """Per-company OpenAI BYOK settings. API key is write-only with masked read."""
+
+    api_key_masked = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = OpenAISettings
+        fields = [
+            "id",
+            "api_key",
+            "api_key_masked",
+            "is_enabled",
+            "model",
+            "auto_analyze_enabled",
+            "max_leads_per_run",
+            "last_analysis_at",
+            "last_error",
+            "created_at",
+            "updated_at",
+        ]
+        extra_kwargs = {
+            "api_key": {"write_only": True, "required": False},
+            "last_analysis_at": {"read_only": True},
+            "last_error": {"read_only": True},
+        }
+
+    def get_api_key_masked(self, obj):
+        if not obj.api_key:
+            return None
+        raw = obj.get_api_key() or ""
+        if len(raw) <= 8:
+            return "••••••••"
+        return f"{raw[:3]}...{raw[-4:]}"
+
+    def validate(self, attrs):
+        instance = self.instance
+        enabled = attrs.get("is_enabled")
+        if enabled is None and instance:
+            enabled = instance.is_enabled
+        enabled = bool(enabled)
+        api_key = attrs.get("api_key")
+        has_key = bool(getattr(instance, "api_key", None) if instance else False) or bool(api_key)
+        if enabled and not has_key:
+            raise serializers.ValidationError(
+                {"api_key": "OpenAI API key is required when AI integration is enabled."}
+            )
+        max_leads = attrs.get("max_leads_per_run")
+        if max_leads is not None and max_leads < 1:
+            raise serializers.ValidationError(
+                {"max_leads_per_run": "Must be at least 1."}
+            )
+        if max_leads is not None and max_leads > 100:
+            raise serializers.ValidationError(
+                {"max_leads_per_run": "Must be at most 100."}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        key = validated_data.pop("api_key", None)
+        instance = OpenAISettings(**validated_data)
+        if key is not None:
+            instance.set_api_key(key)
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        key = validated_data.pop("api_key", None)
+        if key is not None:
+            instance.set_api_key(key)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+class ClientAIInsightSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    client_id = serializers.IntegerField(source="client.id", read_only=True)
+    assigned_to_id = serializers.SerializerMethodField(read_only=True)
+    assigned_to_name = serializers.SerializerMethodField(read_only=True)
+    approved_by_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = ClientAIInsight
+        fields = [
+            "id",
+            "client_id",
+            "client_name",
+            "assigned_to_id",
+            "assigned_to_name",
+            "ai_score",
+            "priority_level",
+            "summary",
+            "reasoning",
+            "suggested_reminder_date",
+            "suggested_task_notes",
+            "status",
+            "approved_at",
+            "approved_by",
+            "approved_by_name",
+            "created_client_task",
+            "analyzed_at",
+            "model_used",
+        ]
+        read_only_fields = fields
+
+    def get_assigned_to_id(self, obj):
+        return obj.client.assigned_to_id
+
+    def get_assigned_to_name(self, obj):
+        user = obj.client.assigned_to
+        if not user:
+            return None
+        return user.get_full_name() or user.username
+
+    def get_approved_by_name(self, obj):
+        if not obj.approved_by:
+            return None
+        return obj.approved_by.get_full_name() or obj.approved_by.username
 

@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from integrations.models import IntegrationAccount, SmsProvider, TwilioSettings, WhatsAppAccount
+from integrations.models import IntegrationAccount, OpenAISettings, SmsProvider, TwilioSettings, WhatsAppAccount
 from settings.models import SystemSettings
 from subscriptions.entitlements import build_company_entitlements
 
-INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio", "otpiq")
+INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio", "otpiq", "openai")
 PLAN_INTEGRATION_FEATURE_MAP = {
     "meta": "integration_meta",
     "tiktok": "integration_tiktok",
     "whatsapp": "integration_whatsapp",
     "twilio": "integration_twilio",
     "otpiq": "integration_otpiq",
+    "openai": "integration_openai",
 }
 SMS_INTEGRATION_PLATFORMS = ("twilio", "otpiq")
 INTEGRATION_POLICY_DEFAULTS = {
@@ -20,6 +21,19 @@ INTEGRATION_POLICY_DEFAULTS = {
     "global_message": "",
     "company_overrides": {},
 }
+
+
+def _is_global_exception(company_policy: dict[str, Any] | None) -> bool:
+    """Explicit allow-list entry when the platform is globally disabled."""
+    return isinstance(company_policy, dict) and company_policy.get("enabled") is True
+
+
+def _global_exception_company_ids(company_overrides: dict[str, Any]) -> list[str]:
+    return [
+        company_id
+        for company_id, company_policy in company_overrides.items()
+        if _is_global_exception(company_policy if isinstance(company_policy, dict) else None)
+    ]
 
 
 def _get_platform_policy(policies: dict[str, Any] | None, platform: str) -> dict[str, Any]:
@@ -42,6 +56,8 @@ def get_effective_integration_policy(policies: dict[str, Any] | None, *, company
     override_message = (override.get("message") or "").strip()
 
     if not global_enabled:
+        if _is_global_exception(override):
+            return {"enabled": True, "message": "", "scope": "exception"}
         return {
             "enabled": False,
             "message": global_message or "This integration is currently disabled by the administrator.",
@@ -92,6 +108,33 @@ def get_plan_integration_access(company, platform: str) -> dict[str, Any]:
     }
 
 
+def _disable_company_platform_integrations(*, company_id: str | int, platform: str) -> None:
+    IntegrationAccount.objects.filter(
+        company_id=company_id,
+        platform=platform,
+        is_active=True,
+    ).update(is_active=False)
+    if platform == "whatsapp":
+        WhatsAppAccount.objects.filter(company_id=company_id, status="connected").update(status="disconnected")
+    if platform == "twilio":
+        TwilioSettings.objects.filter(
+            company_id=company_id,
+            provider=SmsProvider.TWILIO,
+            is_enabled=True,
+        ).update(is_enabled=False)
+    if platform == "otpiq":
+        TwilioSettings.objects.filter(
+            company_id=company_id,
+            provider=SmsProvider.OTPIQ,
+            is_enabled=True,
+        ).update(is_enabled=False)
+    if platform == "openai":
+        OpenAISettings.objects.filter(
+            company_id=company_id,
+            is_enabled=True,
+        ).update(is_enabled=False)
+
+
 def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] | None, new_policies: dict[str, Any] | None) -> None:
     previous_policies = previous_policies or {}
     new_policies = new_policies or {}
@@ -100,45 +143,47 @@ def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] |
         prev = _get_platform_policy(previous_policies, platform)
         curr = _get_platform_policy(new_policies, platform)
 
-        # Global disable transition
+        # Global disable transition (keep explicit company exceptions active)
         if prev["global_enabled"] and not curr["global_enabled"]:
-            IntegrationAccount.objects.filter(platform=platform, is_active=True).update(is_active=False)
+            exception_company_ids = _global_exception_company_ids(curr["company_overrides"])
+            account_qs = IntegrationAccount.objects.filter(platform=platform, is_active=True)
+            if exception_company_ids:
+                account_qs = account_qs.exclude(company_id__in=exception_company_ids)
+            account_qs.update(is_active=False)
             if platform == "whatsapp":
-                WhatsAppAccount.objects.filter(status="connected").update(status="disconnected")
+                wa_qs = WhatsAppAccount.objects.filter(status="connected")
+                if exception_company_ids:
+                    wa_qs = wa_qs.exclude(company_id__in=exception_company_ids)
+                wa_qs.update(status="disconnected")
             if platform == "twilio":
-                TwilioSettings.objects.filter(
-                    provider=SmsProvider.TWILIO,
-                    is_enabled=True,
-                ).update(is_enabled=False)
+                tw_qs = TwilioSettings.objects.filter(provider=SmsProvider.TWILIO, is_enabled=True)
+                if exception_company_ids:
+                    tw_qs = tw_qs.exclude(company_id__in=exception_company_ids)
+                tw_qs.update(is_enabled=False)
             if platform == "otpiq":
-                TwilioSettings.objects.filter(
-                    provider=SmsProvider.OTPIQ,
-                    is_enabled=True,
-                ).update(is_enabled=False)
+                otpiq_qs = TwilioSettings.objects.filter(provider=SmsProvider.OTPIQ, is_enabled=True)
+                if exception_company_ids:
+                    otpiq_qs = otpiq_qs.exclude(company_id__in=exception_company_ids)
+                otpiq_qs.update(is_enabled=False)
+            if platform == "openai":
+                openai_qs = OpenAISettings.objects.filter(is_enabled=True)
+                if exception_company_ids:
+                    openai_qs = openai_qs.exclude(company_id__in=exception_company_ids)
+                openai_qs.update(is_enabled=False)
 
-        # Company-level disable transitions
+        # Company-level disable / exception removal transitions
         prev_overrides = prev["company_overrides"]
         curr_overrides = curr["company_overrides"]
-        for company_id, company_policy in curr_overrides.items():
-            prev_enabled = bool((prev_overrides.get(company_id) or {}).get("enabled", True))
-            curr_enabled = bool((company_policy or {}).get("enabled", True))
+        for company_id in set(prev_overrides.keys()) | set(curr_overrides.keys()):
+            prev_policy = prev_overrides.get(company_id) or {}
+            curr_policy = curr_overrides.get(company_id) or {}
+
+            if not curr["global_enabled"]:
+                if _is_global_exception(prev_policy) and not _is_global_exception(curr_policy):
+                    _disable_company_platform_integrations(company_id=company_id, platform=platform)
+                continue
+
+            prev_enabled = bool(prev_policy.get("enabled", True))
+            curr_enabled = bool(curr_policy.get("enabled", True))
             if prev_enabled and not curr_enabled:
-                IntegrationAccount.objects.filter(
-                    company_id=company_id,
-                    platform=platform,
-                    is_active=True,
-                ).update(is_active=False)
-                if platform == "whatsapp":
-                    WhatsAppAccount.objects.filter(company_id=company_id, status="connected").update(status="disconnected")
-                if platform == "twilio":
-                    TwilioSettings.objects.filter(
-                        company_id=company_id,
-                        provider=SmsProvider.TWILIO,
-                        is_enabled=True,
-                    ).update(is_enabled=False)
-                if platform == "otpiq":
-                    TwilioSettings.objects.filter(
-                        company_id=company_id,
-                        provider=SmsProvider.OTPIQ,
-                        is_enabled=True,
-                    ).update(is_enabled=False)
+                _disable_company_platform_integrations(company_id=company_id, platform=platform)

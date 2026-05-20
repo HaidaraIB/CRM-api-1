@@ -429,6 +429,148 @@ class TwilioSettings(models.Model):
             self.otpiq_api_key = None
 
 
+class OpenAISettings(models.Model):
+    """Per-company OpenAI (ChatGPT) BYOK settings for AI lead analysis."""
+
+    DEFAULT_MODEL = "gpt-4o-mini"
+    DEFAULT_MAX_LEADS_PER_RUN = 20
+
+    company = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="openai_settings",
+        help_text="Company that owns these OpenAI settings",
+    )
+    api_key = models.TextField(
+        blank=True,
+        null=True,
+        help_text="OpenAI API key (stored encrypted)",
+    )
+    is_enabled = models.BooleanField(
+        default=False,
+        help_text="Whether AI lead analysis is enabled",
+    )
+    model = models.CharField(
+        max_length=64,
+        default=DEFAULT_MODEL,
+        help_text="OpenAI model id (e.g. gpt-4o-mini)",
+    )
+    auto_analyze_enabled = models.BooleanField(
+        default=True,
+        help_text="Run analysis on scheduled cron when enabled",
+    )
+    max_leads_per_run = models.PositiveIntegerField(
+        default=DEFAULT_MAX_LEADS_PER_RUN,
+        help_text="Maximum leads analyzed per run (cost guard)",
+    )
+    last_analysis_at = models.DateTimeField(blank=True, null=True)
+    last_error = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "openai_settings"
+        verbose_name = "OpenAI Settings"
+        verbose_name_plural = "OpenAI Settings"
+
+    def __str__(self):
+        return f"{self.company.name} - OpenAI"
+
+    def get_api_key(self):
+        if not self.api_key:
+            return None
+        return decrypt_token(self.api_key)
+
+    def set_api_key(self, key):
+        if key:
+            self.api_key = encrypt_token(key)
+        else:
+            self.api_key = None
+
+
+class AIInsightStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    APPROVED = "approved", "Approved"
+    DISMISSED = "dismissed", "Dismissed"
+    EXPIRED = "expired", "Expired"
+
+
+class AIInsightPriorityLevel(models.TextChoices):
+    HIGH = "high", "High"
+    MEDIUM = "medium", "Medium"
+    LOW = "low", "Low"
+
+
+class ClientAIInsight(models.Model):
+    """AI-generated insight and smart reminder suggestion for a lead."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="client_ai_insights",
+    )
+    client = models.ForeignKey(
+        "crm.Client",
+        on_delete=models.CASCADE,
+        related_name="ai_insights",
+    )
+    ai_score = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="AI priority score 0-100",
+    )
+    priority_level = models.CharField(
+        max_length=10,
+        choices=AIInsightPriorityLevel.choices,
+        default=AIInsightPriorityLevel.MEDIUM,
+    )
+    summary = models.TextField(blank=True, default="")
+    reasoning = models.TextField(blank=True, null=True)
+    suggested_reminder_date = models.DateTimeField(blank=True, null=True)
+    suggested_task_notes = models.TextField(blank=True, null=True)
+    source_snapshot_hash = models.CharField(max_length=64, blank=True, default="")
+    status = models.CharField(
+        max_length=16,
+        choices=AIInsightStatus.choices,
+        default=AIInsightStatus.PENDING,
+    )
+    approved_at = models.DateTimeField(blank=True, null=True)
+    approved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="approved_ai_insights",
+    )
+    created_client_task = models.ForeignKey(
+        "crm.ClientTask",
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="source_ai_insight",
+    )
+    analyzed_at = models.DateTimeField(auto_now_add=True)
+    model_used = models.CharField(max_length=64, blank=True, default="")
+    tokens_used = models.PositiveIntegerField(blank=True, null=True)
+
+    class Meta:
+        db_table = "client_ai_insight"
+        ordering = ["-ai_score", "-analyzed_at"]
+        indexes = [
+            models.Index(fields=["company", "status", "-ai_score"]),
+            models.Index(fields=["client", "status"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["client"],
+                condition=models.Q(status=AIInsightStatus.PENDING),
+                name="unique_pending_ai_insight_per_client",
+            ),
+        ]
+
+    def __str__(self):
+        return f"AI insight #{self.pk} client={self.client_id} ({self.status})"
+
+
 class LeadSMSMessage(models.Model):
     """
     رسالة SMS مرسلة إلى عميل محتمل (Lead).

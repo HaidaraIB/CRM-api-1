@@ -16,6 +16,13 @@ from .views import (
     LeadSMSMessageViewSet,
     LeadWhatsAppMessageViewSet,
     integration_policy_view,
+    openai_settings_view,
+    openai_settings_test_view,
+    ai_insights_list_view,
+    ai_insights_dashboard_view,
+    ai_insights_run_view,
+    ai_insight_approve_view,
+    ai_insight_dismiss_view,
 )
 from .whatsapp_webhook import whatsapp_webhook
 
@@ -39,5 +46,12 @@ urlpatterns = [
     path('webhooks/tiktok-leadgen/', tiktok_leadgen_webhook, name='tiktok_leadgen_webhook'),
     path('twilio/settings/', twilio_settings_view, name='twilio_settings'),
     path('twilio/send/', send_lead_sms_view, name='send_lead_sms'),
+    path('openai/settings/', openai_settings_view, name='openai_settings'),
+    path('openai/settings/test/', openai_settings_test_view, name='openai_settings_test'),
+    path('ai-insights/', ai_insights_list_view, name='ai_insights_list'),
+    path('ai-insights/dashboard/', ai_insights_dashboard_view, name='ai_insights_dashboard'),
+    path('ai-insights/run/', ai_insights_run_view, name='ai_insights_run'),
+    path('ai-insights/<int:pk>/approve/', ai_insight_approve_view, name='ai_insight_approve'),
+    path('ai-insights/<int:pk>/dismiss/', ai_insight_dismiss_view, name='ai_insight_dismiss'),
 ]
 

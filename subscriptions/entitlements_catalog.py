@@ -15,6 +15,7 @@ FEATURE_KEYS = (
     "integration_whatsapp",
     "integration_twilio",
     "integration_otpiq",
+    "integration_openai",
 )
 
 # Quotas (integer or "unlimited"/None)
@@ -41,6 +42,7 @@ DEFAULT_FEATURES = {
     "integration_whatsapp": True,
     "integration_twilio": True,
     "integration_otpiq": True,
+    "integration_openai": True,
 }
 
 # Default usage limits: None means unlimited (keeps current behavior)
