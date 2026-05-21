@@ -524,9 +524,15 @@ class ClientAIInsight(models.Model):
         default=AIInsightPriorityLevel.MEDIUM,
     )
     summary = models.TextField(blank=True, default="")
+    summary_en = models.TextField(blank=True, default="")
+    summary_ar = models.TextField(blank=True, default="")
     reasoning = models.TextField(blank=True, null=True)
+    reasoning_en = models.TextField(blank=True, null=True)
+    reasoning_ar = models.TextField(blank=True, null=True)
     suggested_reminder_date = models.DateTimeField(blank=True, null=True)
     suggested_task_notes = models.TextField(blank=True, null=True)
+    suggested_task_notes_en = models.TextField(blank=True, null=True)
+    suggested_task_notes_ar = models.TextField(blank=True, null=True)
     source_snapshot_hash = models.CharField(max_length=64, blank=True, default="")
     status = models.CharField(
         max_length=16,
@@ -569,6 +575,26 @@ class ClientAIInsight(models.Model):
 
     def __str__(self):
         return f"AI insight #{self.pk} client={self.client_id} ({self.status})"
+
+
+class AIManagementReport(models.Model):
+    """Latest AI-generated management dashboard report for a company (owner view)."""
+
+    company = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="ai_management_report",
+    )
+    generated_at = models.DateTimeField(auto_now=True)
+    payload = models.JSONField(default=dict, blank=True)
+    model_used = models.CharField(max_length=64, blank=True, default="")
+    tokens_used = models.PositiveIntegerField(blank=True, null=True)
+
+    class Meta:
+        db_table = "ai_management_report"
+
+    def __str__(self):
+        return f"AI management report company={self.company_id}"
 
 
 class LeadSMSMessage(models.Model):

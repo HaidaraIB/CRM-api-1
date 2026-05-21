@@ -156,9 +156,11 @@ class TestAIAnalysisService:
                     "client_id": client.id,
                     "ai_score": 90,
                     "priority_level": "high",
-                    "summary": "Hot lead from notes",
+                    "summary_en": "Hot lead from notes",
+                    "summary_ar": "عميل مهم من الملاحظات",
                     "suggested_reminder_date": timezone.now().isoformat(),
-                    "suggested_task_notes": "Follow up tomorrow",
+                    "suggested_task_notes_en": "Follow up tomorrow",
+                    "suggested_task_notes_ar": "متابعة غداً",
                 }
             ],
             100,
@@ -171,3 +173,6 @@ class TestAIAnalysisService:
         ).first()
         assert insight is not None
         assert insight.ai_score == 90
+        assert insight.summary_en == "Hot lead from notes"
+        assert insight.summary_ar == "عميل مهم من الملاحظات"
+        assert insight.suggested_task_notes_ar == "متابعة غداً"

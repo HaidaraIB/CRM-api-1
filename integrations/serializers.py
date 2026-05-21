@@ -457,6 +457,9 @@ class ClientAIInsightSerializer(serializers.ModelSerializer):
     assigned_to_id = serializers.SerializerMethodField(read_only=True)
     assigned_to_name = serializers.SerializerMethodField(read_only=True)
     approved_by_name = serializers.SerializerMethodField(read_only=True)
+    summary = serializers.SerializerMethodField(read_only=True)
+    reasoning = serializers.SerializerMethodField(read_only=True)
+    suggested_task_notes = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClientAIInsight
@@ -469,9 +472,15 @@ class ClientAIInsightSerializer(serializers.ModelSerializer):
             "ai_score",
             "priority_level",
             "summary",
+            "summary_en",
+            "summary_ar",
             "reasoning",
+            "reasoning_en",
+            "reasoning_ar",
             "suggested_reminder_date",
             "suggested_task_notes",
+            "suggested_task_notes_en",
+            "suggested_task_notes_ar",
             "status",
             "approved_at",
             "approved_by",
@@ -481,6 +490,43 @@ class ClientAIInsightSerializer(serializers.ModelSerializer):
             "model_used",
         ]
         read_only_fields = fields
+
+    def _insight_language(self) -> str:
+        from integrations.ai_insight_i18n import normalize_insight_language
+
+        return normalize_insight_language(self.context.get("language"))
+
+    def get_summary(self, obj):
+        from integrations.ai_insight_i18n import pick_insight_text
+
+        return pick_insight_text(
+            language=self._insight_language(),
+            text_en=obj.summary_en,
+            text_ar=obj.summary_ar,
+            legacy=obj.summary,
+        )
+
+    def get_reasoning(self, obj):
+        from integrations.ai_insight_i18n import pick_insight_text
+
+        value = pick_insight_text(
+            language=self._insight_language(),
+            text_en=obj.reasoning_en,
+            text_ar=obj.reasoning_ar,
+            legacy=obj.reasoning,
+        )
+        return value or None
+
+    def get_suggested_task_notes(self, obj):
+        from integrations.ai_insight_i18n import pick_insight_text
+
+        value = pick_insight_text(
+            language=self._insight_language(),
+            text_en=obj.suggested_task_notes_en,
+            text_ar=obj.suggested_task_notes_ar,
+            legacy=obj.suggested_task_notes,
+        )
+        return value or None
 
     def get_assigned_to_id(self, obj):
         return obj.client.assigned_to_id

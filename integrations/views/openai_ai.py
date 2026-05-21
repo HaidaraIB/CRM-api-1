@@ -14,10 +14,26 @@ from crm_saas_api.responses import error_response, success_response, validation_
 from integrations.models import AIInsightStatus, ClientAIInsight, OpenAISettings
 from integrations.serializers import ClientAIInsightSerializer, OpenAISettingsSerializer
 from integrations.services.ai_lead_analysis import run_company_analysis, test_openai_connection
+from integrations.services.ai_management_report import (
+    generate_management_report,
+    get_management_report_for_company,
+)
+from integrations.ai_insight_i18n import normalize_insight_language, pick_insight_text
 from integrations.views.twilio_sms import _integration_gate
 
 AI_RUN_CACHE_KEY = "ai_analysis_run:{company_id}"
+AI_REPORT_CACHE_KEY = "ai_management_report:{company_id}"
 AI_RUN_COOLDOWN_SECONDS = 300
+AI_REPORT_COOLDOWN_SECONDS = 900
+
+
+def _insight_serializer_context(request):
+    lang = request.query_params.get("lang") or getattr(request.user, "language", None)
+    return {"language": normalize_insight_language(lang)}
+
+
+def _user_is_owner(user) -> bool:
+    return user.is_admin()
 
 
 def _user_can_manage_ai_insight(user, insight: ClientAIInsight) -> bool:
@@ -142,7 +158,9 @@ def ai_insights_list_view(request):
     status_filter = request.query_params.get("status")
     if status_filter:
         qs = qs.filter(status=status_filter)
-    serializer = ClientAIInsightSerializer(qs[:100], many=True)
+    serializer = ClientAIInsightSerializer(
+        qs[:100], many=True, context=_insight_serializer_context(request)
+    )
     return success_response(data=serializer.data)
 
 
@@ -161,10 +179,11 @@ def ai_insights_dashboard_view(request):
         .exclude(status=AIInsightStatus.DISMISSED)
         .order_by("-ai_score")[:6]
     )
+    ctx = _insight_serializer_context(request)
     return success_response(
         data={
-            "pending": ClientAIInsightSerializer(pending, many=True).data,
-            "priority": ClientAIInsightSerializer(priority, many=True).data,
+            "pending": ClientAIInsightSerializer(pending, many=True, context=ctx).data,
+            "priority": ClientAIInsightSerializer(priority, many=True, context=ctx).data,
             "ai_enabled": OpenAISettings.objects.filter(
                 company=request.user.company, is_enabled=True
             ).exists(),
@@ -235,7 +254,20 @@ def ai_insight_approve_view(request, pk):
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    notes = insight.suggested_task_notes or insight.summary or ""
+    lang = normalize_insight_language(
+        request.data.get("language") or getattr(user, "language", None)
+    )
+    notes = pick_insight_text(
+        language=lang,
+        text_en=insight.suggested_task_notes_en,
+        text_ar=insight.suggested_task_notes_ar,
+        legacy=insight.suggested_task_notes,
+    ) or pick_insight_text(
+        language=lang,
+        text_en=insight.summary_en,
+        text_ar=insight.summary_ar,
+        legacy=insight.summary,
+    )
     if notes and not notes.strip().startswith("🤖"):
         notes = f"🤖 AI: {notes}"
 
@@ -261,7 +293,9 @@ def ai_insight_approve_view(request, pk):
     )
     return success_response(
         data={
-            "insight": ClientAIInsightSerializer(insight).data,
+            "insight": ClientAIInsightSerializer(
+                insight, context=_insight_serializer_context(request)
+            ).data,
             "client_task_id": task.id,
         },
     )
@@ -297,4 +331,66 @@ def ai_insight_dismiss_view(request, pk):
         )
     insight.status = AIInsightStatus.DISMISSED
     insight.save(update_fields=["status"])
-    return success_response(data=ClientAIInsightSerializer(insight).data)
+    return success_response(
+        data=ClientAIInsightSerializer(insight, context=_insight_serializer_context(request)).data
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def ai_management_report_view(request):
+    company = request.user.company
+    blocked = _integration_gate(company, "openai")
+    if blocked is not None:
+        return blocked
+    if not _user_is_owner(request.user):
+        return error_response(
+            "Only company owners can view the management report.",
+            code="ai_report_forbidden",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    if not OpenAISettings.objects.filter(company=company, is_enabled=True).exists():
+        return success_response(
+            data={
+                "ai_enabled": False,
+                "employees": [],
+                "hot_leads": [],
+                "has_ai_summary": False,
+            },
+        )
+    data = get_management_report_for_company(company)
+    data["ai_enabled"] = True
+    return success_response(data=data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def ai_management_report_generate_view(request):
+    user = request.user
+    company = user.company
+    blocked = _integration_gate(company, "openai")
+    if blocked is not None:
+        return blocked
+    if not _user_is_owner(user):
+        return error_response(
+            "Only company owners can generate the management report.",
+            code="ai_report_forbidden",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    cache_key = AI_REPORT_CACHE_KEY.format(company_id=company.id)
+    if cache.get(cache_key):
+        return error_response(
+            "Report was generated recently. Please wait before refreshing.",
+            code="ai_report_rate_limited",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    result = generate_management_report(company)
+    if result.get("error"):
+        return error_response(
+            result["error"],
+            code=result.get("code", "ai_report_failed"),
+            status_code=status.HTTP_502_BAD_GATEWAY,
+        )
+    cache.set(cache_key, True, AI_REPORT_COOLDOWN_SECONDS)
+    result["ai_enabled"] = True
+    return success_response(data=result)

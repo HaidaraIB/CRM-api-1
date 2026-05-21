@@ -14,6 +14,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from crm.models import Client, ClientCall, ClientTask, ClientVisit
+from integrations.ai_insight_i18n import extract_bilingual_pair
 from integrations.models import (
     AIInsightPriorityLevel,
     AIInsightStatus,
@@ -30,13 +31,16 @@ TERMINAL_STAGE_NAMES = frozenset(
 SYSTEM_PROMPT = """You analyze CRM leads for a sales/clinic team using only the provided data.
 Identify leads that need urgent follow-up based on employee notes and activities.
 Output valid JSON only with this schema:
-{"leads":[{"client_id":<int>,"ai_score":<0-100>,"priority_level":"high"|"medium"|"low","summary":"<short insight>","reasoning":"<optional>","suggested_reminder_date":"<ISO8601 or null>","suggested_task_notes":"<actionable follow-up note>"}]}
+{"leads":[{"client_id":<int>,"ai_score":<0-100>,"priority_level":"high"|"medium"|"low","summary_en":"<short insight in English>","summary_ar":"<نفس الملخص بالعربية>","reasoning_en":"<optional English>","reasoning_ar":"<اختياري بالعربية>","suggested_reminder_date":"<ISO8601 or null>","suggested_task_notes_en":"<actionable follow-up in English>","suggested_task_notes_ar":"<نفس التوصية بالعربية>"}]}
 Rules:
 - Do not invent facts not present in the context.
 - ai_score reflects urgency (higher = more urgent).
 - suggested_reminder_date should be a realistic next follow-up time (company timezone UTC).
 - Return at most one entry per client_id provided.
 - If a lead does not need attention, omit it from the array.
+- Always provide summary_en, summary_ar, suggested_task_notes_en, and suggested_task_notes_ar for each lead you include.
+- summary_ar and suggested_task_notes_ar must be natural Modern Standard Arabic (not English transliteration).
+- reasoning_en and reasoning_ar are optional; omit both if not needed.
 """
 
 
@@ -125,12 +129,16 @@ def get_eligible_clients(company, *, limit: int) -> list[Client]:
     qs = (
         Client.objects.filter(company=company)
         .select_related("status", "assigned_to")
-        .filter(Q(id__in=recent_ids) | Q(priority__in=("high", "medium")))
+        .filter(
+            Q(id__in=recent_ids)
+            | Q(priority__in=("high", "medium"))
+            | Q(type="hot")
+        )
     )
     eligible = [c for c in qs if not _is_terminal_stage(c)]
     eligible.sort(
         key=lambda c: (
-            0 if c.priority == "high" else 1 if c.priority == "medium" else 2,
+            0 if c.type == "hot" else 1 if c.priority == "high" else 2 if c.priority == "medium" else 3,
             -(c.id),
         )
     )
@@ -216,15 +224,31 @@ def persist_insight(
         status=AIInsightStatus.PENDING,
     ).update(status=AIInsightStatus.EXPIRED)
 
+    summary_en, summary_ar = extract_bilingual_pair(lead_payload, "summary", max_len=2000)
+    reasoning_en, reasoning_ar = extract_bilingual_pair(lead_payload, "reasoning", max_len=4000)
+    notes_en, notes_ar = extract_bilingual_pair(
+        lead_payload, "suggested_task_notes", max_len=4000
+    )
+    reasoning_en = reasoning_en or None
+    reasoning_ar = reasoning_ar or None
+    notes_en = notes_en or None
+    notes_ar = notes_ar or None
+
     return ClientAIInsight.objects.create(
         company=company,
         client=client,
         ai_score=ai_score,
         priority_level=priority_level,
-        summary=(lead_payload.get("summary") or "")[:2000],
-        reasoning=(lead_payload.get("reasoning") or "")[:4000] or None,
+        summary=summary_en,
+        summary_en=summary_en,
+        summary_ar=summary_ar,
+        reasoning=reasoning_en,
+        reasoning_en=reasoning_en,
+        reasoning_ar=reasoning_ar,
         suggested_reminder_date=suggested_reminder_date,
-        suggested_task_notes=(lead_payload.get("suggested_task_notes") or "")[:4000] or None,
+        suggested_task_notes=notes_en,
+        suggested_task_notes_en=notes_en,
+        suggested_task_notes_ar=notes_ar,
         source_snapshot_hash=snapshot_hash_value,
         status=AIInsightStatus.PENDING,
         model_used=model_used,

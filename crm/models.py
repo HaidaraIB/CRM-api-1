@@ -17,6 +17,7 @@ class Priority(Enum):
 
 class Type(Enum):
     FRESH = "fresh"
+    HOT = "hot"
     COLD = "cold"
 
     @classmethod

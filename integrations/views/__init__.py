@@ -25,6 +25,8 @@ from .openai_ai import (
     ai_insights_dashboard_view,
     ai_insights_list_view,
     ai_insights_run_view,
+    ai_management_report_generate_view,
+    ai_management_report_view,
     openai_settings_test_view,
     openai_settings_view,
 )
@@ -52,4 +54,6 @@ __all__ = [
     "ai_insights_run_view",
     "ai_insight_approve_view",
     "ai_insight_dismiss_view",
+    "ai_management_report_view",
+    "ai_management_report_generate_view",
 ]

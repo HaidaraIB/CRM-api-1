@@ -23,6 +23,8 @@ from .views import (
     ai_insights_run_view,
     ai_insight_approve_view,
     ai_insight_dismiss_view,
+    ai_management_report_view,
+    ai_management_report_generate_view,
 )
 from .whatsapp_webhook import whatsapp_webhook
 
@@ -53,5 +55,11 @@ urlpatterns = [
     path('ai-insights/run/', ai_insights_run_view, name='ai_insights_run'),
     path('ai-insights/<int:pk>/approve/', ai_insight_approve_view, name='ai_insight_approve'),
     path('ai-insights/<int:pk>/dismiss/', ai_insight_dismiss_view, name='ai_insight_dismiss'),
+    path('openai/management-report/', ai_management_report_view, name='ai_management_report'),
+    path(
+        'openai/management-report/generate/',
+        ai_management_report_generate_view,
+        name='ai_management_report_generate',
+    ),
 ]
 
