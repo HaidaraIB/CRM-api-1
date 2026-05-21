@@ -45,6 +45,27 @@ class TestOpenAISettingsAPI:
         response = authenticated_admin.get("/api/integrations/openai/settings/")
         assert response.status_code == status.HTTP_200_OK
 
+    def test_post_test_not_configured(self, authenticated_admin):
+        response = authenticated_admin.post(
+            "/api/v1/integrations/openai/settings/test/",
+            {},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        body = response.json()
+        assert body["success"] is False
+        assert body["error"]["code"] == "openai_not_configured"
+
+    @patch("integrations.views.openai_ai.test_openai_connection", return_value=(True, ""))
+    def test_post_test_with_draft_api_key(self, _mock_test, authenticated_admin):
+        response = authenticated_admin.post(
+            "/api/v1/integrations/openai/settings/test/",
+            {"api_key": "sk-draft-test", "model": "gpt-4o-mini"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert api_body(response)["ok"] is True
+
 
 @pytest.mark.django_db
 class TestAIInsightApprove:

@@ -91,6 +91,22 @@ def openai_settings_test_view(request):
     blocked = _integration_gate(company, "openai")
     if blocked is not None:
         return blocked
+
+    body = request.data if isinstance(request.data, dict) else {}
+    draft_key = str(body.get("api_key") or body.get("apiKey") or "").strip()
+    draft_model = str(body.get("model") or "").strip()
+
+    if draft_key:
+        model = draft_model or "gpt-4o-mini"
+        ok, err = test_openai_connection(draft_key, model)
+        if not ok:
+            return error_response(
+                err or "Connection test failed.",
+                code="openai_test_failed",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        return success_response(data={"ok": True})
+
     try:
         settings = OpenAISettings.objects.get(company=company)
     except OpenAISettings.DoesNotExist:
@@ -102,7 +118,7 @@ def openai_settings_test_view(request):
     api_key = settings.get_api_key()
     if not api_key:
         return error_response(
-            "API key is missing.",
+            "API key is missing. Enter your key and save before testing.",
             code="openai_no_api_key",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
