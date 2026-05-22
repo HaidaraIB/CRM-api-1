@@ -5,6 +5,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from crm.availability import user_accepts_new_assignments
+from crm.signals import get_least_busy_employee
 from .models import Client, ClientEvent
 
 
@@ -102,3 +103,60 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
         ClientEvent.objects.bulk_create(events)
 
     return len(changed)
+
+
+def distribute_clients_to_least_busy(company, clients, triggered_by):
+    """
+    Assign each client to the least-busy active employee (round-robin by load).
+    Used when redistributing leads after employee deactivation.
+    Returns dict with assigned_count, skipped_count, and assignments list.
+    """
+    clients = list(clients)
+    if not clients:
+        return {"assigned_count": 0, "skipped_count": 0, "assignments": []}
+
+    now = timezone.now()
+    assigned_count = 0
+    skipped_count = 0
+    assignments = []
+    changed_clients = []
+    events = []
+
+    for client in clients:
+        employee = get_least_busy_employee(company)
+        if not employee:
+            skipped_count += 1
+            continue
+
+        old_name = (
+            client.assigned_to.get_full_name() or client.assigned_to.username
+        ) if client.assigned_to else "Unassigned"
+        new_name = employee.get_full_name() or employee.username
+
+        client.assigned_to = employee
+        client.assigned_at = now
+        changed_clients.append(client)
+        events.append(
+            ClientEvent(
+                client=client,
+                event_type="assignment",
+                old_value=old_name,
+                new_value=new_name,
+                notes=f"Reassigned after employee deactivation to {new_name}",
+                created_by=triggered_by,
+            )
+        )
+        assignments.append(
+            {"client_id": client.id, "assignee_id": employee.id, "assignee_name": new_name}
+        )
+        assigned_count += 1
+
+    if changed_clients:
+        Client.objects.bulk_update(changed_clients, ["assigned_to", "assigned_at"])
+        ClientEvent.objects.bulk_create(events)
+
+    return {
+        "assigned_count": assigned_count,
+        "skipped_count": skipped_count,
+        "assignments": assignments,
+    }

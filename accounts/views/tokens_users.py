@@ -32,6 +32,13 @@ from companies.models import Company
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
+from ..employee_deactivation import (
+    caller_can_deactivate_target,
+    count_active_employees_for_quota,
+    deactivate_employee,
+    get_deactivate_preview,
+    reactivate_employee,
+)
 from datetime import timedelta
 import secrets
 from ..utils import (
@@ -122,7 +129,9 @@ class UserViewSet(viewsets.ModelViewSet):
         if company and not request_user.is_super_admin():
             from subscriptions.entitlements import require_quota
             owner_id = getattr(company, "owner_id", None)
-            current_users = User.objects.filter(company=company).exclude(id=owner_id).count()
+            current_users = count_active_employees_for_quota(
+                company, exclude_owner_id=owner_id
+            )
             require_quota(
                 company,
                 "max_employees",
@@ -268,5 +277,76 @@ class UserViewSet(viewsets.ModelViewSet):
             return success_response(message="Password changed successfully.")
 
         return validation_error_response(serializer.errors)
+
+    @action(detail=True, methods=["get"], url_path="deactivate-preview")
+    def deactivate_preview(self, request, pk=None):
+        target = self.get_object()
+        if not caller_can_deactivate_target(request.user, target):
+            return error_response(
+                "You do not have permission to deactivate this user.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        data = get_deactivate_preview(target)
+        return success_response(data=data)
+
+    @action(detail=True, methods=["post"])
+    def deactivate(self, request, pk=None):
+        target = self.get_object()
+        if not caller_can_deactivate_target(request.user, target):
+            return error_response(
+                "You do not have permission to deactivate this user.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        reassign_leads = bool(request.data.get("reassign_leads", False))
+        try:
+            result = deactivate_employee(
+                actor=request.user,
+                target=target,
+                reassign_leads=reassign_leads,
+            )
+        except ValueError as exc:
+            return error_response(
+                str(exc),
+                code="invalid_target",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(result["user"])
+        return success_response(
+            message="Employee deactivated successfully.",
+            data={
+                "user": serializer.data,
+                "assigned_lead_count": result["assigned_lead_count"],
+                "skipped_lead_count": result["skipped_lead_count"],
+                "leads_remaining_on_user": result["leads_remaining_on_user"],
+            },
+        )
+
+    @action(detail=True, methods=["post"])
+    def reactivate(self, request, pk=None):
+        target = self.get_object()
+        if not caller_can_deactivate_target(request.user, target):
+            return error_response(
+                "You do not have permission to reactivate this user.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            user = reactivate_employee(actor=request.user, target=target)
+        except ValueError as exc:
+            return error_response(
+                str(exc),
+                code="invalid_target",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(user)
+        return success_response(
+            message="Employee reactivated successfully.",
+            data={"user": serializer.data},
+        )
 
 

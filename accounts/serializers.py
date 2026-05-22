@@ -1415,6 +1415,7 @@ class SupervisorSerializer(serializers.ModelSerializer):
             'first_name': obj.user.first_name,
             'last_name': obj.user.last_name,
             'phone': obj.user.phone or '',
+            'is_active': obj.user.is_active,
         }
 
     def update(self, instance, validated_data):
