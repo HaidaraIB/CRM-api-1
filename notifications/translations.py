@@ -215,6 +215,26 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             'body': '{minutes_remaining} minutes remaining for upcoming visit with {lead_name}'
         }
     },
+    'field_visit_reminder': {
+        'ar': {
+            'title': 'تذكير زيارة ميدانية',
+            'body': 'تبقى {minutes_remaining} دقيقة على موعد الزيارة الميدانية القادمة مع {lead_name}'
+        },
+        'en': {
+            'title': 'Field Visit Reminder',
+            'body': '{minutes_remaining} minutes remaining for upcoming field visit with {lead_name}'
+        }
+    },
+    'reception_field_visit_reminder': {
+        'ar': {
+            'title': 'تذكير زيارة ميدانية (استقبال)',
+            'body': 'تبقى {minutes_remaining} دقيقة على موعد زيارة ميدانية للمريض {lead_name}'
+        },
+        'en': {
+            'title': 'Field Visit Reminder (Reception)',
+            'body': '{minutes_remaining} minutes until field visit for patient {lead_name}'
+        }
+    },
     'task_completed': {
         'ar': {
             'title': 'مهمة مكتملة',

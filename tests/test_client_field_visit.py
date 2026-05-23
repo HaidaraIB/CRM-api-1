@@ -1,7 +1,10 @@
 """Client field visit API: proximity validation and products specialization access."""
+from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
+from django.core.management import call_command
 from django.utils import timezone
 from rest_framework import status
 
@@ -226,3 +229,58 @@ def test_field_visit_requires_employee_coordinates(authenticated_admin, company)
         format="json",
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_check_call_reminders_notifies_assignee_for_field_visit(
+    company, owner_user, employee_user
+):
+    from crm.models import Client, ClientFieldVisit
+    from notifications.models import NotificationType
+
+    client = Client.objects.create(
+        name="Field Visit Lead",
+        company=company,
+        priority="medium",
+        type="fresh",
+        assigned_to=employee_user,
+        created_by=owner_user,
+    )
+    soon = timezone.now() + timedelta(minutes=16)
+    ClientFieldVisit.objects.create(
+        client=client,
+        summary="Scheduled follow-up",
+        visit_datetime=timezone.now(),
+        upcoming_visit_date=soon,
+        employee_latitude="33.315200",
+        employee_longitude="44.366100",
+        created_by=owner_user,
+    )
+
+    sent = []
+
+    def capture_send(*args, **kwargs):
+        sent.append(kwargs)
+
+    with patch(
+        "notifications.management.commands.check_call_reminders.NotificationService.send_notification",
+        side_effect=capture_send,
+    ), patch(
+        "notifications.management.commands.check_call_reminders.send_followup_reminder_email",
+        return_value=True,
+    ):
+        call_command(
+            "check_call_reminders",
+            minutes_before=15,
+            window_minutes=30,
+        )
+
+    assignee_hits = [
+        kw
+        for kw in sent
+        if kw.get("user")
+        and kw["user"].id == employee_user.id
+        and kw.get("notification_type") == NotificationType.FIELD_VISIT_REMINDER
+    ]
+    assert assignee_hits, sent
+    assert assignee_hits[0]["data"].get("field_visit_id") is not None

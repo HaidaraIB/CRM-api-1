@@ -79,6 +79,8 @@ def android_notification_channel_id(notification_type: str) -> str:
         "call_reminder",
         "visit_reminder",
         "reception_visit_reminder",
+        "field_visit_reminder",
+        "reception_field_visit_reminder",
     }:
         return "tasks"
 

@@ -40,6 +40,11 @@ class NotificationType(models.TextChoices):
     CALL_REMINDER = 'call_reminder', 'Call Reminder'
     VISIT_REMINDER = 'visit_reminder', 'Visit Reminder'
     RECEPTION_VISIT_REMINDER = 'reception_visit_reminder', 'Reception Visit Reminder'
+    FIELD_VISIT_REMINDER = 'field_visit_reminder', 'Field Visit Reminder'
+    RECEPTION_FIELD_VISIT_REMINDER = (
+        'reception_field_visit_reminder',
+        'Reception Field Visit Reminder',
+    )
 
     # Deals
     DEAL_CREATED = 'deal_created', 'Deal Created'
