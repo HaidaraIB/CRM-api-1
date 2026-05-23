@@ -414,6 +414,10 @@ _TEAM_ACTIVITY_BODIES: Dict[str, Dict[str, str]] = {
         "ar": "قام الموظف {employee} بتسجيل زيارة على العميل المحتمل {lead}",
         "en": "Employee {employee} logged a visit on lead {lead}",
     },
+    "field_visit_logged": {
+        "ar": "قام الموظف {employee} بتسجيل زيارة ميدانية على العميل المحتمل {lead}",
+        "en": "Employee {employee} logged a field visit on lead {lead}",
+    },
     "task_created": {
         "ar": "قام الموظف {employee} بإضافة مهمة على العميل المحتمل {lead}",
         "en": "Employee {employee} added a task on lead {lead}",

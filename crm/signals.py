@@ -4,7 +4,15 @@ from django.db import transaction
 from django.dispatch import receiver
 from django.utils import timezone
 from crm.availability import user_accepts_new_assignments
-from .models import Client, ClientTask, ClientCall, ClientEvent, ClientVisit, Deal
+from .models import (
+    Client,
+    ClientTask,
+    ClientCall,
+    ClientEvent,
+    ClientVisit,
+    ClientFieldVisit,
+    Deal,
+)
 from accounts.models import User, Role
 from notifications.services import NotificationService
 from notifications.models import NotificationType
@@ -204,6 +212,25 @@ def on_client_visit_post_save(sender, instance, created, **kwargs):
         Client.objects.filter(pk=client.pk).update(
             status_id=visited.pk,
             status_entered_at=now,
+        )
+
+
+@receiver(post_save, sender=ClientFieldVisit)
+def on_client_field_visit_post_save(sender, instance, created, **kwargs):
+    """After a field visit is logged: bump last_contacted_at and notify owner."""
+    if not created or not instance.client_id:
+        return
+
+    Client.objects.filter(pk=instance.client.pk).update(
+        last_contacted_at=timezone.now()
+    )
+    if instance.created_by_id:
+        notify_owner_team_activity(
+            instance.created_by,
+            instance.client.company,
+            action="field_visit_logged",
+            lead_id=instance.client_id,
+            lead_name=instance.client.name,
         )
 
 

@@ -3,6 +3,16 @@ from drf_spectacular.utils import extend_schema_serializer
 
 from accounts.models import Role
 from crm.availability import user_accepts_new_assignments
+
+# Medical clinics: manual assignee may be clinical staff or company leadership.
+MEDICAL_ASSIGNEE_ROLES = frozenset(
+    {
+        Role.ADMIN.value,
+        Role.SUPERVISOR.value,
+        Role.EMPLOYEE.value,
+        Role.DOCTOR.value,
+    }
+)
 from .models import (
     Client,
     Deal,
@@ -11,9 +21,30 @@ from .models import (
     ClientTask,
     ClientCall,
     ClientVisit,
+    ClientFieldVisit,
     ClientPhoneNumber,
     ClientEvent,
 )
+from .geo import (
+    haversine_distance_meters,
+    field_visit_max_allowed_distance_meters,
+    quantize_coordinate,
+    quantize_coordinate_optional,
+)
+
+
+class QuantizedCoordinateField(serializers.DecimalField):
+    """WGS84 coordinate: round to 6 dp before max_digits validation (browser GPS)."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("max_digits", 9)
+        kwargs.setdefault("decimal_places", 6)
+        super().__init__(**kwargs)
+
+    def to_internal_value(self, data):
+        if data in (None, ""):
+            return None
+        return super().to_internal_value(quantize_coordinate(data))
 
 
 class ClientActivitySummaryMixin:
@@ -28,6 +59,7 @@ class ClientActivitySummaryMixin:
         latest_task = client.client_tasks.order_by("-created_at").first()
         latest_call = client.client_calls.order_by("-created_at").first()
         latest_visit = client.client_visits.order_by("-created_at").first()
+        latest_field_visit = client.client_field_visits.order_by("-created_at").first()
 
         candidates = []
         if latest_task:
@@ -36,6 +68,10 @@ class ClientActivitySummaryMixin:
             candidates.append(("call", latest_call, latest_call.created_at))
         if latest_visit:
             candidates.append(("visit", latest_visit, latest_visit.created_at))
+        if latest_field_visit:
+            candidates.append(
+                ("field_visit", latest_field_visit, latest_field_visit.created_at)
+            )
         if not candidates:
             return (None, None)
         candidates.sort(key=lambda x: x[2], reverse=True)
@@ -46,10 +82,12 @@ class ClientActivitySummaryMixin:
         activity_type, activity = self._get_latest_activity(obj)
         if not activity:
             return None
-        if activity_type == "visit":
+        if activity_type in ("visit", "field_visit"):
             summary = getattr(activity, "summary", None)
             if summary:
                 return summary
+            if activity_type == "field_visit":
+                return "Field visit"
             visit_type = getattr(activity, "visit_type", None)
             return getattr(visit_type, "name", None) if visit_type else None
         notes = getattr(activity, "notes", None)
@@ -71,6 +109,8 @@ class ClientActivitySummaryMixin:
         if activity_type == "visit":
             visit_type = getattr(activity, "visit_type", None)
             return getattr(visit_type, "name", None) if visit_type else None
+        if activity_type == "field_visit":
+            return "Field visit"
         call_method = getattr(activity, "call_method", None)
         return getattr(call_method, "name", None) if call_method else None
 
@@ -176,6 +216,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
     interested_unit_code = serializers.CharField(
         source="interested_unit.code", read_only=True, allow_null=True
     )
+    location_latitude = QuantizedCoordinateField(required=False, allow_null=True)
+    location_longitude = QuantizedCoordinateField(required=False, allow_null=True)
 
     class Meta:
         model = Client
@@ -195,6 +237,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "lead_company_name",
             "profession",
             "residence",
+            "location_latitude",
+            "location_longitude",
             "patient_file_number",
             "notes",
             "interested_developer",
@@ -269,12 +313,47 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         if company and getattr(company, "specialization", None) == "medical":
             if getattr(value, "company_id", None) != company.id:
                 raise serializers.ValidationError("Assignee must belong to your company.")
-            if value.role not in (Role.EMPLOYEE.value, Role.DOCTOR.value):
+            if value.role not in MEDICAL_ASSIGNEE_ROLES:
                 raise serializers.ValidationError(
-                    "Medical companies may assign patients only to users with employee or doctor role."
+                    "Medical companies may assign patients only to owners, supervisors, employees, or doctors."
                 )
         return value
 
+    def _validate_location_pair(self, attrs):
+        """Latitude and longitude must both be set or both cleared."""
+        if self.instance is None:
+            lat = attrs.get("location_latitude")
+            lng = attrs.get("location_longitude")
+        else:
+            lat = (
+                attrs["location_latitude"]
+                if "location_latitude" in attrs
+                else self.instance.location_latitude
+            )
+            lng = (
+                attrs["location_longitude"]
+                if "location_longitude" in attrs
+                else self.instance.location_longitude
+            )
+        if self.instance is not None and (
+            "location_latitude" not in attrs and "location_longitude" not in attrs
+        ):
+            return
+        lat_set = lat is not None
+        lng_set = lng is not None
+        if lat_set != lng_set:
+            raise serializers.ValidationError(
+                {
+                    "location_latitude": (
+                        "Both latitude and longitude are required together, "
+                        "or clear both."
+                    ),
+                    "location_longitude": (
+                        "Both latitude and longitude are required together, "
+                        "or clear both."
+                    ),
+                }
+            )
     def _validate_interested_real_estate(self, attrs):
         """Optional developer → project → unit; enforce company and hierarchy."""
         if "interested_developer" in attrs and attrs.get("interested_developer") is None:
@@ -363,6 +442,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             )
 
         self._validate_interested_real_estate(attrs)
+        self._validate_location_pair(attrs)
 
         request = self.context.get("request")
         if request and request.user.is_authenticated and request.user.is_data_entry():
@@ -480,6 +560,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             'lead_company_name',
             'profession',
             'residence',
+            'location_latitude',
+            'location_longitude',
             'notes',
             'interested_developer',
             'interested_project',
@@ -576,6 +658,8 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
             "lead_company_name",
             "profession",
             "residence",
+            "location_latitude",
+            "location_longitude",
             "patient_file_number",
             "notes",
             "interested_developer",
@@ -1040,6 +1124,126 @@ class ClientVisitSerializer(serializers.ModelSerializer):
                     "Visit type must belong to the same company as the client."
                 )
         return value
+
+
+@extend_schema_serializer(component_name="ClientFieldVisit")
+class ClientFieldVisitSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
+    employee_latitude = QuantizedCoordinateField()
+    employee_longitude = QuantizedCoordinateField()
+    employee_location_accuracy = serializers.FloatField(
+        required=False,
+        allow_null=True,
+        write_only=True,
+        min_value=0,
+        max_value=500,
+        help_text="Browser GPS accuracy radius in meters (not stored).",
+    )
+
+    class Meta:
+        model = ClientFieldVisit
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "summary",
+            "visit_datetime",
+            "upcoming_visit_date",
+            "employee_latitude",
+            "employee_longitude",
+            "employee_location_accuracy",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate(self, data):
+        if self.instance is None:
+            if not data.get("visit_datetime"):
+                raise serializers.ValidationError(
+                    {"visit_datetime": "This field is required."}
+                )
+            summary = data.get("summary")
+            if summary is None or str(summary).strip() == "":
+                raise serializers.ValidationError(
+                    {"summary": "This field is required."}
+                )
+            if data.get("employee_latitude") is None:
+                raise serializers.ValidationError(
+                    {"employee_latitude": "This field is required."}
+                )
+            if data.get("employee_longitude") is None:
+                raise serializers.ValidationError(
+                    {"employee_longitude": "This field is required."}
+                )
+
+            client = data.get("client")
+            if client is None and hasattr(self, "initial_data"):
+                client_id = self.initial_data.get("client")
+                if client_id:
+                    try:
+                        client = Client.objects.get(pk=client_id)
+                    except Client.DoesNotExist:
+                        client = None
+
+            if (
+                client
+                and client.location_latitude is not None
+                and client.location_longitude is not None
+            ):
+                accuracy_raw = data.pop("employee_location_accuracy", None)
+                try:
+                    accuracy_m = (
+                        float(accuracy_raw) if accuracy_raw is not None else None
+                    )
+                except (TypeError, ValueError):
+                    accuracy_m = None
+                max_allowed = field_visit_max_allowed_distance_meters(accuracy_m)
+                distance = haversine_distance_meters(
+                    client.location_latitude,
+                    client.location_longitude,
+                    data["employee_latitude"],
+                    data["employee_longitude"],
+                )
+                if distance > max_allowed:
+                    raise serializers.ValidationError(
+                        {
+                            "non_field_errors": ["field_visit_too_far"],
+                            "distance_meters": round(distance, 1),
+                            "max_allowed_meters": round(max_allowed, 1),
+                        }
+                    )
+        else:
+            data.pop("employee_location_accuracy", None)
+        return data
+
+
+class ClientFieldVisitListSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True
+    )
+
+    class Meta:
+        model = ClientFieldVisit
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "summary",
+            "visit_datetime",
+            "upcoming_visit_date",
+            "employee_latitude",
+            "employee_longitude",
+            "created_by",
+            "created_by_username",
+            "created_at",
+        ]
 
 
 class ClientVisitListSerializer(serializers.ModelSerializer):

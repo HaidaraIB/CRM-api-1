@@ -9,7 +9,17 @@ from accounts.permissions import (
 )
 from crm_saas_api.responses import success_response, error_response
 from crm_saas_api.utils import clean_int_query_param
-from .models import Client, Deal, Task, Campaign, ClientTask, ClientCall, ClientVisit, ClientEvent
+from .models import (
+    Client,
+    Deal,
+    Task,
+    Campaign,
+    ClientTask,
+    ClientCall,
+    ClientVisit,
+    ClientFieldVisit,
+    ClientEvent,
+)
 from accounts.models import User, Role
 from notifications.models import NotificationType
 from notifications.services import NotificationService
@@ -29,6 +39,8 @@ from .serializers import (
     ClientCallListSerializer,
     ClientVisitSerializer,
     ClientVisitListSerializer,
+    ClientFieldVisitSerializer,
+    ClientFieldVisitListSerializer,
     ClientEventSerializer,
 )
 
@@ -63,6 +75,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             "client_tasks__stage",
             "client_calls__call_method",
             "client_visits__visit_type",
+            "client_field_visits",
         )
 
         if user.is_admin() or user.is_reception():
@@ -537,6 +550,51 @@ class ClientVisitViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return ClientVisitListSerializer
         return ClientVisitSerializer
+
+
+class ClientFieldVisitViewSet(viewsets.ModelViewSet):
+    """ViewSet for field visits (الزيارة الميدانية); all company specializations."""
+
+    queryset = ClientFieldVisit.objects.all()
+    permission_classes = [
+        IsAuthenticated,
+        HasActiveSubscription,
+        DenyDataEntryNonLeadAPI,
+        CanAccessClient,
+    ]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["summary", "client__name"]
+    ordering_fields = ["created_at", "visit_datetime"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset().select_related(
+            "client", "client__company", "created_by",
+        )
+
+        if user.is_admin() or user.is_reception():
+            queryset = queryset.filter(client__company=user.company)
+        elif user.is_assigned_clinical_staff():
+            queryset = queryset.filter(client__assigned_to=user)
+        elif user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            queryset = queryset.filter(client__company=user.company)
+        else:
+            queryset = queryset.none()
+
+        client_id = clean_int_query_param(self.request, "client")
+        if client_id is not None:
+            queryset = queryset.filter(client_id=client_id)
+
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ClientFieldVisitListSerializer
+        return ClientFieldVisitSerializer
 
 
 class ClientCallViewSet(viewsets.ModelViewSet):

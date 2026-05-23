@@ -118,6 +118,20 @@ class Client(models.Model):
         null=True,
         help_text="Address / residence (e.g. clinic patient).",
     )
+    location_latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        blank=True,
+        null=True,
+        help_text="Optional lead map location (latitude).",
+    )
+    location_longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        blank=True,
+        null=True,
+        help_text="Optional lead map location (longitude).",
+    )
     patient_file_number = models.PositiveIntegerField(
         help_text="Per-company sequential clinic file number.",
     )
@@ -639,6 +653,52 @@ class ClientVisit(models.Model):
     def __str__(self):
         vt = self.visit_type.name if self.visit_type else "No type"
         return f"{self.client.name} - {vt}"
+
+
+class ClientFieldVisit(models.Model):
+    """Field visit (الزيارة الميدانية) with optional proximity check to lead location."""
+
+    client = models.ForeignKey(
+        Client, on_delete=models.CASCADE, related_name="client_field_visits"
+    )
+    summary = models.TextField(blank=True, null=True)
+    visit_datetime = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When the field visit occurred",
+    )
+    upcoming_visit_date = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="Optional scheduled next field visit",
+    )
+    employee_latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        help_text="Employee GPS latitude at submit time",
+    )
+    employee_longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        help_text="Employee GPS longitude at submit time",
+    )
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="created_client_field_visits",
+        blank=True,
+        null=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "crm_client_field_visit"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.client.name} - field visit"
 
 
 class Campaign(models.Model):

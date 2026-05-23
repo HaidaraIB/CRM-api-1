@@ -136,6 +136,42 @@ def test_reception_can_create_client_visit(authenticated_reception, company, own
 
 
 @pytest.mark.django_db
+def test_medical_client_may_assign_to_owner_or_supervisor(
+    authenticated_admin, company, owner_user
+):
+    from accounts.models import User
+    from crm.models import Client
+
+    company.specialization = "medical"
+    company.save(update_fields=["specialization"])
+
+    supervisor = User.objects.create_user(
+        username="clinic_supervisor",
+        email="clinic_supervisor@test.com",
+        password="testpass123",
+        company=company,
+        role="supervisor",
+    )
+    client = Client.objects.create(
+        name="Patient Assign",
+        company=company,
+        priority="medium",
+        type="fresh",
+        created_by=owner_user,
+    )
+
+    for assignee in (owner_user, supervisor):
+        response = authenticated_admin.patch(
+            f"/api/v1/clients/{client.id}/",
+            {"assigned_to": assignee.id},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+        client.refresh_from_db()
+        assert client.assigned_to_id == assignee.id
+
+
+@pytest.mark.django_db
 def test_doctor_sees_only_assigned_clients(authenticated_doctor, company, owner_user, doctor_user):
     from crm.models import Client
 
@@ -229,3 +265,29 @@ def test_check_call_reminders_notifies_reception_for_medical_visit(
         and kw.get("notification_type") == NotificationType.RECEPTION_VISIT_REMINDER
     ]
     assert reception_hits, sent
+
+
+@pytest.mark.django_db
+def test_patient_file_number_assigned_and_returned_in_api(authenticated_admin, company):
+    """New patients get a per-company file #; list/detail APIs expose patient_file_number."""
+    from crm.models import Client
+
+    company.specialization = "medical"
+    company.save(update_fields=["specialization"])
+
+    create_resp = authenticated_admin.post(
+        "/api/v1/clients/",
+        {"name": "Patient File Test", "priority": "medium", "type": "fresh", "company": company.id},
+        format="json",
+    )
+    assert create_resp.status_code == status.HTTP_201_CREATED
+    body = api_body(create_resp)
+    assert body.get("patient_file_number") is not None
+
+    client = Client.objects.get(pk=body["id"])
+    assert client.patient_file_number is not None
+
+    list_resp = authenticated_admin.get("/api/v1/clients/")
+    assert list_resp.status_code == status.HTTP_200_OK
+    row = next(r for r in api_body(list_resp)["results"] if r["id"] == body["id"])
+    assert row["patient_file_number"] == client.patient_file_number
