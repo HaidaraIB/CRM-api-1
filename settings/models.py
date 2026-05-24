@@ -376,6 +376,14 @@ class SystemSettings(models.Model):
             "Schema: {platform: {global_enabled, global_message, company_overrides{company_id:{enabled,message}}}}"
         ),
     )
+    feature_policies = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Feature gating policies. "
+            "Schema: {feature: {global_enabled, global_message, company_overrides{company_id:{enabled,message}}}}"
+        ),
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

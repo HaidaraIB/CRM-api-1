@@ -204,3 +204,46 @@ class CompanyViewSet(viewsets.ModelViewSet):
         
         serializer = CompanySerializer(company, context={'request': request})
         return success_response(data=serializer.data)
+
+    @action(detail=True, methods=['patch'], permission_classes=[IsAuthenticated])
+    def update_field_visit_settings(self, request, pk=None):
+        """
+        Update field visit feature settings for the company.
+        PATCH /api/companies/{id}/update_field_visit_settings/
+        Body: { "field_visit_enabled": true/false }
+        """
+        from settings.feature_policy import get_effective_feature_policy, FIELD_VISIT_FEATURE
+        from settings.models import SystemSettings
+
+        company = self.get_object()
+        user = request.user
+
+        if not (user.is_super_admin() or (user.is_admin() and user.company == company)):
+            return error_response(
+                "You do not have permission to update these settings.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        enabled = request.data.get('field_visit_enabled')
+        if enabled is not None:
+            wants_enabled = bool(enabled)
+            if wants_enabled:
+                settings_obj = SystemSettings.get_settings()
+                admin_policy = get_effective_feature_policy(
+                    settings_obj.feature_policies or {},
+                    company_id=company.id,
+                    feature_key=FIELD_VISIT_FEATURE,
+                )
+                if not admin_policy["enabled"]:
+                    return error_response(
+                        admin_policy.get("message")
+                        or "Field visits are disabled by the administrator.",
+                        code="feature_disabled",
+                        status_code=status.HTTP_403_FORBIDDEN,
+                    )
+            company.field_visit_enabled = wants_enabled
+            company.save(update_fields=['field_visit_enabled'])
+
+        serializer = CompanySerializer(company, context={'request': request})
+        return success_response(data=serializer.data)

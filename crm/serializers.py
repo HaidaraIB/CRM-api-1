@@ -25,6 +25,8 @@ from .models import (
     ClientPhoneNumber,
     ClientEvent,
 )
+from .field_visit_uploads import validate_client_location_photo
+from settings.feature_policy import is_field_visit_allowed
 from .geo import (
     haversine_distance_meters,
     field_visit_max_allowed_distance_meters,
@@ -1142,6 +1144,12 @@ class ClientFieldVisitSerializer(serializers.ModelSerializer):
         max_value=500,
         help_text="Browser GPS accuracy radius in meters (not stored).",
     )
+    client_location_photo = serializers.ImageField(
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+    client_location_photo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClientFieldVisit
@@ -1155,15 +1163,57 @@ class ClientFieldVisitSerializer(serializers.ModelSerializer):
             "employee_latitude",
             "employee_longitude",
             "employee_location_accuracy",
+            "client_location_photo",
+            "client_location_photo_url",
             "created_by",
             "created_by_username",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            "client_location_photo_url",
+        ]
+
+    def get_client_location_photo_url(self, obj):
+        photo = getattr(obj, "client_location_photo", None)
+        if not photo:
+            return None
+        try:
+            url = photo.url
+        except ValueError:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+    def validate_client_location_photo(self, value):
+        if not value:
+            return value
+        try:
+            validate_client_location_photo(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        return value
 
     def validate(self, data):
         if self.instance is None:
+            client = data.get("client")
+            if client is None and hasattr(self, "initial_data"):
+                client_id = self.initial_data.get("client")
+                if client_id:
+                    try:
+                        client = Client.objects.select_related("company").get(pk=client_id)
+                    except Client.DoesNotExist:
+                        client = None
+            if client and not is_field_visit_allowed(client.company):
+                raise serializers.ValidationError(
+                    {"non_field_errors": ["field_visit_disabled"]}
+                )
+
             if not data.get("visit_datetime"):
                 raise serializers.ValidationError(
                     {"visit_datetime": "This field is required."}
@@ -1228,6 +1278,7 @@ class ClientFieldVisitListSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(
         source="created_by.username", read_only=True
     )
+    client_location_photo_url = serializers.SerializerMethodField()
 
     class Meta:
         model = ClientFieldVisit
@@ -1240,10 +1291,24 @@ class ClientFieldVisitListSerializer(serializers.ModelSerializer):
             "upcoming_visit_date",
             "employee_latitude",
             "employee_longitude",
+            "client_location_photo_url",
             "created_by",
             "created_by_username",
             "created_at",
         ]
+
+    def get_client_location_photo_url(self, obj):
+        photo = getattr(obj, "client_location_photo", None)
+        if not photo:
+            return None
+        try:
+            url = photo.url
+        except ValueError:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(url)
+        return url
 
 
 class ClientVisitListSerializer(serializers.ModelSerializer):

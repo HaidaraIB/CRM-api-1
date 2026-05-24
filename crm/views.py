@@ -567,6 +567,44 @@ class ClientFieldVisitViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "visit_datetime"]
     ordering = ["-created_at"]
 
+    def _field_visit_feature_error(self):
+        from settings.feature_policy import get_field_visit_access
+
+        company = self.request.user.company
+        if not company:
+            return error_response(
+                "Company is required.",
+                code="company_required",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        access = get_field_visit_access(company)
+        if access.get("enabled"):
+            return None
+        message = access.get("message") or "Field visits are not enabled for your company."
+        return error_response(
+            message,
+            code="field_visit_disabled",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    def list(self, request, *args, **kwargs):
+        blocked = self._field_visit_feature_error()
+        if blocked:
+            return blocked
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        blocked = self._field_visit_feature_error()
+        if blocked:
+            return blocked
+        return super().create(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        blocked = self._field_visit_feature_error()
+        if blocked:
+            return blocked
+        return super().retrieve(request, *args, **kwargs)
+
     def get_queryset(self):
         user = self.request.user
         queryset = super().get_queryset().select_related(
@@ -668,3 +706,41 @@ class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
             return queryset.filter(client__assigned_to=user)
 
         return queryset.none()
+
+
+from rest_framework.decorators import api_view, permission_classes
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def feature_policy_view(request):
+    """Effective feature access for the authenticated user's company."""
+    from settings.feature_policy import (
+        FEATURE_POLICY_KEYS,
+        FIELD_VISIT_FEATURE,
+        get_effective_feature_policy,
+        get_field_visit_access,
+    )
+    from settings.models import SystemSettings
+
+    company = request.user.company
+    if not company:
+        return error_response(
+            "Company is required.",
+            code="company_required",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    settings_obj = SystemSettings.get_settings()
+    policies = settings_obj.feature_policies or {}
+    data = {}
+    for feature_key in FEATURE_POLICY_KEYS:
+        if feature_key == FIELD_VISIT_FEATURE:
+            data[feature_key] = get_field_visit_access(company)
+        else:
+            data[feature_key] = get_effective_feature_policy(
+                policies,
+                company_id=company.id,
+                feature_key=feature_key,
+            )
+    return success_response(data=data)

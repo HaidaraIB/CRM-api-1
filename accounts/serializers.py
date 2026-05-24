@@ -212,7 +212,35 @@ class UserSerializer(serializers.ModelSerializer):
             "re_assign_hours": company.re_assign_hours,
             "free_trial_consumed": getattr(company, "free_trial_consumed", False),
             "timezone": getattr(company, "timezone", "UTC") or "UTC",
+            "field_visit_enabled": getattr(
+                company, "field_visit_enabled", True
+            ),
         }
+
+        try:
+            from settings.feature_policy import (
+                FIELD_VISIT_FEATURE,
+                get_effective_feature_policy,
+                get_field_visit_access,
+            )
+            from settings.models import SystemSettings
+
+            settings_obj = SystemSettings.get_settings()
+            admin_policy = get_effective_feature_policy(
+                settings_obj.feature_policies or {},
+                company_id=company.id,
+                feature_key=FIELD_VISIT_FEATURE,
+            )
+            visit_access = get_field_visit_access(company)
+            company_data["field_visit_admin_allowed"] = admin_policy.get("enabled", True)
+            company_data["field_visit_admin_message"] = admin_policy.get("message", "")
+            company_data["field_visit_allowed"] = visit_access.get("enabled", False)
+        except Exception:
+            company_data["field_visit_admin_allowed"] = True
+            company_data["field_visit_admin_message"] = ""
+            company_data["field_visit_allowed"] = getattr(
+                company, "field_visit_enabled", True
+            )
         
         if subscription:
             now = timezone.now()

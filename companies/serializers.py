@@ -27,6 +27,7 @@ class CompanySerializer(serializers.ModelSerializer):
             "re_assign_hours",
             "free_trial_consumed",
             "timezone",
+            "field_visit_enabled",
             "created_at",
             "updated_at",
         ]

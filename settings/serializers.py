@@ -20,6 +20,7 @@ from integrations.policy import (
     INTEGRATION_POLICY_PLATFORMS,
     apply_integration_policy_side_effects,
 )
+from .feature_policy import normalize_feature_policies
 
 
 @extend_schema_serializer(component_name="Channel")
@@ -423,6 +424,7 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
     """Serializer for System Settings"""
 
     integration_policies = serializers.JSONField(required=False)
+    feature_policies = serializers.JSONField(required=False)
 
     class Meta:
         model = SystemSettings
@@ -437,6 +439,7 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
             "mobile_store_url_android",
             "mobile_store_url_ios",
             "integration_policies",
+            "feature_policies",
             "created_at",
             "updated_at",
         ]
@@ -470,6 +473,12 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
                 "company_overrides": company_overrides,
             }
         return normalized
+
+    def validate_feature_policies(self, value):
+        try:
+            return normalize_feature_policies(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     def update(self, instance, validated_data):
         previous_policies = instance.integration_policies or {}

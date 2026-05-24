@@ -1,9 +1,11 @@
 """Client field visit API: proximity validation and products specialization access."""
+import base64
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.utils import timezone
 from rest_framework import status
@@ -13,6 +15,10 @@ from crm.geo import (
     FIELD_VISIT_MAX_DISTANCE_METERS,
     haversine_distance_meters,
     field_visit_max_allowed_distance_meters,
+)
+
+MINI_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
 
@@ -284,3 +290,65 @@ def test_check_call_reminders_notifies_assignee_for_field_visit(
     ]
     assert assignee_hits, sent
     assert assignee_hits[0]["data"].get("field_visit_id") is not None
+
+
+@pytest.mark.django_db
+def test_field_visit_with_client_location_photo(authenticated_admin, company):
+    from crm.models import Client, ClientFieldVisit
+
+    client = Client.objects.create(
+        name="Photo Lead",
+        company=company,
+        priority="medium",
+        type="fresh",
+    )
+    photo = SimpleUploadedFile("site.png", MINI_PNG_BYTES, content_type="image/png")
+
+    response = authenticated_admin.post(
+        "/api/v1/client-field-visits/",
+        {
+            "client": client.id,
+            "summary": "With location photo",
+            "visit_datetime": timezone.now().isoformat(),
+            "employee_latitude": "33.315200",
+            "employee_longitude": "44.366100",
+            "client_location_photo": photo,
+        },
+        format="multipart",
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    data = api_body(response)
+    assert data.get("client_location_photo_url")
+
+    visit = ClientFieldVisit.objects.get(pk=data["id"])
+    assert visit.client_location_photo
+
+
+@pytest.mark.django_db
+def test_field_visit_rejects_invalid_location_photo(authenticated_admin, company):
+    from crm.models import Client
+
+    client = Client.objects.create(
+        name="Bad Photo Lead",
+        company=company,
+        priority="medium",
+        type="fresh",
+    )
+    bad = SimpleUploadedFile("evil.exe", b"MZ", content_type="application/octet-stream")
+
+    response = authenticated_admin.post(
+        "/api/v1/client-field-visits/",
+        {
+            "client": client.id,
+            "summary": "Bad photo",
+            "visit_datetime": timezone.now().isoformat(),
+            "employee_latitude": "33.315200",
+            "employee_longitude": "44.366100",
+            "client_location_photo": bad,
+        },
+        format="multipart",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    body = response.json()
+    details = body.get("error", {}).get("details") or body
+    assert "client_location_photo" in details

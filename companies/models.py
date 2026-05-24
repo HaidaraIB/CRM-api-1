@@ -50,6 +50,10 @@ class Company(models.Model):
         default="UTC",
         help_text="IANA timezone for business calendar (weekly day off, etc.).",
     )
+    field_visit_enabled = models.BooleanField(
+        default=True,
+        help_text="Allow field visits (الزيارة الميدانية) for this company (subject to platform policy).",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

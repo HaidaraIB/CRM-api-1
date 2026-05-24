@@ -73,6 +73,7 @@ from crm.views import (
     ClientVisitViewSet,
     ClientFieldVisitViewSet,
     ClientEventViewSet,
+    feature_policy_view,
 )
 from settings.views import (
     ChannelViewSet,
@@ -274,6 +275,7 @@ v1_patterns = [
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     path("integrations/", include(integrations_urls)),
+    path("crm/feature-policies/", feature_policy_view, name="feature_policy"),
     path("", include("notifications.urls")),
 ]
 

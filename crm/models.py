@@ -682,6 +682,12 @@ class ClientFieldVisit(models.Model):
         decimal_places=6,
         help_text="Employee GPS longitude at submit time",
     )
+    client_location_photo = models.ImageField(
+        upload_to="field_visit_location_photos/",
+        blank=True,
+        null=True,
+        help_text="Optional photo of the client location at visit time.",
+    )
     created_by = models.ForeignKey(
         "accounts.User",
         on_delete=models.SET_NULL,
