@@ -257,6 +257,10 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "campaign",
             "source",
             "integration_account",
+            "meta_leadgen_id",
+            "meta_qualification_status",
+            "meta_qualification_sent_at",
+            "meta_qualification_error",
             "created_by",
             "created_by_name",
             "created_at",
@@ -272,7 +276,17 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "created_by",
             "created_by_name",
             "patient_file_number",
+            "meta_leadgen_id",
+            "meta_qualification_sent_at",
+            "meta_qualification_error",
         ]
+
+    def validate_meta_qualification_status(self, value):
+        if value is not None and value not in ("qualified", "unqualified"):
+            raise serializers.ValidationError(
+                "meta_qualification_status must be 'qualified', 'unqualified', or null."
+            )
+        return value
 
     def validate_communication_way(self, value):
         """Ensure communication_way belongs to the same company"""
@@ -510,6 +524,12 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         request = self.context.get('request')
         user = request.user if request else None
 
+        previous_meta_qualification = instance.meta_qualification_status
+        new_meta_qualification = validated_data.get(
+            "meta_qualification_status",
+            previous_meta_qualification,
+        )
+
         # Track changes for event logging
         changes = []
         
@@ -611,6 +631,18 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                 is_primary=True,
             )
 
+        if "meta_qualification_status" in validated_data:
+            from integrations.services.meta_conversion_leads import apply_qualification_status_change
+            apply_qualification_status_change(
+                instance,
+                new_meta_qualification,
+                previous_meta_qualification,
+            )
+            instance.refresh_from_db(fields=[
+                "meta_qualification_sent_at",
+                "meta_qualification_error",
+            ])
+
         return instance
 
 
@@ -678,6 +710,10 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
             "campaign",
             "source",
             "integration_account",
+            "meta_leadgen_id",
+            "meta_qualification_status",
+            "meta_qualification_sent_at",
+            "meta_qualification_error",
             "created_by",
             "created_by_name",
             "created_at",

@@ -380,6 +380,34 @@ class MetaOAuth(OAuthBase):
             response.raise_for_status()
         return False
 
+    def send_conversion_leads_events(self, pixel_id, access_token, events):
+        """
+        POST Conversion Leads funnel stage events to Meta Conversions API.
+        events: list of dicts per Meta Conversion Leads payload spec.
+        """
+        url = f"{self.graph_api_url}/{pixel_id}/events"
+        params = {'access_token': access_token}
+        proof = self._appsecret_proof(access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        body = {'data': events}
+        response = requests.post(url, params=params, json=body)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {'error': {'message': response.text or 'Invalid response from Meta'}}
+        if not response.ok:
+            err_msg = (
+                data.get('error', {}).get('message')
+                if isinstance(data, dict)
+                else response.text
+            ) or 'Failed to send Conversion Leads events'
+            raise requests.exceptions.HTTPError(
+                f"Facebook API: {err_msg}",
+                response=response,
+            )
+        return data
+
 
 # TikTok: لا نستخدم OAuth (Login Kit) هنا. TikTok في هذا المشروع = Lead Gen فقط (ويب هوك استقبال الليدز).
 # انظر integrations/views.py → tiktok_leadgen_webhook و READMEs/TIKTOK_LEADGEN_TIKTOK_FOR_BUSINESS_GUIDE.md

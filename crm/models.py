@@ -221,6 +221,32 @@ class Client(models.Model):
         related_name="clients",
         help_text="حساب التكامل المرتبط بهذا العميل"
     )
+    meta_leadgen_id = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        help_text="Meta leadgen_id from Lead Ads webhook (15-17 digits) for Conversion Leads CAPI",
+    )
+    meta_qualification_status = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        choices=[
+            ("qualified", "Qualified"),
+            ("unqualified", "Unqualified"),
+        ],
+        help_text="Sales qualification for Meta Conversion Leads; null = not yet rated",
+    )
+    meta_qualification_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the last Meta qualification stage event was sent successfully",
+    )
+    meta_qualification_error = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Last error from Meta Conversion Leads event send (if any)",
+    )
 
     created_by = models.ForeignKey(
         "accounts.User",

@@ -1200,6 +1200,7 @@ def meta_webhook(request):
                                 campaign=campaign,
                                 source='meta_lead_form',
                                 integration_account=account,
+                                meta_leadgen_id=str(leadgen_id),
                                 phone_number=phone,  # للتوافق مع الإصدارات القديمة
                             )
                             
@@ -1228,6 +1229,17 @@ def meta_webhook(request):
                                 message=f'Lead received from Meta: {name}',
                                 response_data={'leadgen_id': leadgen_id, 'form_id': form_id},
                             )
+
+                            # Send Raw Lead stage to Meta Conversion Leads (best-effort)
+                            try:
+                                from integrations.services.meta_conversion_leads import send_raw_lead_event
+                                send_raw_lead_event(client)
+                            except Exception as capi_err:
+                                logger.warning(
+                                    "Meta Raw Lead CAPI event failed for client %s: %s",
+                                    client.id,
+                                    capi_err,
+                                )
                             
                             logger.info(f"Successfully created client from Meta lead: {client.id} - {client.name}")
                             

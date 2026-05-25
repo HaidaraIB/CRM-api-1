@@ -1160,6 +1160,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             'page_in_metadata': selected_page_id in page_ids if selected_page_id else False,
             'campaign_linked': bool((metadata.get('form_campaign_mapping') or {}).get(selected_form_id)),
         }
+        pixel_id = str(metadata.get('pixel_id') or '').strip()
+        conversion_leads = {
+            'pixel_id': pixel_id or None,
+            'pixel_configured': bool(pixel_id),
+            'conversion_leads_enabled': metadata.get('conversion_leads_enabled', True) is not False,
+        }
 
         now = timezone.now()
         week_ago = now - timedelta(days=7)
@@ -1190,6 +1196,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'client_secret_set': bool(getattr(settings, 'META_CLIENT_SECRET', '')),
             },
             'selection': selection,
+            'conversion_leads': conversion_leads,
             'pages': page_rows,
             'recent_activity': recent_activity,
         }

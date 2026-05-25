@@ -110,6 +110,9 @@ class IntegrationAccountCreateSerializer(serializers.ModelSerializer):
 
 class IntegrationAccountUpdateSerializer(serializers.ModelSerializer):
     """Serializer لتحديث حساب تكامل"""
+    pixel_id = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    conversion_leads_enabled = serializers.BooleanField(required=False, write_only=True)
+
     class Meta:
         model = IntegrationAccount
         fields = [
@@ -117,7 +120,23 @@ class IntegrationAccountUpdateSerializer(serializers.ModelSerializer):
             'account_link',
             'phone_number',
             'is_active',
+            'pixel_id',
+            'conversion_leads_enabled',
         ]
+
+    def update(self, instance, validated_data):
+        pixel_id = validated_data.pop('pixel_id', None)
+        conversion_leads_enabled = validated_data.pop('conversion_leads_enabled', None)
+        instance = super().update(instance, validated_data)
+        if instance.platform == 'meta' and (pixel_id is not None or conversion_leads_enabled is not None):
+            metadata = dict(instance.metadata) if isinstance(instance.metadata, dict) else {}
+            if pixel_id is not None:
+                metadata['pixel_id'] = str(pixel_id).strip()
+            if conversion_leads_enabled is not None:
+                metadata['conversion_leads_enabled'] = conversion_leads_enabled
+            instance.metadata = metadata
+            instance.save(update_fields=['metadata', 'updated_at'])
+        return instance
 
 
 class IntegrationAccountDetailSerializer(IntegrationAccountSerializer):
