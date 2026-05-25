@@ -27,6 +27,13 @@ from .views import (
     ai_management_report_generate_view,
 )
 from .whatsapp_webhook import whatsapp_webhook
+from .views.lead_api import (
+    inbound_lead_view,
+    LeadApiConfigView,
+    LeadApiKeyCreateView,
+    LeadApiKeyRotateView,
+    LeadApiKeyRevokeView,
+)
 
 router = DefaultRouter()
 router.register(r'accounts', IntegrationAccountViewSet, basename='integration-account')
@@ -36,6 +43,12 @@ router.register(r'whatsapp/messages', LeadWhatsAppMessageViewSet, basename='lead
 router.register(r'templates', MessageTemplateViewSet, basename='message-template')
 
 urlpatterns = [
+    # Before router: avoid accounts/<pk>/ capturing lead-api-* paths
+    path('accounts/lead-api-config/', LeadApiConfigView.as_view(), name='lead_api_config'),
+    path('accounts/lead-api-keys/', LeadApiKeyCreateView.as_view(), name='lead_api_keys_create'),
+    path('accounts/lead-api-keys/<int:key_id>/rotate/', LeadApiKeyRotateView.as_view(), name='lead_api_key_rotate'),
+    path('accounts/lead-api-keys/<int:key_id>/', LeadApiKeyRevokeView.as_view(), name='lead_api_key_revoke'),
+    path('leads/inbound/', inbound_lead_view, name='inbound_lead'),
     path('', include(router.urls)),
     path('whatsapp/send/', whatsapp_send_message, name='whatsapp_send'),
     path('whatsapp/send-template/', whatsapp_send_template, name='whatsapp_send_template'),

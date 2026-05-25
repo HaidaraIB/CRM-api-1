@@ -47,6 +47,7 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         "/api/payments/fib-callback/",
         "/api/integrations/accounts/oauth/callback/",
         "/api/integrations/webhooks/",
+        "/api/integrations/leads/inbound/",
     ]
 
     def process_request(self, request):

@@ -19,6 +19,13 @@ from .webhooks_messaging import (
     whatsapp_send_template,
     whatsapp_session_window,
 )
+from .lead_api import (
+    inbound_lead_view,
+    LeadApiConfigView,
+    LeadApiKeyCreateView,
+    LeadApiKeyRotateView,
+    LeadApiKeyRevokeView,
+)
 from .openai_ai import (
     ai_insight_approve_view,
     ai_insight_dismiss_view,
@@ -56,4 +63,9 @@ __all__ = [
     "ai_insight_dismiss_view",
     "ai_management_report_view",
     "ai_management_report_generate_view",
+    "inbound_lead_view",
+    "LeadApiConfigView",
+    "LeadApiKeyCreateView",
+    "LeadApiKeyRotateView",
+    "LeadApiKeyRevokeView",
 ]

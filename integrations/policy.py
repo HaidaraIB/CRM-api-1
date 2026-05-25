@@ -6,7 +6,7 @@ from integrations.models import IntegrationAccount, OpenAISettings, SmsProvider,
 from settings.models import SystemSettings
 from subscriptions.entitlements import build_company_entitlements
 
-INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio", "otpiq", "openai")
+INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio", "otpiq", "openai", "api")
 PLAN_INTEGRATION_FEATURE_MAP = {
     "meta": "integration_meta",
     "tiktok": "integration_tiktok",
@@ -14,6 +14,7 @@ PLAN_INTEGRATION_FEATURE_MAP = {
     "twilio": "integration_twilio",
     "otpiq": "integration_otpiq",
     "openai": "integration_openai",
+    "api": "integration_api",
 }
 SMS_INTEGRATION_PLATFORMS = ("twilio", "otpiq")
 INTEGRATION_POLICY_DEFAULTS = {

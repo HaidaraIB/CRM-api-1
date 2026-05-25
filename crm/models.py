@@ -207,11 +207,18 @@ class Client(models.Model):
             ('meta_lead_form', 'Meta Lead Form'),
             ('whatsapp', 'WhatsApp'),
             ('tiktok', 'TikTok'),
+            ('api', 'API / Custom Form'),
             ('manual', 'Manual'),
             ('other', 'Other'),
         ],
         default='manual',
         help_text="مصدر الليد"
+    )
+    external_lead_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Partner-provided idempotency key for API / custom form leads",
     )
     integration_account = models.ForeignKey(
         "integrations.IntegrationAccount",
@@ -275,6 +282,11 @@ class Client(models.Model):
             models.UniqueConstraint(
                 fields=["company", "patient_file_number"],
                 name="uniq_client_company_patient_file_number",
+            ),
+            models.UniqueConstraint(
+                fields=["company", "external_lead_id"],
+                condition=models.Q(external_lead_id__isnull=False),
+                name="uniq_client_company_external_lead_id",
             ),
         ]
 

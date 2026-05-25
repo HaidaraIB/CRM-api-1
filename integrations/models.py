@@ -11,6 +11,7 @@ class IntegrationPlatform(models.TextChoices):
     META = 'meta', 'Meta (Facebook/Instagram)'
     TIKTOK = 'tiktok', 'TikTok'
     WHATSAPP = 'whatsapp', 'WhatsApp Business'
+    API = 'api', 'Lead API / Custom Form'
     # يمكن إضافة المزيد لاحقاً
     # GOOGLE_ADS = 'google_ads', 'Google Ads'
     # LINKEDIN = 'linkedin', 'LinkedIn'
@@ -221,6 +222,55 @@ class IntegrationLog(models.Model):
     
     def __str__(self):
         return f"{self.account} - {self.action} - {self.status}"
+
+
+class CompanyLeadApiKey(models.Model):
+    """API key for external apps to submit leads via POST /integrations/leads/inbound/."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="lead_api_keys",
+    )
+    name = models.CharField(
+        max_length=128,
+        help_text="Label for this key (e.g. Website form, Mobile app)",
+    )
+    key_prefix = models.CharField(
+        max_length=16,
+        help_text="First characters of the key for display in the UI",
+    )
+    key_suffix = models.CharField(
+        max_length=8,
+        blank=True,
+        default="",
+        help_text="Last characters of the key for display in the UI",
+    )
+    key_hash = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="SHA-256 hash of the full API key",
+    )
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_lead_api_keys",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "company_lead_api_keys"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["company", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"{self.company_id} - {self.name} ({self.key_prefix}…)"
 
 
 class OAuthState(models.Model):
