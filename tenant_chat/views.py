@@ -52,6 +52,18 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+def _parse_positive_int(raw):
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
 class TenantChatConversationViewSet(viewsets.ModelViewSet):
     """
     Internal DM threads scoped to the authenticated user's company.
@@ -184,18 +196,21 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
             order = self.request.query_params.get("ordering") or "-created_at"
             if order not in ("created_at", "-created_at"):
                 order = "-created_at"
-            qs = (
-                ChatMessage.objects.filter(conversation=conversation)
-                .select_related(
-                    "sender",
-                    "reply_to",
-                    "reply_to__sender",
-                    "forwarded_from",
-                    "forwarded_from__sender",
-                )
-                .order_by(order)
+            before_id = _parse_positive_int(self.request.query_params.get("before_id"))
+            after_id = _parse_positive_int(self.request.query_params.get("after_id"))
+            around_id = _parse_positive_int(self.request.query_params.get("around_id"))
+            page_size = _parse_positive_int(self.request.query_params.get("page_size")) or 50
+            page_size = min(page_size, 200)
+
+            qs_base = ChatMessage.objects.filter(conversation=conversation).select_related(
+                "sender",
+                "reply_to",
+                "reply_to__sender",
+                "forwarded_from",
+                "forwarded_from__sender",
             )
-            page = self.paginate_queryset(qs)
+            qs = qs_base.order_by(order)
+            page = None
             if conversation.kind == ChatConversation.Kind.COMPANY_GROUP:
                 peer_lr = None
             else:
@@ -213,6 +228,84 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                 "conversation": conversation,
                 "peer_last_read_message_id": peer_lr,
             }
+            anchor_mode_count = sum(
+                1 for v in (before_id, after_id, around_id) if v is not None
+            )
+            if anchor_mode_count > 1:
+                return error_response(
+                    "Use only one of before_id, after_id, around_id.",
+                    code="chat_invalid_anchor_params",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            if before_id is not None:
+                older_qs = qs_base.filter(id__lt=before_id).order_by("-id")[:page_size]
+                rows = list(reversed(list(older_qs)))
+                has_older = qs_base.filter(id__lt=(rows[0].id if rows else before_id)).exists()
+                has_newer = qs_base.filter(id__gte=before_id).exists()
+                ser = ChatMessageSerializer(rows, many=True, context=ctx)
+                return Response(
+                    {
+                        "count": qs_base.count(),
+                        "next": None,
+                        "previous": None,
+                        "results": ser.data,
+                        "has_older": has_older,
+                        "has_newer": has_newer,
+                        "anchor_id": before_id,
+                    }
+                )
+            if after_id is not None:
+                newer_qs = qs_base.filter(id__gt=after_id).order_by("id")[:page_size]
+                rows = list(newer_qs)
+                has_older = qs_base.filter(id__lte=after_id).exists()
+                has_newer = qs_base.filter(id__gt=(rows[-1].id if rows else after_id)).exists()
+                ser = ChatMessageSerializer(rows, many=True, context=ctx)
+                return Response(
+                    {
+                        "count": qs_base.count(),
+                        "next": None,
+                        "previous": None,
+                        "results": ser.data,
+                        "has_older": has_older,
+                        "has_newer": has_newer,
+                        "anchor_id": after_id,
+                    }
+                )
+            if around_id is not None:
+                target = qs_base.filter(id=around_id).first()
+                if target is None:
+                    return error_response(
+                        "Message not found in this conversation.",
+                        code="chat_message_not_found",
+                        status_code=status.HTTP_404_NOT_FOUND,
+                    )
+                before_n = page_size // 2
+                after_n = page_size - before_n - 1
+                older = list(
+                    reversed(
+                        list(
+                            qs_base.filter(id__lt=around_id).order_by("-id")[:before_n]
+                        )
+                    )
+                )
+                newer = list(qs_base.filter(id__gt=around_id).order_by("id")[:after_n])
+                rows = [*older, target, *newer]
+                has_older = qs_base.filter(id__lt=(rows[0].id if rows else around_id)).exists()
+                has_newer = qs_base.filter(id__gt=(rows[-1].id if rows else around_id)).exists()
+                ser = ChatMessageSerializer(rows, many=True, context=ctx)
+                return Response(
+                    {
+                        "count": qs_base.count(),
+                        "next": None,
+                        "previous": None,
+                        "results": ser.data,
+                        "has_older": has_older,
+                        "has_newer": has_newer,
+                        "anchor_id": around_id,
+                    }
+                )
+
+            page = self.paginate_queryset(qs)
             to_serialize = page if page is not None else qs
             ser = ChatMessageSerializer(to_serialize, many=True, context=ctx)
             if page is not None:
