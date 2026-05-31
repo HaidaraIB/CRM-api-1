@@ -13,6 +13,15 @@ MEDICAL_ASSIGNEE_ROLES = frozenset(
         Role.DOCTOR.value,
     }
 )
+
+
+def _format_client_location_pair(latitude, longitude):
+    """Store map pin as lat,lng for timeline (both required)."""
+    if latitude is None or longitude is None:
+        return None
+    return f"{latitude},{longitude}"
+
+
 from .models import (
     Client,
     Deal,
@@ -571,6 +580,34 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                     'notes': notes
                 })
 
+        if (
+            "location_latitude" in validated_data
+            or "location_longitude" in validated_data
+        ):
+            new_lat = validated_data.get(
+                "location_latitude", instance.location_latitude
+            )
+            new_lng = validated_data.get(
+                "location_longitude", instance.location_longitude
+            )
+            old_lat = instance.location_latitude
+            old_lng = instance.location_longitude
+            if old_lat != new_lat or old_lng != new_lng:
+                old_loc = _format_client_location_pair(old_lat, old_lng)
+                new_loc = _format_client_location_pair(new_lat, new_lng)
+                if new_loc is None:
+                    notes_key = "lead_location_cleared"
+                elif old_loc is None:
+                    notes_key = "lead_location_set"
+                else:
+                    notes_key = "lead_location_updated"
+                changes.append({
+                    "event_type": "location_update",
+                    "old_value": old_loc or "",
+                    "new_value": new_loc or "",
+                    "notes": notes_key,
+                })
+
         # Generic edit detection for other important fields
         other_fields = [
             'name',
@@ -582,8 +619,6 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             'lead_company_name',
             'profession',
             'residence',
-            'location_latitude',
-            'location_longitude',
             'notes',
             'interested_developer',
             'interested_project',
