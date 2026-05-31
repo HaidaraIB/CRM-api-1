@@ -1,17 +1,94 @@
 from django.utils import timezone
 from datetime import timedelta
-from django.db import models
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from .models import (
     Client,
     ClientCall,
     ClientEvent,
+    ClientFieldVisit,
     ClientTask,
     ClientVisit,
     Deal,
 )
-from accounts.models import User
 from crm.signals import get_least_busy_employee
+
+
+def _assignee_acted_since_assignment():
+    """
+    True when the currently assigned employee logged contact/activity on this
+    lead at or after assigned_at (current assignment period only).
+    """
+    client_id = OuterRef("pk")
+    assignee_id = OuterRef("assigned_to")
+    since = OuterRef("assigned_at")
+
+    from integrations.models import LeadSMSMessage, LeadWhatsAppMessage
+
+    return (
+        Exists(
+            ClientEvent.objects.filter(
+                client=client_id,
+                created_by=assignee_id,
+                created_at__gte=since,
+            ).exclude(event_type="re_assignment")
+        )
+        | Exists(
+            ClientTask.objects.filter(
+                client=client_id,
+                created_by=assignee_id,
+                created_at__gte=since,
+            )
+        )
+        | Exists(
+            ClientCall.objects.filter(
+                client=client_id,
+                created_by=assignee_id,
+            ).filter(
+                Q(call_datetime__isnull=False, call_datetime__gte=since)
+                | Q(call_datetime__isnull=True, created_at__gte=since)
+            )
+        )
+        | Exists(
+            ClientVisit.objects.filter(
+                client=client_id,
+                created_by=assignee_id,
+            ).filter(
+                Q(visit_datetime__isnull=False, visit_datetime__gte=since)
+                | Q(visit_datetime__isnull=True, created_at__gte=since)
+            )
+        )
+        | Exists(
+            ClientFieldVisit.objects.filter(
+                client=client_id,
+                created_by=assignee_id,
+            ).filter(
+                Q(visit_datetime__isnull=False, visit_datetime__gte=since)
+                | Q(visit_datetime__isnull=True, created_at__gte=since)
+            )
+        )
+        | Exists(
+            Deal.objects.filter(
+                client=client_id,
+                employee=assignee_id,
+                created_at__gte=since,
+            )
+        )
+        | Exists(
+            LeadWhatsAppMessage.objects.filter(
+                client=client_id,
+                created_by=assignee_id,
+                direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+                created_at__gte=since,
+            )
+        )
+        | Exists(
+            LeadSMSMessage.objects.filter(
+                client=client_id,
+                created_by=assignee_id,
+                created_at__gte=since,
+            )
+        )
+    )
 
 
 def re_assign_inactive_clients():
@@ -30,62 +107,18 @@ def re_assign_inactive_clients():
         hours_threshold = company.re_assign_hours or 24
         threshold_time = timezone.now() - timedelta(hours=hours_threshold)
         
-        # Find clients that:
-        # 1. Are assigned to an employee
-        # 2. Haven't been contacted since threshold_time
-        # 3. Either never had last_contacted_at or it's older than threshold
-        # 4. assigned_at is older than threshold (meaning they've been assigned for at least the threshold time)
-        clients_to_reassign = Client.objects.filter(
-            company=company,
-            assigned_to__isnull=False,
-            assigned_at__isnull=False,
-            assigned_at__lt=threshold_time
-        ).filter(
-            # Either last_contacted_at is None (never contacted) or older than threshold
-            models.Q(last_contacted_at__isnull=True) | 
-            models.Q(last_contacted_at__lt=threshold_time)
+        # Reassign when the current assignee has had the lead for at least the
+        # threshold period and logged no contact/activity since assigned_at.
+        clients_to_reassign = (
+            Client.objects.filter(
+                company=company,
+                assigned_to__isnull=False,
+                assigned_at__isnull=False,
+                assigned_at__lt=threshold_time,
+            )
+            .annotate(_assignee_acted_since_assignment=_assignee_acted_since_assignment())
+            .filter(_assignee_acted_since_assignment=False)
         )
-
-        # Lock the lead to its current employee if that employee has ever
-        # performed any action on it (task, call, visit, event, or deal).
-        # Once the assigned employee touches the lead, it must never be
-        # reassigned away from them by the auto-reassignment job.
-        assigned_acted = (
-            Exists(
-                ClientEvent.objects.filter(
-                    client=OuterRef('pk'),
-                    created_by=OuterRef('assigned_to'),
-                )
-            )
-            | Exists(
-                ClientTask.objects.filter(
-                    client=OuterRef('pk'),
-                    created_by=OuterRef('assigned_to'),
-                )
-            )
-            | Exists(
-                ClientCall.objects.filter(
-                    client=OuterRef('pk'),
-                    created_by=OuterRef('assigned_to'),
-                )
-            )
-            | Exists(
-                ClientVisit.objects.filter(
-                    client=OuterRef('pk'),
-                    created_by=OuterRef('assigned_to'),
-                )
-            )
-            | Exists(
-                Deal.objects.filter(
-                    client=OuterRef('pk'),
-                    employee=OuterRef('assigned_to'),
-                )
-            )
-        )
-
-        clients_to_reassign = clients_to_reassign.annotate(
-            _assigned_employee_acted=assigned_acted
-        ).filter(_assigned_employee_acted=False)
 
         for client in clients_to_reassign:
             # Get new employee (different from current one)
