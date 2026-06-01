@@ -81,22 +81,9 @@ def _build_notes(*, notes: str | None, email: str | None, custom_fields: dict | 
 
 
 def _default_lead_status_id(company) -> int | None:
-    from settings.models import LeadStatus
+    from crm.lead_defaults import get_default_lead_status_id
 
-    default = LeadStatus.objects.filter(
-        company=company,
-        is_active=True,
-        is_hidden=False,
-        is_default=True,
-    ).first()
-    if default:
-        return default.id
-    fallback = (
-        LeadStatus.objects.filter(company=company, is_active=True, is_hidden=False)
-        .order_by("id")
-        .first()
-    )
-    return fallback.id if fallback else None
+    return get_default_lead_status_id(company)
 
 
 def _notify_owner_new_lead(company, client) -> None:

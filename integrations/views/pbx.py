@@ -200,7 +200,11 @@ def pbx_dial_view(request):
 
     settings = _ensure_pbx_settings(company)
     if not settings.is_enabled:
-        return error_response("PBX integration is not enabled.", status_code=400)
+        return error_response(
+            "PBX integration is not enabled.",
+            code="pbx_not_enabled",
+            status_code=400,
+        )
 
     serializer = PbxDialRequestSerializer(data=request.data, context={"request": request})
     if not serializer.is_valid():

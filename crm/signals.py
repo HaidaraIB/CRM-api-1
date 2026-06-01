@@ -21,6 +21,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+@receiver(pre_save, sender=Client)
+def assign_default_status_on_create(sender, instance, **kwargs):
+    """Ensure new leads get the company default status when none is set."""
+    if instance.pk is not None:
+        return
+    if instance.status_id is not None:
+        return
+    if not instance.company_id:
+        return
+
+    from crm.lead_defaults import get_default_lead_status
+
+    default_status = get_default_lead_status(instance.company)
+    if default_status:
+        instance.status = default_status
+
+
 _INTEGRATION_AUTO_ASSIGN_NOTES = {
     "tiktok": "Auto-assigned from TikTok Lead Gen",
     "meta_lead_form": "Auto-assigned from Meta Lead Form",
