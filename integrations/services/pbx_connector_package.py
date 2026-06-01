@@ -15,9 +15,15 @@ CONNECTOR_DIR = Path(__file__).resolve().parents[2] / "scripts" / "pbx_connector
 
 
 def _api_base_url(request) -> str:
+    base = (
+        getattr(django_settings, "PUBLIC_API_BASE_URL", "")
+        or getattr(django_settings, "API_BASE_URL", "")
+    ).strip()
+    if base:
+        return base.rstrip("/")
     if request:
         return request.build_absolute_uri("/").rstrip("/")
-    return getattr(django_settings, "PUBLIC_API_BASE_URL", "https://your-api.example.com").rstrip("/")
+    return "https://your-api.example.com"
 
 
 def build_connector_config(settings: PbxSettings, request) -> dict:
@@ -32,6 +38,7 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "listen_port": 8787,
         "poll_interval_sec": 3,
         "ssl_verify": True,
+        "x_api_key": "",
     }
 
 
@@ -72,7 +79,14 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "5. In ZYCOO: Addons → API → Push Event → http://<this-pc-ip>:8787\n"
             "6. In CRM: Integrations → PBX — confirm Connector status is Online.\n\n"
             f"API base URL: {config['api_base_url']}\n"
-            f"PBX host: {config['pbx_host']}\n",
+            f"PBX host: {config['pbx_host']}\n"
+            "\n"
+            "api_base_url should be your public API origin, e.g. https://api.yourdomain.com\n"
+            "or https://api.yourdomain.com/api/v1 if that is what the CRM app uses.\n"
+            "\n"
+            "If you get HTTP 403 / error 1010, your host may use Cloudflare:\n"
+            "  - Add x_api_key in config.json (same as CRM web app API key), or\n"
+            "  - Whitelist your office IP for /api/*/integrations/pbx/connector/*\n",
         )
 
     return buffer.getvalue()

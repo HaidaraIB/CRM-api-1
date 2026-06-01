@@ -47,6 +47,7 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         "/api/payments/fib-callback/",
         "/api/integrations/accounts/oauth/callback/",
         "/api/integrations/webhooks/",
+        "/api/integrations/pbx/connector/",
         "/api/integrations/leads/inbound/",
     ]
 

@@ -64,11 +64,59 @@ def load_config() -> dict[str, Any]:
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
-def api_request(cfg: dict, method: str, path: str, body: dict | None = None) -> dict:
-    url = cfg["api_base_url"].rstrip("/") + path
+def build_api_url(cfg: dict, path: str) -> str:
+    """
+    Build full CRM API URL. Supports api_base_url as:
+      https://api.example.com
+      https://api.example.com/api/v1
+    path may be legacy '/api/integrations/...' or '/integrations/...'
+    """
+    base = (cfg.get("api_base_url") or "").rstrip("/")
+    if path.startswith("/api/integrations/"):
+        path = path[len("/api") :]
+    if not path.startswith("/"):
+        path = "/" + path
+    if base.endswith("/api/v1"):
+        return base + path
+    if base.endswith("/api"):
+        return base + path
+    return base + "/api" + path
+
+
+def _request_headers(cfg: dict, extra: dict[str, str] | None = None) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {cfg['connector_api_key']}",
+        "User-Agent": "LOOP-PBX-Connector/1.0",
+        "Accept": "application/json",
     }
+    app_key = (cfg.get("x_api_key") or cfg.get("app_api_key") or "").strip()
+    if app_key:
+        headers["X-API-Key"] = app_key
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _log_http_error(method: str, url: str, err: HTTPError) -> None:
+    body = ""
+    try:
+        body = err.read().decode("utf-8", errors="replace")[:800]
+    except Exception:
+        pass
+    logger.error("API %s %s failed: HTTP %s — %s", method, url, err.code, body or err.reason)
+    if err.code == 403 and ("1010" in body or "cloudflare" in body.lower()):
+        logger.error(
+            "This often means Cloudflare/WAF blocked the request. "
+            "Ask your host to allow POST from your office IP to /api/*/integrations/pbx/connector/* "
+            "or add the CRM web app API key as x_api_key in config.json."
+        )
+    elif err.code == 401:
+        logger.error("Check connector_api_key in config.json matches CRM → Integrations → PBX.")
+
+
+def api_request(cfg: dict, method: str, path: str, body: dict | None = None) -> dict:
+    url = build_api_url(cfg, path)
+    headers = _request_headers(cfg)
     data = None
     if body is not None:
         headers["Content-Type"] = "application/json"
@@ -81,7 +129,7 @@ def api_request(cfg: dict, method: str, path: str, body: dict | None = None) -> 
                 return raw["data"] if raw["data"] is not None else raw
             return raw
     except HTTPError as e:
-        logger.error("API %s %s failed: %s", method, path, e.read().decode())
+        _log_http_error(method, url, e)
         raise
 
 
@@ -157,14 +205,18 @@ class AmiClient:
 
 
 def forward_event(cfg: dict, raw_body: bytes, content_type: str) -> None:
-    url = cfg["api_base_url"].rstrip("/") + "/api/integrations/pbx/connector/events/"
-    headers = {
-        "Authorization": f"Bearer {cfg['connector_api_key']}",
-        "Content-Type": content_type or "application/json",
-    }
+    url = build_api_url(cfg, "/integrations/pbx/connector/events/")
+    headers = _request_headers(
+        cfg,
+        {"Content-Type": content_type or "application/json"},
+    )
     req = urlrequest.Request(url, data=raw_body, headers=headers, method="POST")
-    with _urlopen(cfg, req, timeout=30) as resp:
-        logger.info("Forwarded event: %s", resp.read().decode()[:200])
+    try:
+        with _urlopen(cfg, req, timeout=30) as resp:
+            logger.info("Forwarded event: %s", resp.read().decode()[:200])
+    except HTTPError as e:
+        _log_http_error("POST", url, e)
+        raise
 
 
 def poll_commands(cfg: dict, ami: AmiClient) -> None:
@@ -230,6 +282,11 @@ def make_webhook_handler(cfg: dict):
 
 def main() -> None:
     cfg = load_config()
+    logger.info("CRM API base: %s", cfg.get("api_base_url"))
+    logger.info(
+        "Heartbeat URL: %s",
+        build_api_url(cfg, "/integrations/pbx/connector/heartbeat/"),
+    )
     ami = AmiClient(
         cfg["pbx_host"],
         int(cfg.get("ami_port", 5038)),
