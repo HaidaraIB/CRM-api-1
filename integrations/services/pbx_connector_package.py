@@ -10,6 +10,7 @@ from pathlib import Path
 from django.conf import settings as django_settings
 
 from integrations.models import PbxSettings
+from integrations.pbx_connector_meta import get_pbx_connector_version
 
 CONNECTOR_DIR = Path(__file__).resolve().parents[2] / "scripts" / "pbx_connector"
 
@@ -47,7 +48,8 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
     config = build_connector_config(settings, request)
 
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name in ("connector.py", "requirements.txt"):
+        version = get_pbx_connector_version()
+        for name in ("connector.py", "requirements.txt", "VERSION"):
             path = CONNECTOR_DIR / name
             if path.is_file():
                 zf.writestr(name, path.read_text(encoding="utf-8"))
@@ -69,6 +71,7 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
         zf.writestr(
             "INSTALL.txt",
             "LOOP CRM — PBX LAN Connector\n"
+            f"Package version: {version}\n"
             "============================\n\n"
             "1. Install Python 3.10+ on a PC on the same network as your ZYCOO PBX.\n"
             "2. pip install -r requirements.txt\n"

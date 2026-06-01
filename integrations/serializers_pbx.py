@@ -9,12 +9,14 @@ from accounts.models import User
 from crm.models import Client
 from integrations.encryption import decrypt_token, encrypt_token
 from integrations.models import PbxDialCommand, PbxSettings, UserPbxExtension
+from integrations.pbx_connector_meta import get_pbx_connector_version
 
 
 class PbxSettingsSerializer(serializers.ModelSerializer):
     ami_password_masked = serializers.SerializerMethodField(read_only=True)
     webhook_url = serializers.SerializerMethodField(read_only=True)
     connector_online = serializers.SerializerMethodField(read_only=True)
+    connector_package_version = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = PbxSettings
@@ -30,6 +32,7 @@ class PbxSettingsSerializer(serializers.ModelSerializer):
             "webhook_url",
             "connector_api_key",
             "connector_install_key",
+            "connector_package_version",
             "is_enabled",
             "auto_log_calls",
             "screen_pop_enabled",
@@ -74,6 +77,9 @@ class PbxSettingsSerializer(serializers.ModelSerializer):
         from datetime import timedelta
 
         return obj.connector_last_seen_at >= timezone.now() - timedelta(minutes=3)
+
+    def get_connector_package_version(self, obj):
+        return get_pbx_connector_version()
 
     def update(self, instance, validated_data):
         pwd = validated_data.pop("ami_password", None)

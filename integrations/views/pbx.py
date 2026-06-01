@@ -34,6 +34,7 @@ from integrations.serializers_pbx import (
     UserPbxExtensionSerializer,
 )
 from integrations.services.pbx_handler import process_pbx_payload
+from integrations.pbx_connector_meta import get_pbx_connector_version
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,7 @@ def pbx_health_view(request):
             "is_enabled": settings.is_enabled,
             "connector_online": serialized.get("connector_online"),
             "connector_last_seen_at": settings.connector_last_seen_at,
+            "connector_package_version": get_pbx_connector_version(),
             "last_event_at": last_event_at,
             "extensions_mapped_count": extensions_count,
             "pbx_host_configured": pbx_host_configured,

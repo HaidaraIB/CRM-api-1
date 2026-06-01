@@ -22,7 +22,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("pbx_connector")
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
-CONNECTOR_VERSION = "1.1.0"  # 1.1.0 = X-Connector-Key auth (not Bearer JWT)
+_VERSION_FILE = Path(__file__).resolve().parent / "VERSION"
+
+
+def _read_connector_version() -> str:
+    try:
+        return _VERSION_FILE.read_text(encoding="utf-8").strip() or "1.1.0"
+    except OSError:
+        return "1.1.0"
+
+
+CONNECTOR_VERSION = _read_connector_version()
 
 _SSL_HELP = (
     "SSL certificate verification failed. On macOS with python.org Python, run:\n"
