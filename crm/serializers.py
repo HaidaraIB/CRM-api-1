@@ -1084,6 +1084,10 @@ class ClientCallSerializer(serializers.ModelSerializer):
         source="created_by.username", read_only=True
     )
     call_method_name = serializers.CharField(source="call_method.name", read_only=True)
+    pbx_direction = serializers.SerializerMethodField(read_only=True)
+    pbx_disposition = serializers.SerializerMethodField(read_only=True)
+    pbx_duration_sec = serializers.SerializerMethodField(read_only=True)
+    pbx_recording_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClientCall
@@ -1093,6 +1097,12 @@ class ClientCallSerializer(serializers.ModelSerializer):
             "client_name",
             "call_method",
             "call_method_name",
+            "source",
+            "pbx_call_record",
+            "pbx_direction",
+            "pbx_disposition",
+            "pbx_duration_sec",
+            "pbx_recording_url",
             "notes",
             "call_datetime",
             "follow_up_date",
@@ -1102,6 +1112,29 @@ class ClientCallSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def _pbx_record(self, obj):
+        return getattr(obj, "pbx_call_record", None)
+
+    def get_pbx_direction(self, obj):
+        rec = self._pbx_record(obj)
+        return rec.direction if rec else None
+
+    def get_pbx_disposition(self, obj):
+        rec = self._pbx_record(obj)
+        return rec.disposition if rec else None
+
+    def get_pbx_duration_sec(self, obj):
+        rec = self._pbx_record(obj)
+        if not rec:
+            return None
+        return rec.billsec or rec.duration_sec or None
+
+    def get_pbx_recording_url(self, obj):
+        rec = self._pbx_record(obj)
+        if not rec or not rec.recording_url:
+            return None
+        return rec.recording_url
 
     def validate_call_method(self, value):
         """Ensure call_method belongs to the same company as the client"""
@@ -1414,6 +1447,10 @@ class ClientCallListSerializer(serializers.ModelSerializer):
         source="created_by.username", read_only=True
     )
     call_method_name = serializers.CharField(source="call_method.name", read_only=True)
+    pbx_direction = serializers.SerializerMethodField(read_only=True)
+    pbx_disposition = serializers.SerializerMethodField(read_only=True)
+    pbx_duration_sec = serializers.SerializerMethodField(read_only=True)
+    pbx_recording_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClientCall
@@ -1423,6 +1460,12 @@ class ClientCallListSerializer(serializers.ModelSerializer):
             "client_name",
             "call_method",
             "call_method_name",
+            "source",
+            "pbx_call_record",
+            "pbx_direction",
+            "pbx_disposition",
+            "pbx_duration_sec",
+            "pbx_recording_url",
             "notes",
             "call_datetime",
             "follow_up_date",
@@ -1430,3 +1473,26 @@ class ClientCallListSerializer(serializers.ModelSerializer):
             "created_by_username",
             "created_at",
         ]
+
+    def _pbx_record(self, obj):
+        return getattr(obj, "pbx_call_record", None)
+
+    def get_pbx_direction(self, obj):
+        rec = self._pbx_record(obj)
+        return rec.direction if rec else None
+
+    def get_pbx_disposition(self, obj):
+        rec = self._pbx_record(obj)
+        return rec.disposition if rec else None
+
+    def get_pbx_duration_sec(self, obj):
+        rec = self._pbx_record(obj)
+        if not rec:
+            return None
+        return rec.billsec or rec.duration_sec or None
+
+    def get_pbx_recording_url(self, obj):
+        rec = self._pbx_record(obj)
+        if not rec or not rec.recording_url:
+            return None
+        return rec.recording_url

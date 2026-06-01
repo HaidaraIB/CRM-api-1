@@ -877,3 +877,212 @@ class MessageTemplate(models.Model):
     def __str__(self):
         return f"{self.company.name} - {self.name}"
 
+
+class PbxProvider(models.TextChoices):
+    ZYCOO = "zycoo", "ZYCOO CooVox"
+
+
+class PbxCallDirection(models.TextChoices):
+    INBOUND = "inbound", "Inbound"
+    OUTBOUND = "outbound", "Outbound"
+    INTERNAL = "internal", "Internal"
+
+
+class PbxCallDisposition(models.TextChoices):
+    ANSWERED = "answered", "Answered"
+    NO_ANSWER = "no_answer", "No Answer"
+    BUSY = "busy", "Busy"
+    FAILED = "failed", "Failed"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class PbxEventType(models.TextChoices):
+    RINGING = "ringing", "Ringing"
+    ANSWERED = "answered", "Answered"
+    HANGUP = "hangup", "Hangup"
+    MISSED = "missed", "Missed"
+    AGENT_LOGIN = "agent_login", "Agent Login"
+    AGENT_LOGOFF = "agent_logoff", "Agent Logoff"
+    OTHER = "other", "Other"
+
+
+class PbxDialCommandStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+
+
+class PbxSettings(models.Model):
+    """Per-company PBX integration (ZYCOO CooVox / Asterisk AMI)."""
+
+    company = models.OneToOneField(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="pbx_settings",
+    )
+    provider = models.CharField(
+        max_length=32,
+        choices=PbxProvider.choices,
+        default=PbxProvider.ZYCOO,
+    )
+    pbx_host = models.CharField(max_length=255, blank=True, default="")
+    ami_port = models.PositiveIntegerField(default=5038)
+    ami_username = models.CharField(max_length=128, blank=True, default="")
+    ami_password = models.TextField(blank=True, null=True, help_text="Encrypted AMI password")
+    webhook_token = models.CharField(max_length=64, unique=True, db_index=True)
+    webhook_secret = models.CharField(max_length=128, blank=True, default="")
+    connector_api_key = models.CharField(max_length=128, unique=True, db_index=True)
+    connector_install_key = models.CharField(max_length=64, blank=True, default="")
+    is_enabled = models.BooleanField(default=False)
+    auto_log_calls = models.BooleanField(default=True)
+    screen_pop_enabled = models.BooleanField(default=True)
+    connector_last_seen_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "integrations_pbx_settings"
+
+    def __str__(self):
+        return f"PBX ({self.provider}) — {self.company.name}"
+
+
+class UserPbxExtension(models.Model):
+    """Maps a CRM user to a PBX extension for screen pop and click-to-dial."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="user_pbx_extensions",
+    )
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="pbx_extension",
+    )
+    extension = models.CharField(max_length=32, help_text="PBX extension number, e.g. 101")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "integrations_user_pbx_extension"
+        unique_together = [("company", "extension")]
+
+    def __str__(self):
+        return f"{self.user.username} → ext {self.extension}"
+
+
+class PbxCallRecord(models.Model):
+    """CDR / call events from the PBX."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="pbx_call_records",
+    )
+    uniqueid = models.CharField(max_length=128, db_index=True)
+    event_type = models.CharField(
+        max_length=32,
+        choices=PbxEventType.choices,
+        default=PbxEventType.OTHER,
+    )
+    direction = models.CharField(
+        max_length=16,
+        choices=PbxCallDirection.choices,
+        default=PbxCallDirection.INBOUND,
+    )
+    caller = models.CharField(max_length=32, blank=True, default="")
+    callee = models.CharField(max_length=32, blank=True, default="")
+    extension = models.CharField(max_length=32, blank=True, default="")
+    disposition = models.CharField(
+        max_length=16,
+        choices=PbxCallDisposition.choices,
+        default=PbxCallDisposition.UNKNOWN,
+    )
+    started_at = models.DateTimeField(blank=True, null=True)
+    answered_at = models.DateTimeField(blank=True, null=True)
+    ended_at = models.DateTimeField(blank=True, null=True)
+    duration_sec = models.PositiveIntegerField(default=0)
+    billsec = models.PositiveIntegerField(default=0)
+    recording_url = models.URLField(blank=True, default="", max_length=500)
+    recording_path = models.CharField(max_length=500, blank=True, default="")
+    client = models.ForeignKey(
+        "crm.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pbx_call_records",
+    )
+    agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pbx_call_records",
+    )
+    raw_payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "integrations_pbx_call_record"
+        ordering = ["-started_at", "-created_at"]
+        indexes = [
+            models.Index(fields=["company", "started_at"]),
+            models.Index(fields=["company", "extension"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company", "uniqueid", "event_type"],
+                name="uniq_pbx_call_company_uniqueid_event",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.uniqueid} ({self.event_type})"
+
+
+class PbxDialCommand(models.Model):
+    """Queued click-to-dial command for the LAN connector."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="pbx_dial_commands",
+    )
+    requested_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pbx_dial_commands",
+    )
+    client = models.ForeignKey(
+        "crm.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pbx_dial_commands",
+    )
+    phone_number = models.CharField(max_length=32)
+    extension = models.CharField(max_length=32)
+    status = models.CharField(
+        max_length=16,
+        choices=PbxDialCommandStatus.choices,
+        default=PbxDialCommandStatus.PENDING,
+    )
+    result_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        db_table = "integrations_pbx_dial_command"
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["company", "status", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Dial {self.phone_number} via {self.extension} ({self.status})"
+

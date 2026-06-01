@@ -6,7 +6,7 @@ from integrations.models import IntegrationAccount, OpenAISettings, SmsProvider,
 from settings.models import SystemSettings
 from subscriptions.entitlements import build_company_entitlements
 
-INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio", "otpiq", "openai", "api")
+INTEGRATION_POLICY_PLATFORMS = ("meta", "tiktok", "whatsapp", "twilio", "otpiq", "openai", "api", "pbx")
 PLAN_INTEGRATION_FEATURE_MAP = {
     "meta": "integration_meta",
     "tiktok": "integration_tiktok",
@@ -15,6 +15,7 @@ PLAN_INTEGRATION_FEATURE_MAP = {
     "otpiq": "integration_otpiq",
     "openai": "integration_openai",
     "api": "integration_api",
+    "pbx": "integration_pbx",
 }
 SMS_INTEGRATION_PLATFORMS = ("twilio", "otpiq")
 INTEGRATION_POLICY_DEFAULTS = {
@@ -134,6 +135,12 @@ def _disable_company_platform_integrations(*, company_id: str | int, platform: s
             company_id=company_id,
             is_enabled=True,
         ).update(is_enabled=False)
+    if platform == "pbx":
+        from integrations.models import PbxSettings
+        PbxSettings.objects.filter(
+            company_id=company_id,
+            is_enabled=True,
+        ).update(is_enabled=False)
 
 
 def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] | None, new_policies: dict[str, Any] | None) -> None:
@@ -171,6 +178,12 @@ def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] |
                 if exception_company_ids:
                     openai_qs = openai_qs.exclude(company_id__in=exception_company_ids)
                 openai_qs.update(is_enabled=False)
+            if platform == "pbx":
+                from integrations.models import PbxSettings
+                pbx_qs = PbxSettings.objects.filter(is_enabled=True)
+                if exception_company_ids:
+                    pbx_qs = pbx_qs.exclude(company_id__in=exception_company_ids)
+                pbx_qs.update(is_enabled=False)
 
         # Company-level disable / exception removal transitions
         prev_overrides = prev["company_overrides"]

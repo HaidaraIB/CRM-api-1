@@ -7,6 +7,9 @@ from .models import (
     LeadSMSMessage,
     LeadWhatsAppMessage,
     MessageTemplate,
+    PbxSettings,
+    PbxCallRecord,
+    UserPbxExtension,
 )
 
 
@@ -155,4 +158,26 @@ class MessageTemplateAdmin(admin.ModelAdmin):
     search_fields = ['company__name', 'name', 'content']
     readonly_fields = ['created_at', 'updated_at']
     raw_id_fields = ['company']
+
+
+@admin.register(PbxSettings)
+class PbxSettingsAdmin(admin.ModelAdmin):
+    list_display = ['company', 'provider', 'is_enabled', 'connector_last_seen_at', 'updated_at']
+    list_filter = ['is_enabled', 'provider']
+    search_fields = ['company__name', 'pbx_host']
+    readonly_fields = ['webhook_token', 'connector_api_key', 'connector_last_seen_at', 'created_at', 'updated_at']
+
+
+@admin.register(UserPbxExtension)
+class UserPbxExtensionAdmin(admin.ModelAdmin):
+    list_display = ['company', 'user', 'extension', 'updated_at']
+    search_fields = ['user__username', 'extension', 'company__name']
+
+
+@admin.register(PbxCallRecord)
+class PbxCallRecordAdmin(admin.ModelAdmin):
+    list_display = ['uniqueid', 'company', 'event_type', 'direction', 'caller', 'callee', 'extension', 'started_at']
+    list_filter = ['event_type', 'direction', 'disposition']
+    search_fields = ['uniqueid', 'caller', 'callee', 'extension']
+    readonly_fields = ['raw_payload', 'created_at', 'updated_at']
 

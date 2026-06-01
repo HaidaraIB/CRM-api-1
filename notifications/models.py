@@ -20,6 +20,10 @@ class NotificationType(models.TextChoices):
     LEAD_UPDATED = 'lead_updated', 'Lead Updated'
     LEAD_REMINDER = 'lead_reminder', 'Lead Reminder'
     TEAM_ACTIVITY = 'team_activity', 'Team Activity'
+
+    # PBX / Telephony
+    PBX_INCOMING_CALL = 'pbx_incoming_call', 'PBX Incoming Call'
+    PBX_CALL_MISSED = 'pbx_call_missed', 'PBX Call Missed'
     
     # WhatsApp Notifications
     WHATSAPP_MESSAGE_RECEIVED = 'whatsapp_message_received', 'WhatsApp Message Received'

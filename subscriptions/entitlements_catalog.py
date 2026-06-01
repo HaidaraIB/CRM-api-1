@@ -17,6 +17,7 @@ FEATURE_KEYS = (
     "integration_otpiq",
     "integration_openai",
     "integration_api",
+    "integration_pbx",
 )
 
 # Quotas (integer or "unlimited"/None)
@@ -45,6 +46,7 @@ DEFAULT_FEATURES = {
     "integration_otpiq": True,
     "integration_openai": True,
     "integration_api": True,
+    "integration_pbx": True,
 }
 
 # Default usage limits: None means unlimited (keeps current behavior)

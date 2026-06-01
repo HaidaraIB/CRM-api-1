@@ -611,6 +611,11 @@ class ClientTask(models.Model):
         return f"{self.client.name} - {stage_name}"
 
 
+class ClientCallSource(models.TextChoices):
+    MANUAL = "manual", "Manual"
+    PBX = "pbx", "PBX"
+
+
 class ClientCall(models.Model):
     """Model for client calls (similar to ClientTask but for calls)"""
     client = models.ForeignKey(
@@ -624,6 +629,18 @@ class ClientCall(models.Model):
         blank=True,
         null=True,
         help_text="Call method for this call",
+    )
+    source = models.CharField(
+        max_length=16,
+        choices=ClientCallSource.choices,
+        default=ClientCallSource.MANUAL,
+    )
+    pbx_call_record = models.ForeignKey(
+        "integrations.PbxCallRecord",
+        on_delete=models.SET_NULL,
+        related_name="client_calls",
+        blank=True,
+        null=True,
     )
     notes = models.TextField(blank=True, null=True)
     call_datetime = models.DateTimeField(blank=True, null=True, help_text="Date and time when the call happened")

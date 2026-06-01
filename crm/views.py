@@ -650,19 +650,23 @@ class ClientCallViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = super().get_queryset().select_related(
-            "client", "client__company", "call_method", "created_by",
+            "client", "client__company", "call_method", "created_by", "pbx_call_record",
         )
 
         if user.is_admin() or user.is_reception():
-            return queryset.filter(client__company=user.company)
+            queryset = queryset.filter(client__company=user.company)
+        elif user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            queryset = queryset.filter(client__company=user.company)
+        elif user.is_assigned_clinical_staff():
+            queryset = queryset.filter(client__assigned_to=user)
+        else:
+            queryset = queryset.none()
 
-        if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
-            return queryset.filter(client__company=user.company)
+        client_id = clean_int_query_param(self.request, "client")
+        if client_id is not None:
+            queryset = queryset.filter(client_id=client_id)
 
-        if user.is_assigned_clinical_staff():
-            return queryset.filter(client__assigned_to=user)
-
-        return queryset.none()
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)

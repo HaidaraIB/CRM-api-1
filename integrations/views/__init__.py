@@ -37,6 +37,23 @@ from .openai_ai import (
     openai_settings_test_view,
     openai_settings_view,
 )
+from .pbx import (
+    pbx_connector_command_ack_view,
+    pbx_connector_commands_view,
+    pbx_connector_events_view,
+    pbx_connector_heartbeat_view,
+    pbx_dial_view,
+    pbx_dial_status_view,
+    pbx_extension_delete_view,
+    pbx_extensions_view,
+    pbx_health_view,
+    pbx_connector_download_view,
+    pbx_reports_agents_view,
+    pbx_reports_summary_view,
+    pbx_rotate_connector_key_view,
+    pbx_settings_view,
+    pbx_webhook,
+)
 
 __all__ = [
     "IntegrationAccountViewSet",
@@ -68,4 +85,19 @@ __all__ = [
     "LeadApiKeyCreateView",
     "LeadApiKeyRotateView",
     "LeadApiKeyRevokeView",
+    "pbx_webhook",
+    "pbx_settings_view",
+    "pbx_rotate_connector_key_view",
+    "pbx_extensions_view",
+    "pbx_extension_delete_view",
+    "pbx_dial_view",
+    "pbx_dial_status_view",
+    "pbx_health_view",
+    "pbx_connector_download_view",
+    "pbx_connector_heartbeat_view",
+    "pbx_connector_events_view",
+    "pbx_connector_commands_view",
+    "pbx_connector_command_ack_view",
+    "pbx_reports_summary_view",
+    "pbx_reports_agents_view",
 ]

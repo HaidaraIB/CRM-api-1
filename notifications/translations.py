@@ -205,6 +205,26 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             'body': '{minutes_remaining} minutes remaining for follow-up call with {lead_name}'
         }
     },
+    'pbx_incoming_call': {
+        'ar': {
+            'title': 'مكالمة واردة',
+            'body': 'مكالمة واردة من {phone}'
+        },
+        'en': {
+            'title': 'Incoming Call',
+            'body': 'Incoming call from {phone}'
+        }
+    },
+    'pbx_call_missed': {
+        'ar': {
+            'title': 'مكالمة فائتة',
+            'body': 'مكالمة فائتة من {phone}'
+        },
+        'en': {
+            'title': 'Missed Call',
+            'body': 'Missed call from {phone}'
+        }
+    },
     'visit_reminder': {
         'ar': {
             'title': 'تذكير زيارة',
