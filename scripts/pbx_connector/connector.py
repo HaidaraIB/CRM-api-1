@@ -61,7 +61,15 @@ def _urlopen(cfg: dict, req: urlrequest.Request, timeout: int = 30):
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         raise FileNotFoundError(f"Missing {CONFIG_PATH} — copy config.example.json")
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    if isinstance(cfg.get("connector_api_key"), str):
+        cfg["connector_api_key"] = cfg["connector_api_key"].strip()
+    for field in ("api_base_url", "x_api_key", "app_api_key", "ami_username", "ami_password"):
+        if isinstance(cfg.get(field), str):
+            cfg[field] = cfg[field].strip()
+    if not cfg.get("connector_api_key"):
+        raise ValueError("connector_api_key is empty in config.json")
+    return cfg
 
 
 def build_api_url(cfg: dict, path: str) -> str:
@@ -111,7 +119,16 @@ def _log_http_error(method: str, url: str, err: HTTPError) -> None:
             "or add the CRM web app API key as x_api_key in config.json."
         )
     elif err.code == 401:
-        logger.error("Check connector_api_key in config.json matches CRM → Integrations → PBX.")
+        if "missing_api_key" in body or "invalid_api_key" in body:
+            logger.error(
+                "CRM requires X-API-Key (app API key). Add to config.json:\n"
+                '  "x_api_key": "<same as CRM web app API key>"'
+            )
+        else:
+            logger.error(
+                "Invalid connector API key. In CRM: Integrations → PBX → Connector API key.\n"
+                "Copy it again (if you clicked Rotate key, the old key no longer works)."
+            )
 
 
 def api_request(cfg: dict, method: str, path: str, body: dict | None = None) -> dict:

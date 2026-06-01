@@ -306,7 +306,11 @@ def pbx_connector_download_view(request):
 def pbx_connector_heartbeat_view(request):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))
     if not settings:
-        return error_response("Unauthorized.", status_code=401)
+        return error_response(
+            "Invalid connector API key.",
+            code="invalid_connector_key",
+            status_code=401,
+        )
     settings.connector_last_seen_at = timezone.now()
     settings.save(update_fields=["connector_last_seen_at", "updated_at"])
     return success_response({"ok": True})
@@ -317,7 +321,11 @@ def pbx_connector_heartbeat_view(request):
 def pbx_connector_events_view(request):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))
     if not settings:
-        return error_response("Unauthorized.", status_code=401)
+        return error_response(
+            "Invalid connector API key.",
+            code="invalid_connector_key",
+            status_code=401,
+        )
 
     events = request.data.get("events") if isinstance(request.data, dict) else None
     if events is None:
@@ -348,7 +356,11 @@ def pbx_connector_events_view(request):
 def pbx_connector_commands_view(request):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))
     if not settings:
-        return error_response("Unauthorized.", status_code=401)
+        return error_response(
+            "Invalid connector API key.",
+            code="invalid_connector_key",
+            status_code=401,
+        )
 
     settings.connector_last_seen_at = timezone.now()
     settings.save(update_fields=["connector_last_seen_at", "updated_at"])
@@ -379,7 +391,11 @@ def pbx_connector_commands_view(request):
 def pbx_connector_command_ack_view(request, command_id: int):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))
     if not settings:
-        return error_response("Unauthorized.", status_code=401)
+        return error_response(
+            "Invalid connector API key.",
+            code="invalid_connector_key",
+            status_code=401,
+        )
 
     try:
         cmd = PbxDialCommand.objects.get(
