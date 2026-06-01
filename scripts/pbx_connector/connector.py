@@ -22,6 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("pbx_connector")
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+CONNECTOR_VERSION = "1.1.0"  # 1.1.0 = X-Connector-Key auth (not Bearer JWT)
 
 _SSL_HELP = (
     "SSL certificate verification failed. On macOS with python.org Python, run:\n"
@@ -307,11 +308,25 @@ class ReuseAddrHTTPServer(HTTPServer):
 
 def main() -> None:
     cfg = load_config()
+    logger.info("LOOP PBX Connector v%s", CONNECTOR_VERSION)
     logger.info("CRM API base: %s", cfg.get("api_base_url"))
     logger.info(
         "Heartbeat URL: %s",
         build_api_url(cfg, "/integrations/pbx/connector/heartbeat/"),
     )
+    logger.info("Auth: X-Connector-Key (key length %s)", len(cfg["connector_api_key"]))
+
+    try:
+        api_request(cfg, "POST", "/api/integrations/pbx/connector/heartbeat/", {})
+        logger.info("CRM heartbeat OK — connector authenticated")
+    except Exception:
+        logger.error(
+            "CRM heartbeat failed. If you see JWT/Bearer errors, replace connector.py "
+            "with v%s+ from CRM download (old builds used Authorization Bearer).",
+            CONNECTOR_VERSION,
+        )
+        raise SystemExit(1) from None
+
     ami = AmiClient(
         cfg["pbx_host"],
         int(cfg.get("ami_port", 5038)),
