@@ -7,5 +7,6 @@
   "ami_password": "your-ami-password",
   "listen_host": "0.0.0.0",
   "listen_port": 8787,
-  "poll_interval_sec": 3
+  "poll_interval_sec": 3,
+  "ssl_verify": true
 }

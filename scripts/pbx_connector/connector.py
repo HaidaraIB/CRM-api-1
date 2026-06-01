@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import ssl
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -21,6 +22,40 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("pbx_connector")
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+
+_SSL_HELP = (
+    "SSL certificate verification failed. On macOS with python.org Python, run:\n"
+    "  pip install -r requirements.txt\n"
+    "  /Applications/Python 3.*/Install Certificates.command\n"
+    "Or set \"ssl_verify\": false in config.json only for local testing (not recommended)."
+)
+
+
+def _ssl_context(cfg: dict) -> ssl.SSLContext:
+    if cfg.get("ssl_verify") is False:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        logger.warning("ssl_verify is false — HTTPS certificates are not verified")
+        return ctx
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def _urlopen(cfg: dict, req: urlrequest.Request, timeout: int = 30):
+    try:
+        return urlrequest.urlopen(req, timeout=timeout, context=_ssl_context(cfg))
+    except URLError as exc:
+        reason = exc.reason
+        if isinstance(reason, ssl.SSLError) or (
+            reason is not None and "CERTIFICATE_VERIFY_FAILED" in str(reason)
+        ):
+            logger.error(_SSL_HELP)
+        raise
 
 
 def load_config() -> dict[str, Any]:
@@ -40,7 +75,7 @@ def api_request(cfg: dict, method: str, path: str, body: dict | None = None) -> 
         data = json.dumps(body).encode("utf-8")
     req = urlrequest.Request(url, data=data, headers=headers, method=method)
     try:
-        with urlrequest.urlopen(req, timeout=30) as resp:
+        with _urlopen(cfg, req, timeout=30) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
             if isinstance(raw, dict) and "data" in raw:
                 return raw["data"] if raw["data"] is not None else raw
@@ -128,7 +163,7 @@ def forward_event(cfg: dict, raw_body: bytes, content_type: str) -> None:
         "Content-Type": content_type or "application/json",
     }
     req = urlrequest.Request(url, data=raw_body, headers=headers, method="POST")
-    with urlrequest.urlopen(req, timeout=30) as resp:
+    with _urlopen(cfg, req, timeout=30) as resp:
         logger.info("Forwarded event: %s", resp.read().decode()[:200])
 
 

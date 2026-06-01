@@ -31,6 +31,7 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "listen_host": "0.0.0.0",
         "listen_port": 8787,
         "poll_interval_sec": 3,
+        "ssl_verify": True,
     }
 
 
@@ -65,6 +66,8 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "1. Install Python 3.10+ on a PC on the same network as your ZYCOO PBX.\n"
             "2. pip install -r requirements.txt\n"
             "3. Edit config.json — set ami_password (not included for security).\n"
+            "   macOS SSL error? Run: /Applications/Python 3.*/Install Certificates.command\n"
+            "   Or ensure certifi is installed (included in requirements.txt).\n"
             "4. Run: python connector.py  (or run.bat / run.sh)\n"
             "5. In ZYCOO: Addons → API → Push Event → http://<this-pc-ip>:8787\n"
             "6. In CRM: Integrations → PBX — confirm Connector status is Online.\n\n"
