@@ -125,7 +125,10 @@ def apply_oauth_token_to_account(account, token_data, user_info):
     if expires_in:
         account.token_expires_at = timezone.now() + timedelta(seconds=expires_in)
     account.external_account_id = user_info.get('id') or user_info.get('open_id') or str(account.id)
-    account.external_account_name = user_info.get('name') or user_info.get('display_name') or (account.name or 'Meta User')
+    display_name = user_info.get('name') or user_info.get('display_name')
+    account.external_account_name = display_name or (account.name or 'Meta User')
+    if account.platform == 'meta' and display_name and (not account.name or account.name.strip().lower() == 'meta'):
+        account.name = display_name
     account.status = 'connected'
     account.error_message = None
     account.metadata = {
@@ -168,7 +171,11 @@ def apply_oauth_token_to_account(account, token_data, user_info):
                     if first_phones:
                         account.metadata['waba_id'] = first_waba.get('waba_id')
                         account.metadata['phone_number_id'] = first_phones[0].get('id')
-                        account.phone_number = first_phones[0].get('display_phone_number')
+                        display_phone = (first_phones[0].get('display_phone_number') or '').strip()
+                        if display_phone and (
+                            not account.name or account.name.strip().lower() == 'whatsapp'
+                        ):
+                            account.name = display_phone
         except Exception as e:
             logger.warning("WhatsApp WABA/phone fetch failed: %s", e)
 
@@ -338,7 +345,10 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         """الحصول على حسابات الشركة فقط"""
         user = self.request.user
         queryset = IntegrationAccount.objects.filter(company=user.company)
-        
+        # TikTok Lead Gen uses an internal row (leadgen_{company_id}); not a user-managed account.
+        if self.action == 'list':
+            queryset = queryset.exclude(platform='tiktok')
+
         # فلترة حسب المنصة
         platform = self.request.query_params.get('platform', None)
         if platform:
@@ -363,10 +373,33 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
     
     def create(self, request, *args, **kwargs):
         platform = request.data.get("platform")
+        if platform == 'tiktok':
+            return error_response(
+                'TikTok uses webhook setup only. Configure it under Integrations → TikTok.',
+                code='bad_request',
+            )
         blocked = self._assert_platform_enabled(platform)
         if blocked is not None:
             return blocked
         return super().create(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        account = self.get_object()
+        if account.platform == 'tiktok':
+            return error_response(
+                'TikTok Lead Gen accounts cannot be deleted. Disable the integration in your plan settings instead.',
+                code='bad_request',
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        account = self.get_object()
+        if account.platform == 'tiktok':
+            return error_response(
+                'TikTok Lead Gen accounts are managed automatically via webhook.',
+                code='bad_request',
+            )
+        return super().update(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         """إنشاء حساب تكامل جديد"""

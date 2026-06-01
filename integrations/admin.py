@@ -40,8 +40,6 @@ class IntegrationAccountAdmin(admin.ModelAdmin):
             'fields': (
                 'external_account_id',
                 'external_account_name',
-                'account_link',
-                'phone_number',
             )
         }),
         ('معلومات OAuth', {

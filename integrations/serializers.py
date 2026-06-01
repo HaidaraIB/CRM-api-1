@@ -35,8 +35,6 @@ class IntegrationAccountSerializer(serializers.ModelSerializer):
             'name',
             'external_account_id',
             'external_account_name',
-            'account_link',
-            'phone_number',
             'status',
             'status_display',
             'is_active',
@@ -75,13 +73,18 @@ class IntegrationAccountCreateSerializer(serializers.ModelSerializer):
         fields = [
             'platform',
             'name',
-            'account_link',
-            'phone_number',
         ]
-    
+
     def validate(self, data):
         """التحقق من البيانات حسب المنصة"""
         platform = data.get('platform')
+        if platform == IntegrationPlatform.TIKTOK:
+            raise serializers.ValidationError({
+                'platform': (
+                    'TikTok uses webhook setup only. Configure it under Integrations → TikTok; '
+                    'accounts are created automatically when leads arrive.'
+                ),
+            })
         request = self.context.get('request')
         if request and getattr(request.user, 'is_authenticated', False):
             company = getattr(request.user, 'company', None)
@@ -93,18 +96,6 @@ class IntegrationAccountCreateSerializer(serializers.ModelSerializer):
                             'Remove the existing account first.'
                         )
                     })
-
-        if platform == 'whatsapp':
-            if not data.get('phone_number'):
-                raise serializers.ValidationError({
-                    'phone_number': 'رقم الهاتف مطلوب لـ WhatsApp'
-                })
-        elif platform in ['meta', 'tiktok']:
-            if not data.get('account_link'):
-                raise serializers.ValidationError({
-                    'account_link': 'رابط الحساب مطلوب'
-                })
-
         return data
 
 
@@ -117,8 +108,6 @@ class IntegrationAccountUpdateSerializer(serializers.ModelSerializer):
         model = IntegrationAccount
         fields = [
             'name',
-            'account_link',
-            'phone_number',
             'is_active',
             'pixel_id',
             'conversion_leads_enabled',

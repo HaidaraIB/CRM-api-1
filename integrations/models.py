@@ -68,18 +68,6 @@ class IntegrationAccount(models.Model):
         null=True,
         help_text="اسم الحساب في المنصة الخارجية"
     )
-    account_link = models.URLField(
-        blank=True,
-        null=True,
-        help_text="رابط الحساب (للمنصات التي تدعم الروابط)"
-    )
-    phone_number = models.CharField(
-        max_length=20,
-        blank=True,
-        null=True,
-        help_text="رقم الهاتف (لـ WhatsApp)"
-    )
-    
     # بيانات إضافية (JSON) لتخزين معلومات إضافية حسب المنصة
     metadata = models.JSONField(
         default=dict,
