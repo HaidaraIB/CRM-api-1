@@ -12,7 +12,7 @@ from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from accounts.permissions import HasActiveSubscription
@@ -70,10 +70,13 @@ def _get_settings_by_connector_key(key: str) -> PbxSettings | None:
 
 
 def _extract_connector_key(request) -> str:
+    key = (request.headers.get("X-Connector-Key") or "").strip()
+    if key:
+        return key
     auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
-    return (request.headers.get("X-Connector-Key") or "").strip()
+    return ""
 
 
 def _ensure_pbx_settings(company) -> PbxSettings:
@@ -302,6 +305,7 @@ def pbx_connector_download_view(request):
 
 
 @api_view(["POST"])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def pbx_connector_heartbeat_view(request):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))
@@ -317,6 +321,7 @@ def pbx_connector_heartbeat_view(request):
 
 
 @api_view(["POST"])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def pbx_connector_events_view(request):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))
@@ -352,6 +357,7 @@ def pbx_connector_events_view(request):
 
 
 @api_view(["GET"])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def pbx_connector_commands_view(request):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))
@@ -387,6 +393,7 @@ def pbx_connector_commands_view(request):
 
 
 @api_view(["POST"])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def pbx_connector_command_ack_view(request, command_id: int):
     settings = _get_settings_by_connector_key(_extract_connector_key(request))

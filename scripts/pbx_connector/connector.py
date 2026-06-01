@@ -92,8 +92,9 @@ def build_api_url(cfg: dict, path: str) -> str:
 
 
 def _request_headers(cfg: dict, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Use X-Connector-Key (not Authorization Bearer) — JWT auth treats Bearer as user tokens."""
     headers = {
-        "Authorization": f"Bearer {cfg['connector_api_key']}",
+        "X-Connector-Key": cfg["connector_api_key"],
         "User-Agent": "LOOP-PBX-Connector/1.0",
         "Accept": "application/json",
     }
@@ -127,7 +128,8 @@ def _log_http_error(method: str, url: str, err: HTTPError) -> None:
         else:
             logger.error(
                 "Invalid connector API key. In CRM: Integrations → PBX → Connector API key.\n"
-                "Copy it again (if you clicked Rotate key, the old key no longer works)."
+                "Copy it again (if you clicked Rotate key, the old key no longer works).\n"
+                "Use header X-Connector-Key (not Authorization Bearer)."
             )
 
 
