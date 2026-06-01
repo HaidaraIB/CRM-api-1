@@ -280,6 +280,12 @@ def make_webhook_handler(cfg: dict):
     return WebhookHandler
 
 
+class ReuseAddrHTTPServer(HTTPServer):
+    """Allow restart shortly after stopping (avoids 'Address already in use' on macOS)."""
+
+    allow_reuse_address = True
+
+
 def main() -> None:
     cfg = load_config()
     logger.info("CRM API base: %s", cfg.get("api_base_url"))
@@ -299,7 +305,18 @@ def main() -> None:
 
     host = cfg.get("listen_host", "0.0.0.0")
     port = int(cfg.get("listen_port", 8787))
-    server = HTTPServer((host, port), make_webhook_handler(cfg))
+    try:
+        server = ReuseAddrHTTPServer((host, port), make_webhook_handler(cfg))
+    except OSError as exc:
+        if getattr(exc, "errno", None) in (48, 98) or "already in use" in str(exc).lower():
+            logger.error(
+                "Port %s is already in use. Another connector (or app) is running.\n"
+                "  macOS: lsof -i :%s   then   kill <PID>\n"
+                "  Or change listen_port in config.json (and update ZYCOO Push Event URL).",
+                port,
+                port,
+            )
+        raise
     logger.info("Connector listening on %s:%s", host, port)
     server.serve_forever()
 
