@@ -77,17 +77,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
     "http://10.0.2.2:8000",  # Android emulator
-    "http://api.loop-crm.app",
     "https://api.loop-crm.app",
-    "http://www.api.loop-crm.app",
     "https://www.api.loop-crm.app",
-    "http://dashboard.loop-crm.app",
     "https://dashboard.loop-crm.app",
-    "http://www.dashboard.loop-crm.app",
     "https://www.dashboard.loop-crm.app",
-    "http://admin.loop-crm.app",
     "https://admin.loop-crm.app",
-    "http://www.admin.loop-crm.app",
     "https://www.admin.loop-crm.app",
 ]
 
@@ -173,7 +167,6 @@ CSRF_TRUSTED_ORIGINS = [
 # Automatically add base domain and subdomains to CSRF_TRUSTED_ORIGINS
 if BASE_DOMAIN:
     CSRF_TRUSTED_ORIGINS.append(f"https://{BASE_DOMAIN}")
-    CSRF_TRUSTED_ORIGINS.append(f"http://{BASE_DOMAIN}")
 
 # ============================================================================
 # Production Security Settings
