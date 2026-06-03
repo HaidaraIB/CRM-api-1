@@ -25,22 +25,34 @@ def phone_match_keys(phone: str) -> set[str]:
     return {k for k in keys if k}
 
 
+def _is_dialable_phone(phone: str) -> bool:
+    cleaned = (phone or "").strip()
+    if not cleaned:
+        return False
+    lowered = cleaned.lower()
+    if lowered in ("<unknown>", "unknown", "anonymous", "s", "h", "i"):
+        return False
+    digits = digits_only(cleaned)
+    # Skip bare extensions (e.g. 104) — require at least 7 digits for a real number.
+    return len(digits) >= 7
+
+
 def find_client_by_phone(company, phone: str) -> Optional[Client]:
     """Find a lead by phone number within a company."""
-    if not phone or not company:
+    if not phone or not company or not _is_dialable_phone(phone):
         return None
 
     keys = phone_match_keys(phone)
     if not keys:
         return None
 
-    # Primary client.phone field
-    for client in Client.objects.filter(company=company).only("id", "phone", "name", "assigned_to_id"):
-        client_keys = phone_match_keys(client.phone or "")
+    for client in Client.objects.filter(company=company).only(
+        "id", "phone_number", "name", "assigned_to_id"
+    ):
+        client_keys = phone_match_keys(client.phone_number or "")
         if keys & client_keys:
             return client
 
-    # ClientPhoneNumber rows
     for row in ClientPhoneNumber.objects.filter(client__company=company).select_related("client"):
         row_keys = phone_match_keys(row.phone_number or "")
         if keys & row_keys:

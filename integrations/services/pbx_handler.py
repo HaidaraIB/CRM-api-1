@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.utils import timezone
 
 from crm.models import ClientCall, ClientCallSource
@@ -182,7 +183,6 @@ def _auto_log_client_call(settings: PbxSettings, record: PbxCallRecord, client, 
     )
 
 
-@transaction.atomic
 def process_pbx_payload(
     settings: PbxSettings,
     raw_body: bytes,
@@ -208,13 +208,39 @@ def process_pbx_payload(
         )
         return {"ok": False, "reason": "pbx_disabled"}
 
+    max_attempts = 6
+    delay = 0.05
+    for attempt in range(max_attempts):
+        try:
+            with transaction.atomic():
+                return _apply_pbx_payload(settings, raw_body, content_type, source=source)
+        except OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt >= max_attempts - 1:
+                raise
+            logger.warning(
+                "PBX DB locked, retry %s/%s company_id=%s",
+                attempt + 1,
+                max_attempts,
+                settings.company_id,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 1.0)
+
+
+def _apply_pbx_payload(
+    settings: PbxSettings,
+    raw_body: bytes,
+    content_type: str,
+    *,
+    source: str,
+) -> dict[str, Any]:
     parsed = parse_zycoo_payload(raw_body, content_type)
     company = settings.company
     uniqueid = parsed["uniqueid"]
     event_type = parsed["event_type"]
 
     agent = _resolve_agent(company, parsed["extension"])
-    external_phone = parsed["external_phone"]
+    external_phone = parsed["external_phone"] or ""
     client = find_client_by_phone(company, external_phone) if external_phone else None
 
     record, created = PbxCallRecord.objects.get_or_create(

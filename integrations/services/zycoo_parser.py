@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone as dt_timezone
 from typing import Any
 from urllib.parse import parse_qs
@@ -103,6 +104,39 @@ def _infer_direction(data: dict[str, Any], caller: str, callee: str, extension: 
     return PbxCallDirection.INBOUND
 
 
+_PLACEHOLDER_CID = frozenset({"<unknown>", "unknown", "anonymous"})
+
+
+def _clean_caller_id(val: str) -> str:
+    cleaned = (val or "").strip()
+    if cleaned.lower() in _PLACEHOLDER_CID:
+        return ""
+    return cleaned
+
+
+def _looks_like_extension(val: str) -> bool:
+    digits = re.sub(r"\D", "", val or "")
+    return bool(digits) and len(digits) <= 6
+
+
+def _resolve_extension(
+    data: dict[str, Any], caller: str, callee: str, exten: str
+) -> str:
+    """Prefer DestCallerIDNum / short numeric IDs over Asterisk placeholder Exten 's'."""
+    candidates = (
+        _first(data, "DestCallerIDNum", "DestConnectedLineNum"),
+        _first(data, "DestExten", "DestExtension"),
+        exten,
+        callee,
+        caller,
+    )
+    for candidate in candidates:
+        cleaned = _clean_caller_id(candidate)
+        if cleaned and _looks_like_extension(cleaned):
+            return re.sub(r"\D", "", cleaned) or cleaned
+    return exten
+
+
 def _parse_int(val: str) -> int:
     try:
         return max(0, int(float(val or 0)))
@@ -120,26 +154,29 @@ def parse_zycoo_payload(raw_body: bytes, content_type: str = "") -> dict[str, An
     if not uniqueid:
         uniqueid = _first(data, "Linkedid", "linkedid") or f"unknown-{timezone.now().timestamp()}"
 
-    caller = _first(data, "CallerIDNum", "calleridnum", "Caller", "caller", "From", "from", "src")
-    callee = _first(
-        data,
-        "ConnectedLineNum",
-        "connectedlinenum",
-        "Callee",
-        "callee",
-        "To",
-        "to",
-        "dst",
-        "DialString",
+    caller = _clean_caller_id(
+        _first(data, "CallerIDNum", "calleridnum", "Caller", "caller", "From", "from", "src")
     )
-    extension = _first(data, "Exten", "exten", "Extension", "extension", "Agent", "agent")
-    if not extension and callee and len(callee) <= 6:
-        extension = callee
-    if not extension and caller and len(caller) <= 6:
-        extension = caller
+    callee = _clean_caller_id(
+        _first(
+            data,
+            "ConnectedLineNum",
+            "connectedlinenum",
+            "Callee",
+            "callee",
+            "To",
+            "to",
+            "dst",
+            "DialString",
+        )
+    )
+    exten_raw = _first(data, "Exten", "exten", "Extension", "extension", "Agent", "agent")
+    extension = _resolve_extension(data, caller, callee, exten_raw)
 
     direction = _infer_direction(data, caller, callee, extension)
     external_phone = caller if direction == PbxCallDirection.INBOUND else callee
+    if external_phone.lower() in _PLACEHOLDER_CID:
+        external_phone = ""
     if direction == PbxCallDirection.OUTBOUND and not external_phone:
         external_phone = callee
 
