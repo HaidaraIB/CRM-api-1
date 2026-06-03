@@ -49,8 +49,10 @@ class NotificationService:
             # Check if Firebase is already initialized
             if not firebase_admin._apps:
                 # Get Firebase credentials from environment or settings
-                firebase_credentials_path = os.getenv('FIREBASE_CREDENTIALS_PATH')
-                
+                firebase_credentials_path = getattr(
+                    settings, "FIREBASE_CREDENTIALS_PATH", ""
+                )
+
                 if firebase_credentials_path and os.path.exists(firebase_credentials_path):
                     cred = credentials.Certificate(firebase_credentials_path)
                     firebase_admin.initialize_app(cred)

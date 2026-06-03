@@ -19,6 +19,7 @@ from integrations.models import (
     UserPbxExtension,
 )
 from integrations.services.phone_match import find_client_by_phone
+from integrations.services.pbx_recording_service import apply_recording_path_from_cdr
 from integrations.services.zycoo_parser import parse_zycoo_payload
 from notifications.models import NotificationType
 from notifications.services import NotificationService
@@ -299,9 +300,7 @@ def _record_defaults(
         "duration_sec": parsed["duration_sec"],
         "billsec": parsed["billsec"],
         "recording_path": parsed["recording_path"],
-        "recording_url": _build_recording_url(
-            settings, parsed["recording_path"], parsed["recording_url"]
-        ),
+        "recording_url": parsed["recording_url"] or "",
         "client": client,
         "agent": agent,
         "raw_payload": parsed["raw_payload"],
@@ -329,11 +328,8 @@ def _record_updates(
         updates["duration_sec"] = parsed["duration_sec"]
     if parsed["billsec"]:
         updates["billsec"] = parsed["billsec"]
-    rec_url = _build_recording_url(
-        settings, parsed["recording_path"], parsed["recording_url"]
-    )
-    if rec_url:
-        updates["recording_url"] = rec_url
+    if parsed["recording_url"]:
+        updates["recording_url"] = parsed["recording_url"]
     if parsed["recording_path"]:
         updates["recording_path"] = parsed["recording_path"]
     if parsed["answered_at"]:
@@ -464,6 +460,18 @@ def process_pbx_payload(
         agent=agent,
         external_phone=external_phone,
     )
+
+    if parsed.get("recording_path"):
+        recording_path = parsed["recording_path"]
+
+        def _queue_recording(rid: int = record.id, path: str = recording_path) -> None:
+            try:
+                rec = PbxCallRecord.objects.get(pk=rid)
+                apply_recording_path_from_cdr(rec, path)
+            except PbxCallRecord.DoesNotExist:
+                pass
+
+        transaction.on_commit(_queue_recording)
 
     event_type = parsed["event_type"]
     uniqueid = parsed["uniqueid"]

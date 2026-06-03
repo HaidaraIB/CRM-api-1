@@ -8,8 +8,10 @@ import json
 import logging
 import secrets
 
+from django.core import signing
+
 from django.db import OperationalError
-from django.http import HttpResponse, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -23,8 +25,16 @@ from integrations.models import (
     PbxCallRecord,
     PbxDialCommand,
     PbxDialCommandStatus,
+    PbxRecordingStatus,
     PbxSettings,
     UserPbxExtension,
+)
+from integrations.services.pbx_recording_service import (
+    finalize_recording_upload,
+    list_pending_recording_jobs,
+    mark_recording_failed,
+    stream_recording_for_user,
+    verify_playback_token,
 )
 from integrations.views.twilio_sms import _integration_gate
 from integrations.services.pbx_connector_package import build_connector_zip
@@ -298,6 +308,28 @@ def pbx_health_view(request):
 
     pbx_host_configured = bool((settings.pbx_host or "").strip())
     ami_configured = bool((settings.ami_username or "").strip())
+    webhook_url = serialized.get("webhook_url") or ""
+
+    recording_pending = PbxCallRecord.objects.filter(
+        company=company,
+        recording_status__in=(
+            PbxRecordingStatus.PENDING,
+            PbxRecordingStatus.PROCESSING,
+        ),
+    ).count()
+    recording_failed = PbxCallRecord.objects.filter(
+        company=company,
+        recording_status=PbxRecordingStatus.FAILED,
+    ).count()
+    last_recording_ready_at = (
+        PbxCallRecord.objects.filter(
+            company=company,
+            recording_status=PbxRecordingStatus.READY,
+        )
+        .order_by("-updated_at")
+        .values_list("updated_at", flat=True)
+        .first()
+    )
 
     checks = {
         "integration_enabled": bool(settings.is_enabled),
@@ -306,6 +338,7 @@ def pbx_health_view(request):
         "connector_online": bool(serialized.get("connector_online")),
         "extensions_mapped": extensions_count > 0,
         "events_received": last_event_at is not None,
+        "recordings_clear": recording_pending == 0 and recording_failed == 0,
     }
 
     return success_response(
@@ -319,7 +352,14 @@ def pbx_health_view(request):
             "pbx_host_configured": pbx_host_configured,
             "ami_configured": ami_configured,
             "pbx_host": settings.pbx_host or "",
-            "push_event_url_hint": "http://<connector-pc-ip>:8787",
+            "webhook_url": webhook_url,
+            "push_event_url_hint": webhook_url or "http://<connector-pc-ip>:8787",
+            "push_event_connector_hint": "http://<connector-pc-ip>:8787",
+            "recordings": {
+                "pending": recording_pending,
+                "failed": recording_failed,
+                "last_ready_at": last_recording_ready_at,
+            },
             "checks": checks,
         }
     )
@@ -457,6 +497,96 @@ def pbx_connector_command_ack_view(request, command_id: int):
     cmd.processed_at = timezone.now()
     cmd.save(update_fields=["status", "result_message", "processed_at"])
     return success_response({"ok": True})
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def pbx_connector_recording_jobs_view(request):
+    settings = _get_settings_by_connector_key(_extract_connector_key(request))
+    if not settings:
+        return error_response(
+            "Invalid connector API key.",
+            code="invalid_connector_key",
+            status_code=401,
+        )
+    settings.connector_last_seen_at = timezone.now()
+    settings.save(update_fields=["connector_last_seen_at", "updated_at"])
+    jobs = list_pending_recording_jobs(settings.company_id)
+    return success_response({"jobs": jobs})
+
+
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def pbx_connector_recording_upload_view(request, record_id: int):
+    settings = _get_settings_by_connector_key(_extract_connector_key(request))
+    if not settings:
+        return error_response(
+            "Invalid connector API key.",
+            code="invalid_connector_key",
+            status_code=401,
+        )
+    try:
+        record = PbxCallRecord.objects.get(pk=record_id, company=settings.company)
+    except PbxCallRecord.DoesNotExist:
+        return error_response("Not found.", status_code=404)
+
+    upload = request.FILES.get("file")
+    if not upload:
+        mark_recording_failed(record_id, company_id=settings.company_id)
+        return error_response("Missing file.", code="missing_file", status_code=400)
+
+    try:
+        finalize_recording_upload(
+            record_id=record.id,
+            company_id=settings.company_id,
+            file_bytes=upload.read(),
+            original_filename=upload.name or "recording.wav",
+        )
+    except Exception:
+        logger.exception("Recording upload failed record_id=%s", record_id)
+        mark_recording_failed(record_id, company_id=settings.company_id)
+        return error_response("Upload failed.", status_code=500)
+
+    return success_response({"ok": True, "record_id": record.id, "status": "ready"})
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def pbx_recording_play_view(request, record_id: int):
+    token = (request.query_params.get("token") or "").strip()
+    company_id = None
+    if token:
+        try:
+            rid, company_id = verify_playback_token(token)
+            if rid != record_id:
+                return error_response("Invalid token.", code="invalid_token", status_code=403)
+        except (signing.BadSignature, signing.SignatureExpired):
+            return error_response("Invalid or expired token.", code="invalid_token", status_code=403)
+    elif request.user.is_authenticated and getattr(request.user, "company_id", None):
+        company_id = request.user.company_id
+    else:
+        return error_response("Authentication required.", status_code=401)
+
+    try:
+        record = PbxCallRecord.objects.get(pk=record_id, company_id=company_id)
+    except PbxCallRecord.DoesNotExist:
+        raise Http404 from None
+
+    if record.recording_status != PbxRecordingStatus.READY:
+        return error_response("Recording not ready.", code="not_ready", status_code=404)
+
+    try:
+        blob = stream_recording_for_user(record)
+    except FileNotFoundError:
+        return error_response("Recording file missing.", code="missing_file", status_code=404)
+
+    filename = record.recording_path.split("/")[-1] if record.recording_path else "recording.wav"
+    response = FileResponse(blob, content_type="audio/wav")
+    response["Content-Disposition"] = f'inline; filename="{filename}"'
+    return response
 
 
 @api_view(["GET"])

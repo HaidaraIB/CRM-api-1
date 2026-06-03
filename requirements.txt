@@ -28,3 +28,4 @@ pypdf==5.1.0
 arabic-reshaper==3.0.0
 python-bidi==0.6.6
 openai==1.82.0
+boto3==1.40.76

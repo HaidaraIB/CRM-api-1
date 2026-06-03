@@ -38,6 +38,7 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "listen_host": "0.0.0.0",
         "listen_port": 8787,
         "poll_interval_sec": 3,
+        "recording_poll_interval_sec": 5,
         "ssl_verify": True,
         "x_api_key": "",
     }
@@ -79,8 +80,13 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "   macOS SSL error? Run: /Applications/Python 3.*/Install Certificates.command\n"
             "   Or ensure certifi is installed (included in requirements.txt).\n"
             "4. Run: python connector.py  (or run.bat / run.sh)\n"
-            "5. In ZYCOO: Addons → API → Push Event → http://<this-pc-ip>:8787\n"
-            "6. In CRM: Integrations → PBX — confirm Connector status is Online.\n\n"
+            "5. ZYCOO Push Event URL (choose one):\n"
+            "   A) Direct to CRM (recommended): paste Webhook URL from CRM PBX settings.\n"
+            "   B) Via this PC: http://<this-pc-ip>:8787 (connector forwards events).\n"
+            "6. Call recordings: connector must run on a host that can read PBX files under\n"
+            "   /var/spool/asterisk/monitor/recording/ (same LAN as PBX or VPN).\n"
+            "   Enable Cdr in ZYCOO Push Events. Connector polls CRM for upload jobs.\n"
+            "7. In CRM: Integrations → PBX — confirm Connector status is Online.\n\n"
             f"API base URL: {config['api_base_url']}\n"
             f"PBX host: {config['pbx_host']}\n"
             "\n"

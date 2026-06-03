@@ -901,6 +901,14 @@ class PbxDialCommandStatus(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
+class PbxRecordingStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    READY = "ready", "Ready"
+    FAILED = "failed", "Failed"
+    SKIPPED = "skipped", "Skipped"
+
+
 class PbxSettings(models.Model):
     """Per-company PBX integration (ZYCOO CooVox / Asterisk AMI)."""
 
@@ -995,7 +1003,15 @@ class PbxCallRecord(models.Model):
     duration_sec = models.PositiveIntegerField(default=0)
     billsec = models.PositiveIntegerField(default=0)
     recording_url = models.URLField(blank=True, default="", max_length=500)
-    recording_path = models.CharField(max_length=500, blank=True, default="")
+    recording_path = models.TextField(blank=True, default="")
+    recording_storage_key = models.CharField(max_length=512, blank=True, default="", db_index=True)
+    recording_uploaded = models.BooleanField(default=False)
+    recording_status = models.CharField(
+        max_length=16,
+        choices=PbxRecordingStatus.choices,
+        default=PbxRecordingStatus.SKIPPED,
+        db_index=True,
+    )
     client = models.ForeignKey(
         "crm.Client",
         on_delete=models.SET_NULL,

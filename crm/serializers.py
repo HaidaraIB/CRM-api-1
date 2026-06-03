@@ -1088,6 +1088,7 @@ class ClientCallSerializer(serializers.ModelSerializer):
     pbx_disposition = serializers.SerializerMethodField(read_only=True)
     pbx_duration_sec = serializers.SerializerMethodField(read_only=True)
     pbx_recording_url = serializers.SerializerMethodField(read_only=True)
+    pbx_recording_status = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClientCall
@@ -1103,6 +1104,7 @@ class ClientCallSerializer(serializers.ModelSerializer):
             "pbx_disposition",
             "pbx_duration_sec",
             "pbx_recording_url",
+            "pbx_recording_status",
             "notes",
             "call_datetime",
             "follow_up_date",
@@ -1132,9 +1134,15 @@ class ClientCallSerializer(serializers.ModelSerializer):
 
     def get_pbx_recording_url(self, obj):
         rec = self._pbx_record(obj)
-        if not rec or not rec.recording_url:
+        if not rec:
             return None
-        return rec.recording_url
+        from integrations.services.pbx_recording_service import get_playback_url
+
+        return get_playback_url(rec, self.context.get("request"))
+
+    def get_pbx_recording_status(self, obj):
+        rec = self._pbx_record(obj)
+        return rec.recording_status if rec else None
 
     def validate_call_method(self, value):
         """Ensure call_method belongs to the same company as the client"""
@@ -1451,6 +1459,7 @@ class ClientCallListSerializer(serializers.ModelSerializer):
     pbx_disposition = serializers.SerializerMethodField(read_only=True)
     pbx_duration_sec = serializers.SerializerMethodField(read_only=True)
     pbx_recording_url = serializers.SerializerMethodField(read_only=True)
+    pbx_recording_status = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClientCall
@@ -1466,6 +1475,7 @@ class ClientCallListSerializer(serializers.ModelSerializer):
             "pbx_disposition",
             "pbx_duration_sec",
             "pbx_recording_url",
+            "pbx_recording_status",
             "notes",
             "call_datetime",
             "follow_up_date",
@@ -1493,6 +1503,12 @@ class ClientCallListSerializer(serializers.ModelSerializer):
 
     def get_pbx_recording_url(self, obj):
         rec = self._pbx_record(obj)
-        if not rec or not rec.recording_url:
+        if not rec:
             return None
-        return rec.recording_url
+        from integrations.services.pbx_recording_service import get_playback_url
+
+        return get_playback_url(rec, self.context.get("request"))
+
+    def get_pbx_recording_status(self, obj):
+        rec = self._pbx_record(obj)
+        return rec.recording_status if rec else None

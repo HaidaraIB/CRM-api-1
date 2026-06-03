@@ -12,6 +12,6 @@ _VERSION_FILE = (
 def get_pbx_connector_version() -> str:
     try:
         text = _VERSION_FILE.read_text(encoding="utf-8").strip()
-        return text or "1.1.0"
+        return text or "1.2.0"
     except OSError:
-        return "1.1.0"
+        return "1.2.0"

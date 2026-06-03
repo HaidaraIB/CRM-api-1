@@ -249,6 +249,71 @@ def forward_event(cfg: dict, raw_body: bytes, content_type: str) -> None:
         raise
 
 
+def upload_recording_file(cfg: dict, record_id: int, file_path: Path) -> None:
+    """Upload a PBX WAV from local filesystem to CRM storage."""
+    url = build_api_url(cfg, f"/integrations/pbx/connector/recordings/{record_id}/upload/")
+    filename = file_path.name
+    file_bytes = file_path.read_bytes()
+    boundary = f"----LoopPbx{int(time.time() * 1000)}"
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode(),
+            (
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                "Content-Type: audio/wav\r\n\r\n"
+            ).encode(),
+            file_bytes,
+            f"\r\n--{boundary}--\r\n".encode(),
+        ]
+    )
+    headers = _request_headers(
+        cfg,
+        {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    req = urlrequest.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with _urlopen(cfg, req, timeout=120) as resp:
+            logger.info(
+                "Uploaded recording record_id=%s (%s bytes): %s",
+                record_id,
+                len(file_bytes),
+                resp.read().decode()[:200],
+            )
+    except HTTPError as e:
+        _log_http_error("POST", url, e)
+        raise
+
+
+def process_recording_job(cfg: dict, job: dict[str, Any]) -> None:
+    record_id = job.get("record_id")
+    path_str = (job.get("file") or "").strip()
+    if not record_id or not path_str:
+        return
+    file_path = Path(path_str)
+    if not file_path.is_file():
+        logger.error("Recording not found on PBX: %s (record_id=%s)", path_str, record_id)
+        return
+    try:
+        upload_recording_file(cfg, int(record_id), file_path)
+    except Exception:
+        logger.exception("Recording upload failed record_id=%s", record_id)
+
+
+def poll_recordings(cfg: dict) -> None:
+    interval = float(cfg.get("recording_poll_interval_sec", 5))
+    while True:
+        try:
+            resp = api_request(cfg, "GET", "/integrations/pbx/connector/recording-jobs/")
+            data = resp.get("data") or resp
+            for job in data.get("jobs") or []:
+                process_recording_job(cfg, job)
+        except Exception:
+            logger.exception("Recording poll error")
+        time.sleep(interval)
+
+
 def poll_commands(cfg: dict, ami: AmiClient) -> None:
     while True:
         try:
@@ -297,7 +362,7 @@ def make_webhook_handler(cfg: dict):
                 self.end_headers()
                 self.wfile.write(b'{"ok":true}')
             except Exception as exc:
-                logger.exception("Webhook forward failed")
+                logger.exception("Connector POST failed")
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode())
@@ -346,6 +411,8 @@ def main() -> None:
 
     poll_thread = threading.Thread(target=poll_commands, args=(cfg, ami), daemon=True)
     poll_thread.start()
+    recording_thread = threading.Thread(target=poll_recordings, args=(cfg,), daemon=True)
+    recording_thread.start()
 
     host = cfg.get("listen_host", "0.0.0.0")
     port = int(cfg.get("listen_port", 8787))

@@ -1,13 +1,14 @@
 {
-  "api_base_url": "https://your-api.example.com",
+  "api_base_url": "https://api.loop-crm.app",
   "connector_api_key": "paste-from-crm-integrations-pbx-settings",
-  "pbx_host": "192.168.1.100",
+  "x_api_key": "optional-crm-app-api-key-if-cloudflare-blocks-requests",
+  "pbx_host": "your-pbx.example.com",
   "ami_port": 5038,
   "ami_username": "loopcrm",
   "ami_password": "your-ami-password",
   "listen_host": "0.0.0.0",
   "listen_port": 8787,
   "poll_interval_sec": 3,
-  "ssl_verify": true,
-  "x_api_key": ""
+  "recording_poll_interval_sec": 5,
+  "ssl_verify": true
 }

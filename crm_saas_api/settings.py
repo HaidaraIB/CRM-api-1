@@ -562,6 +562,23 @@ DEMO_APPLE_ACCOUNT_EMAIL = os.getenv("DEMO_APPLE_ACCOUNT_EMAIL", "")
 DEMO_APPLE_ACCOUNT_2FA_CODE = os.getenv("DEMO_APPLE_ACCOUNT_2FA_CODE", "")
 
 # ============================================================================
+# PBX call recording storage (local disk or S3-compatible e.g. Cloudflare R2)
+# ============================================================================
+
+RECORDING_STORAGE_BACKEND = (
+    os.getenv("RECORDING_STORAGE_BACKEND", "local") or "local"
+).strip().lower()
+RECORDING_S3_BUCKET = (os.getenv("RECORDING_S3_BUCKET", "") or "").strip()
+RECORDING_S3_ENDPOINT_URL = (os.getenv("RECORDING_S3_ENDPOINT_URL", "") or "").strip()
+RECORDING_S3_REGION = (os.getenv("RECORDING_S3_REGION", "") or "").strip()
+
+# ============================================================================
+# Firebase Cloud Messaging
+# ============================================================================
+
+FIREBASE_CREDENTIALS_PATH = (os.getenv("FIREBASE_CREDENTIALS_PATH", "") or "").strip()
+
+# ============================================================================
 # Django Q2 Settings (for scheduled tasks)
 # ============================================================================
 
