@@ -144,6 +144,66 @@ def _parse_int(val: str) -> int:
         return 0
 
 
+def _strip_quoted_phone(val: str) -> str:
+    """CDR Source fields may look like: \"07809418884\" <07809418884>."""
+    text = (val or "").strip()
+    match = re.search(r"<([^>]+)>", text)
+    if match:
+        return _clean_caller_id(match.group(1))
+    return _clean_caller_id(text.strip('"'))
+
+
+def _enrich_cdr_event(
+    data: dict[str, Any],
+    *,
+    caller: str,
+    callee: str,
+    extension: str,
+    disposition: PbxCallDisposition,
+    duration_sec: int,
+    billsec: int,
+    recording_path: str,
+) -> dict[str, Any]:
+    """Map ZYCOO Cdr push fields (see recording_filename in CDR body)."""
+    src = _strip_quoted_phone(_first(data, "Source", "CallSrcNum"))
+    dest = _clean_caller_id(_first(data, "Destination", "CallDestNum", "Destination"))
+    ext = _clean_caller_id(_first(data, "CallDestNum", "Destination"))
+    if ext and _looks_like_extension(ext):
+        extension = re.sub(r"\D", "", ext) or ext
+    if src:
+        caller = src
+    if dest and not _looks_like_extension(dest):
+        callee = dest
+    disp_raw = _first(data, "Disposition", "disposition")
+    if disp_raw:
+        disposition = _map_disposition(disp_raw)
+    dur = _parse_int(_first(data, "Duration", "duration"))
+    if dur:
+        duration_sec = dur
+    talk = _parse_int(_first(data, "BillableSeconds", "billsec", "Billsec"))
+    if talk:
+        billsec = talk
+    rec = _first(
+        data,
+        "recording_filename",
+        "RecordingFile",
+        "recordingfile",
+        "Recording",
+        "recording",
+    )
+    if rec:
+        recording_path = rec
+    return {
+        "caller": caller,
+        "callee": callee,
+        "extension": extension,
+        "disposition": disposition,
+        "duration_sec": duration_sec,
+        "billsec": billsec,
+        "recording_path": recording_path,
+    }
+
+
 def parse_zycoo_payload(raw_body: bytes, content_type: str = "") -> dict[str, Any]:
     """Return normalized PBX event dict from raw webhook body."""
     data = _parse_body(raw_body, content_type)
@@ -186,8 +246,38 @@ def parse_zycoo_payload(raw_body: bytes, content_type: str = "") -> dict[str, An
     disposition = _map_disposition(_first(data, "Disposition", "disposition", "Status", "status"))
     duration_sec = _parse_int(_first(data, "Duration", "duration"))
     billsec = _parse_int(_first(data, "Billsec", "billsec", "TalkTime", "talk_time"))
-    recording_path = _first(data, "RecordingFile", "recordingfile", "Recording", "recording")
+    recording_path = _first(
+        data,
+        "recording_filename",
+        "RecordingFile",
+        "recordingfile",
+        "Recording",
+        "recording",
+    )
     recording_url = _first(data, "RecordingUrl", "recording_url", "RecordingURL")
+
+    if (raw_event or "").lower() == "cdr":
+        cdr = _enrich_cdr_event(
+            data,
+            caller=caller,
+            callee=callee,
+            extension=extension,
+            disposition=disposition,
+            duration_sec=duration_sec,
+            billsec=billsec,
+            recording_path=recording_path,
+        )
+        caller = cdr["caller"]
+        callee = cdr["callee"]
+        extension = cdr["extension"]
+        disposition = cdr["disposition"]
+        duration_sec = cdr["duration_sec"]
+        billsec = cdr["billsec"]
+        recording_path = cdr["recording_path"]
+        direction = _infer_direction(data, caller, callee, extension)
+        external_phone = caller if direction == PbxCallDirection.INBOUND else callee
+        if direction == PbxCallDirection.OUTBOUND and not external_phone:
+            external_phone = callee
 
     now = timezone.now()
     return {

@@ -121,10 +121,38 @@ def _build_recording_url(settings: PbxSettings, recording_path: str, recording_u
         return recording_url
     if not recording_path:
         return ""
+    path = recording_path.strip()
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+
     host = (settings.pbx_host or "").strip().rstrip("/")
-    if host and recording_path.startswith("/"):
-        return f"http://{host}{recording_path}"
-    return recording_path
+    if not host:
+        return path
+
+    if host.startswith("http://") or host.startswith("https://"):
+        base = host.rstrip("/")
+    else:
+        scheme = "https" if ".zycoo.com" in host else "http"
+        base = f"{scheme}://{host}"
+
+    # ZYCOO CDR example:
+    # /var/spool/asterisk/monitor/recording/20260603/104/<file>.wav
+    relative = path
+    for prefix in (
+        "/var/spool/asterisk/monitor/recording/",
+        "/var/spool/asterisk/monitor/",
+        "/var/spool/asterisk/",
+    ):
+        if path.startswith(prefix):
+            relative = path[len(prefix) :]
+            break
+
+    if relative and not relative.startswith("/"):
+        return f"{base}/monitor/recording/{relative.lstrip('/')}"
+
+    if path.startswith("/"):
+        return f"{base}{path}"
+    return path
 
 
 def _default_call_method(company):
