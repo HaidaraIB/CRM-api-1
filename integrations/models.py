@@ -970,6 +970,7 @@ class PbxCallRecord(models.Model):
         related_name="pbx_call_records",
     )
     uniqueid = models.CharField(max_length=128, db_index=True)
+    linkedid = models.CharField(max_length=128, blank=True, default="", db_index=True)
     event_type = models.CharField(
         max_length=32,
         choices=PbxEventType.choices,
@@ -1019,6 +1020,7 @@ class PbxCallRecord(models.Model):
         indexes = [
             models.Index(fields=["company", "started_at"]),
             models.Index(fields=["company", "extension"]),
+            models.Index(fields=["company", "linkedid"]),
         ]
         constraints = [
             models.UniqueConstraint(

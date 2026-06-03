@@ -151,8 +151,11 @@ def parse_zycoo_payload(raw_body: bytes, content_type: str = "") -> dict[str, An
     event_type = _map_event(raw_event)
 
     uniqueid = _first(data, "Uniqueid", "uniqueid", "UniqueID", "CallID", "call_id", "id")
+    linkedid = _first(data, "Linkedid", "linkedid", "LinkedID")
     if not uniqueid:
-        uniqueid = _first(data, "Linkedid", "linkedid") or f"unknown-{timezone.now().timestamp()}"
+        uniqueid = linkedid or f"unknown-{timezone.now().timestamp()}"
+    if not linkedid:
+        linkedid = uniqueid
 
     caller = _clean_caller_id(
         _first(data, "CallerIDNum", "calleridnum", "Caller", "caller", "From", "from", "src")
@@ -191,6 +194,7 @@ def parse_zycoo_payload(raw_body: bytes, content_type: str = "") -> dict[str, An
         "event_type": event_type,
         "raw_event": raw_event,
         "uniqueid": uniqueid,
+        "linkedid": linkedid,
         "direction": direction,
         "caller": caller,
         "callee": callee,

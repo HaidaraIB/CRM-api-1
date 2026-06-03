@@ -187,18 +187,57 @@ def _send_missed_call(settings: PbxSettings, client, phone: str, record: PbxCall
     )
 
 
+def _pbx_timeline_score(record: PbxCallRecord) -> int:
+    """Prefer inbound answered legs with talk time for the single timeline row."""
+    score = record.billsec or record.duration_sec or 0
+    if record.direction == PbxCallDirection.INBOUND:
+        score += 1000
+    if record.disposition == PbxCallDisposition.ANSWERED:
+        score += 500
+    return score
+
+
+def _pbx_call_notes(record: PbxCallRecord) -> str:
+    duration = record.billsec or record.duration_sec
+    return f"{duration}s" if duration else ""
+
+
 def _auto_log_client_call(settings: PbxSettings, record: PbxCallRecord, client, agent):
     if not settings.auto_log_calls or not client:
         return None
     if record.event_type not in (PbxEventType.HANGUP, PbxEventType.MISSED):
         return None
-    if ClientCall.objects.filter(pbx_call_record=record).exists():
-        return ClientCall.objects.filter(pbx_call_record=record).first()
 
-    duration = record.billsec or record.duration_sec
-    notes_parts = []
-    if duration:
-        notes_parts.append(f"{duration}s")
+    existing_for_record = ClientCall.objects.filter(pbx_call_record=record).first()
+    if existing_for_record:
+        return existing_for_record
+
+    call_key = (record.linkedid or record.uniqueid).strip()
+    if call_key:
+        existing = (
+            ClientCall.objects.filter(
+                client=client,
+                source=ClientCallSource.PBX,
+                pbx_call_record__company=settings.company,
+                pbx_call_record__linkedid=call_key,
+            )
+            .select_related("pbx_call_record")
+            .first()
+        )
+        if existing:
+            prev = existing.pbx_call_record
+            if prev and _pbx_timeline_score(record) > _pbx_timeline_score(prev):
+                existing.pbx_call_record = record
+                notes = _pbx_call_notes(record)
+                if notes:
+                    existing.notes = notes
+                ended = record.started_at or record.ended_at
+                if ended:
+                    existing.call_datetime = ended
+                existing.save(
+                    update_fields=["pbx_call_record", "notes", "call_datetime"]
+                )
+            return existing
 
     call_method = _default_call_method(settings.company)
     return ClientCall.objects.create(
@@ -206,7 +245,7 @@ def _auto_log_client_call(settings: PbxSettings, record: PbxCallRecord, client, 
         call_method=call_method,
         source=ClientCallSource.PBX,
         pbx_call_record=record,
-        notes=" · ".join(notes_parts) if notes_parts else "",
+        notes=_pbx_call_notes(record),
         call_datetime=record.started_at or record.ended_at or timezone.now(),
         created_by=agent,
     )
@@ -220,6 +259,7 @@ def _record_defaults(
     agent,
 ) -> dict[str, Any]:
     return {
+        "linkedid": parsed["linkedid"],
         "direction": parsed["direction"],
         "caller": parsed["caller"],
         "callee": parsed["callee"],
@@ -276,6 +316,8 @@ def _record_updates(
         updates["client"] = client
     if agent and not record.agent_id:
         updates["agent"] = agent
+    if parsed["linkedid"] and not record.linkedid:
+        updates["linkedid"] = parsed["linkedid"]
     return updates
 
 
