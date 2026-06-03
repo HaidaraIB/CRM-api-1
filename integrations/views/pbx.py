@@ -33,7 +33,7 @@ from integrations.serializers_pbx import (
     PbxSettingsSerializer,
     UserPbxExtensionSerializer,
 )
-from integrations.services.pbx_handler import process_pbx_payload
+from integrations.services.pbx_handler import log_incoming_zycoo_push, process_pbx_payload
 from integrations.pbx_connector_meta import get_pbx_connector_version
 
 logger = logging.getLogger(__name__)
@@ -104,14 +104,32 @@ def _ensure_pbx_settings(company) -> PbxSettings:
 def pbx_webhook(request, webhook_token: str):
     settings = _get_settings_by_webhook_token(webhook_token)
     if not settings:
+        log_incoming_zycoo_push(
+            company_id=None,
+            source="webhook",
+            raw_body=request.body,
+            content_type=request.content_type or "",
+            webhook_token_prefix=webhook_token,
+        )
+        logger.warning("ZYCOO webhook unknown token prefix=%s", (webhook_token or "")[:12])
         return HttpResponse(status=404)
     if not _verify_webhook_signature(request, settings):
+        log_incoming_zycoo_push(
+            company_id=settings.company_id,
+            source="webhook",
+            raw_body=request.body,
+            content_type=request.content_type or "",
+            webhook_token_prefix=webhook_token,
+        )
+        logger.warning("ZYCOO webhook signature rejected company_id=%s", settings.company_id)
         return HttpResponse(status=403)
     try:
         result = process_pbx_payload(
             settings,
             request.body,
             request.content_type or "",
+            source="webhook",
+            webhook_token_prefix=webhook_token,
         )
         return JsonResponse(result)
     except Exception:
@@ -351,6 +369,7 @@ def pbx_connector_events_view(request):
                 settings,
                 request.body,
                 request.content_type or "",
+                source="connector",
             )
             return success_response(result)
         except Exception:
@@ -361,7 +380,9 @@ def pbx_connector_events_view(request):
     for ev in events:
         body = json.dumps(ev).encode("utf-8") if isinstance(ev, dict) else str(ev).encode("utf-8")
         try:
-            results.append(process_pbx_payload(settings, body, "application/json"))
+            results.append(
+                process_pbx_payload(settings, body, "application/json", source="connector")
+            )
         except Exception as exc:
             results.append({"ok": False, "error": str(exc)})
     return success_response({"results": results})

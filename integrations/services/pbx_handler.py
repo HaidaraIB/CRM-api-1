@@ -25,6 +25,54 @@ from settings.models import CallMethod
 
 logger = logging.getLogger(__name__)
 
+_MAX_PUSH_LOG_BODY = 16384
+
+
+def log_incoming_zycoo_push(
+    *,
+    company_id: int | None,
+    source: str,
+    raw_body: bytes,
+    content_type: str = "",
+    webhook_token_prefix: str = "",
+) -> None:
+    """Log every PBX push (all event types), including ones we do not act on."""
+    body = raw_body or b""
+    preview = body.decode("utf-8", errors="replace")
+    if len(preview) > _MAX_PUSH_LOG_BODY:
+        preview = (
+            preview[:_MAX_PUSH_LOG_BODY]
+            + f"… (truncated, {len(body)} bytes total)"
+        )
+
+    parsed_summary = ""
+    try:
+        parsed = parse_zycoo_payload(body, content_type)
+        parsed_summary = (
+            f"raw_event={parsed.get('raw_event')!r} "
+            f"mapped_type={parsed.get('event_type')} "
+            f"uniqueid={parsed.get('uniqueid')} "
+            f"extension={parsed.get('extension')} "
+            f"caller={parsed.get('caller')} "
+            f"callee={parsed.get('callee')} "
+            f"direction={parsed.get('direction')} "
+            f"external_phone={parsed.get('external_phone')} "
+            f"disposition={parsed.get('disposition')}"
+        )
+    except Exception as exc:
+        parsed_summary = f"parse_error={exc!r}"
+
+    logger.info(
+        "ZYCOO push [%s] company_id=%s token_prefix=%s content_type=%s bytes=%s | %s | body=%s",
+        source,
+        company_id if company_id is not None else "unknown",
+        (webhook_token_prefix or "")[:12] or "-",
+        content_type or "-",
+        len(body),
+        parsed_summary,
+        preview,
+    )
+
 
 def _resolve_agent(company, extension: str):
     if not extension:
@@ -135,9 +183,29 @@ def _auto_log_client_call(settings: PbxSettings, record: PbxCallRecord, client, 
 
 
 @transaction.atomic
-def process_pbx_payload(settings: PbxSettings, raw_body: bytes, content_type: str = "") -> dict[str, Any]:
+def process_pbx_payload(
+    settings: PbxSettings,
+    raw_body: bytes,
+    content_type: str = "",
+    *,
+    source: str = "webhook",
+    webhook_token_prefix: str = "",
+) -> dict[str, Any]:
     """Parse and apply a PBX webhook/connector event."""
+    log_incoming_zycoo_push(
+        company_id=settings.company_id,
+        source=source,
+        raw_body=raw_body,
+        content_type=content_type,
+        webhook_token_prefix=webhook_token_prefix,
+    )
+
     if not settings.is_enabled:
+        logger.info(
+            "ZYCOO push ignored (integration disabled) company_id=%s source=%s",
+            settings.company_id,
+            source,
+        )
         return {"ok": False, "reason": "pbx_disabled"}
 
     parsed = parse_zycoo_payload(raw_body, content_type)
@@ -219,6 +287,18 @@ def process_pbx_payload(settings: PbxSettings, raw_body: bytes, content_type: st
 
     if event_type in (PbxEventType.HANGUP, PbxEventType.MISSED):
         client_call = _auto_log_client_call(settings, record, client, agent)
+
+    logger.info(
+        "ZYCOO push processed company_id=%s source=%s event_type=%s uniqueid=%s "
+        "record_id=%s created=%s client_id=%s",
+        settings.company_id,
+        source,
+        event_type,
+        uniqueid,
+        record.id,
+        created,
+        client.id if client else None,
+    )
 
     return {
         "ok": True,
