@@ -14,10 +14,24 @@ def digits_only(phone: str) -> str:
 
 
 def phone_match_keys(phone: str) -> set[str]:
-    """Return normalized keys for fuzzy lead matching."""
-    e164 = normalize_phone_to_e164(phone)
+    """Return normalized keys for fuzzy lead matching (Iraq 07… vs +964…)."""
+    raw = (phone or "").strip()
+    raw_digits = digits_only(raw)
+    e164 = normalize_phone_to_e164(raw)
     digits = digits_only(e164)
-    keys = {e164, digits}
+    keys: set[str] = {e164, digits}
+    if raw_digits:
+        keys.add(raw_digits)
+
+    # Iraq local 07XXXXXXXXX <-> E.164 +9647XXXXXXXX
+    if raw_digits.startswith("0") and len(raw_digits) >= 10:
+        keys.add("964" + raw_digits[1:])
+    if digits.startswith("964") and len(digits) > 3:
+        national = digits[3:]
+        keys.add(national)
+        if national and not national.startswith("0"):
+            keys.add("0" + national)
+
     if len(digits) >= 9:
         keys.add(digits[-9:])
     if len(digits) >= 10:
