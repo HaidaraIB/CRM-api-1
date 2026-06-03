@@ -40,12 +40,16 @@ logger = logging.getLogger(__name__)
 
 
 def _verify_webhook_signature(request, settings: PbxSettings) -> bool:
+    """
+    Optional HMAC verification via X-PBX-Signature.
+
+    ZYCOO Push Event does not send this header. The webhook URL already contains
+    an unguessable token; we only verify HMAC when the caller supplies a signature.
+    """
     secret = (settings.webhook_secret or "").strip()
-    if not secret:
+    sig = (request.headers.get("X-PBX-Signature") or "").strip()
+    if not secret or not sig:
         return True
-    sig = request.headers.get("X-PBX-Signature", "")
-    if not sig:
-        return False
     expected = hmac.new(
         secret.encode("utf-8"),
         request.body,
@@ -87,7 +91,8 @@ def _ensure_pbx_settings(company) -> PbxSettings:
             "webhook_token": secrets.token_urlsafe(32),
             "connector_api_key": secrets.token_urlsafe(32),
             "connector_install_key": secrets.token_urlsafe(16),
-            "webhook_secret": secrets.token_urlsafe(24),
+            # Empty: ZYCOO cannot send X-PBX-Signature; URL token is sufficient.
+            "webhook_secret": "",
         },
     )
     return settings
