@@ -10,7 +10,7 @@ from .models import (
     ClientVisit,
     Deal,
 )
-from crm.signals import get_least_busy_employee
+from crm.assignment import get_least_busy_employee
 
 
 def _assignee_acted_since_assignment():

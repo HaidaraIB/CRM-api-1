@@ -6,7 +6,7 @@ from rest_framework import status
 
 from conftest import api_body
 from crm.models import Client, Deal
-from crm.signals import get_least_busy_employee
+from crm.assignment import get_least_busy_employee
 
 
 def _error_payload(response):

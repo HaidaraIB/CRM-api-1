@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from crm.availability import user_accepts_new_assignments
-from crm.signals import get_least_busy_employee
+from crm.assignment import get_least_busy_employee
 from .models import Client, ClientEvent
 
 
@@ -105,21 +105,27 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
     return len(changed)
 
 
-def distribute_clients_to_least_busy(company, clients, triggered_by):
+def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_notes=None):
     """
-    Assign each client to the least-busy active employee (round-robin by load).
-    Used when redistributing leads after employee deactivation.
-    Returns dict with assigned_count, skipped_count, and assignments list.
+    Assign each client to the least-busy active employee, one pick per lead.
+
+    After each assignment the lead is saved so the next pick sees updated workload.
+    Used for bulk unassigned assignment, deactivation redistribution, etc.
     """
     clients = list(clients)
     if not clients:
-        return {"assigned_count": 0, "skipped_count": 0, "assignments": []}
+        return {
+            "assigned_count": 0,
+            "skipped_count": 0,
+            "assignments": [],
+            "assignee_names": [],
+        }
 
     now = timezone.now()
     assigned_count = 0
     skipped_count = 0
     assignments = []
-    changed_clients = []
+    assignee_names = set()
     events = []
 
     for client in clients:
@@ -132,17 +138,26 @@ def distribute_clients_to_least_busy(company, clients, triggered_by):
             client.assigned_to.get_full_name() or client.assigned_to.username
         ) if client.assigned_to else "Unassigned"
         new_name = employee.get_full_name() or employee.username
+        assignee_names.add(new_name)
 
         client.assigned_to = employee
         client.assigned_at = now
-        changed_clients.append(client)
+        client.save(update_fields=["assigned_to", "assigned_at"])
+
+        if event_notes is None:
+            notes = f"Reassigned after employee deactivation to {new_name}"
+        elif callable(event_notes):
+            notes = event_notes(client, employee, old_name, new_name)
+        else:
+            notes = event_notes.format(assignee=new_name, old=old_name)
+
         events.append(
             ClientEvent(
                 client=client,
                 event_type="assignment",
                 old_value=old_name,
                 new_value=new_name,
-                notes=f"Reassigned after employee deactivation to {new_name}",
+                notes=notes,
                 created_by=triggered_by,
             )
         )
@@ -151,12 +166,12 @@ def distribute_clients_to_least_busy(company, clients, triggered_by):
         )
         assigned_count += 1
 
-    if changed_clients:
-        Client.objects.bulk_update(changed_clients, ["assigned_to", "assigned_at"])
+    if events:
         ClientEvent.objects.bulk_create(events)
 
     return {
         "assigned_count": assigned_count,
         "skipped_count": skipped_count,
         "assignments": assignments,
+        "assignee_names": sorted(assignee_names),
     }

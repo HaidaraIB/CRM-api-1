@@ -30,10 +30,18 @@ class Company(models.Model):
         blank=True,
         help_text="Last employee assigned from data-entry round-robin.",
     )
+    last_auto_assigned_employee = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="auto_assign_round_robin_companies",
+        null=True,
+        blank=True,
+        help_text="Last employee chosen by smart auto-assign (tie-break rotation).",
+    )
     # Auto assignment settings
     auto_assign_enabled = models.BooleanField(
         default=False,
-        help_text="توزيع العملاء على الموظفين حسب النشاط"
+        help_text="توزيع العملاء على الموظفين حسب عبء العمل (العملاء النشطون فقط)",
     )
     re_assign_enabled = models.BooleanField(
         default=False,

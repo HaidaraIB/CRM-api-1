@@ -6,7 +6,8 @@ Tests for CRM signal callbacks and routing behavior.
 import pytest
 from django.contrib.auth import get_user_model
 from crm.models import Client, ClientEvent
-from crm.signals import get_least_busy_employee
+from crm.assignment import get_least_busy_employee
+from settings.models import LeadStatus, StatusCategory
 from integrations.models import IntegrationAccount, IntegrationPlatform
 
 
@@ -41,7 +42,70 @@ def test_get_least_busy_employee(company):
     Client.objects.create(name="c4", company=company, assigned_to=emp3)
 
     least_busy = get_least_busy_employee(company)
-    assert least_busy in (emp2, emp3)  # both have 1 now, query decides tie
+    assert least_busy in (emp2, emp3)  # both have 1 now; tie-break rotates fairly
+
+
+@pytest.mark.django_db
+def test_get_least_busy_ignores_closed_leads(company):
+    """Closed pipeline stages should not inflate an employee's workload."""
+    emp_busy = User.objects.create_user(
+        username="busy",
+        email="busy@test.com",
+        role="employee",
+        company=company,
+        is_active=True,
+    )
+    emp_light = User.objects.create_user(
+        username="light",
+        email="light@test.com",
+        role="employee",
+        company=company,
+        is_active=True,
+    )
+    closed_status = LeadStatus.objects.create(
+        name="Closed won (test)",
+        company=company,
+        category=StatusCategory.CLOSED.value,
+    )
+    active_status = LeadStatus.objects.create(
+        name="New (test)",
+        company=company,
+        category=StatusCategory.ACTIVE.value,
+    )
+    for _ in range(5):
+        Client.objects.create(
+            name="closed",
+            company=company,
+            assigned_to=emp_busy,
+            status=closed_status,
+        )
+    Client.objects.create(
+        name="active",
+        company=company,
+        assigned_to=emp_light,
+        status=active_status,
+    )
+
+    assert get_least_busy_employee(company) == emp_busy
+
+
+@pytest.mark.django_db
+def test_get_least_busy_rotates_among_tied_workload(company):
+    """Employees at the same workload take turns instead of always picking lowest id."""
+    employees = [
+        User.objects.create_user(
+            username=f"rr{i}",
+            email=f"rr{i}@test.com",
+            role="employee",
+            company=company,
+            is_active=True,
+        )
+        for i in range(3)
+    ]
+    picks = [get_least_busy_employee(company).id for _ in range(6)]
+    assert len(set(picks)) >= 2
+    company.refresh_from_db()
+    assert company.last_auto_assigned_employee_id == picks[-1]
 
 
 @pytest.mark.django_db

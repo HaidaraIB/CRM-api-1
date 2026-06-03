@@ -6,7 +6,7 @@ from django.db import transaction
 from accounts.models import Role, SupervisorPermission, User
 from crm.models import Client
 from crm.services import distribute_clients_to_least_busy
-from crm.signals import get_least_busy_employee
+from crm.assignment import has_assignable_employee
 
 DEACTIVATABLE_EMPLOYEE_ROLES = frozenset(
     {
@@ -90,7 +90,7 @@ def get_deactivate_preview(target: User) -> dict:
         and target.company_id
         and assigned_leads_count > 0
     ):
-        can_reassign = get_least_busy_employee(target.company) is not None
+        can_reassign = has_assignable_employee(target.company)
     return {
         "assigned_leads_count": assigned_leads_count,
         "can_reassign": can_reassign,

@@ -1,8 +1,8 @@
 from django.db.models.signals import post_save, pre_save
-from django.db.models import Count
 from django.db import transaction
 from django.dispatch import receiver
 from django.utils import timezone
+from crm.assignment import get_least_busy_employee
 from crm.availability import user_accepts_new_assignments
 from .models import (
     Client,
@@ -50,31 +50,6 @@ def _integration_auto_assign_event_notes(client):
     return _INTEGRATION_AUTO_ASSIGN_NOTES.get(
         (client.source or "").strip(), "Auto-assigned from integration"
     )
-
-
-def get_least_busy_employee(company):
-    """
-    Get the employee with the least number of assigned clients (Round Robin),
-    skipping anyone on their weekly day off (company-local calendar).
-    """
-    role_filter = [Role.EMPLOYEE.value]
-    if getattr(company, "specialization", None) == "medical":
-        role_filter = [Role.EMPLOYEE.value, Role.DOCTOR.value]
-
-    queryset = (
-        User.objects.filter(
-            company=company,
-            role__in=role_filter,
-            is_active=True,
-        )
-        .annotate(client_count=Count("assigned_clients"))
-        .order_by("client_count", "id")
-        .select_related("company")
-    )
-    for employee in queryset:
-        if user_accepts_new_assignments(employee):
-            return employee
-    return None
 
 
 def get_next_data_entry_round_robin_employee(company):

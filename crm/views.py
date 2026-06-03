@@ -154,9 +154,9 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):
-        """Auto-assign all unassigned clients for companies with auto_assign_enabled."""
-        from crm.signals import get_least_busy_employee
-        from django.utils import timezone
+        """Assign each unassigned client to the current least-busy employee (one pick per lead)."""
+        from crm.assignment import has_assignable_employee
+        from crm.services import distribute_clients_to_least_busy
 
         user = request.user
         company = user.company
@@ -194,46 +194,48 @@ class ClientViewSet(viewsets.ModelViewSet):
         has_employees = User.objects.filter(
             company=company, role__in=role_filter, is_active=True
         ).exists()
-        employee = get_least_busy_employee(company)
-        if not employee:
-            if has_employees:
-                return error_response(
-                    "No employees are available for assignment today (weekly day off).",
-                    code="no_available_employees_day_off",
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                )
+        if not has_employees:
             return error_response(
                 "No active employees found in your company.",
                 code="no_employees",
             )
-
-        now = timezone.now()
-        employee_name = employee.get_full_name() or employee.username
-        events_to_create = []
-
-        for client in unassigned_clients:
-            client.assigned_to = employee
-            client.assigned_at = now
-            events_to_create.append(
-                ClientEvent(
-                    client=client,
-                    event_type="assignment",
-                    old_value="Unassigned",
-                    new_value=employee_name,
-                    notes=f"Auto-assigned to {employee_name}",
-                    created_by=user,
-                )
+        if not has_assignable_employee(company):
+            return error_response(
+                "No employees are available for assignment today (weekly day off).",
+                code="no_available_employees_day_off",
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        Client.objects.bulk_update(unassigned_clients, ["assigned_to", "assigned_at"])
-        ClientEvent.objects.bulk_create(events_to_create)
+        result = distribute_clients_to_least_busy(
+            company,
+            unassigned_clients,
+            user,
+            event_notes=lambda _c, _e, _old, new_name: f"Auto-assigned to {new_name}",
+        )
+        assigned_count = result["assigned_count"]
+        assignee_names = result["assignee_names"]
+
+        if assigned_count == 0:
+            return error_response(
+                "No employees are available for assignment today (weekly day off).",
+                code="no_available_employees_day_off",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        assignee_summary = (
+            assignee_names[0] if len(assignee_names) == 1 else ", ".join(assignee_names)
+        )
 
         return success_response(
             data={
-                "assigned_count": len(unassigned_clients),
-                "assigned_to": employee_name,
+                "assigned_count": assigned_count,
+                "assigned_to": assignee_summary,
+                "assignments": result["assignments"],
             },
-            message=f"Successfully assigned {len(unassigned_clients)} client(s) to {employee_name}.",
+            message=(
+                f"Successfully assigned {assigned_count} client(s) using least-busy "
+                f"distribution ({assignee_summary})."
+            ),
         )
 
     @action(detail=False, methods=["post"])
