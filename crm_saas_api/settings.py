@@ -276,6 +276,10 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
+            "OPTIONS": {
+                # Wait for writers under concurrent PBX webhook bursts.
+                "timeout": 30,
+            },
         }
     }
 

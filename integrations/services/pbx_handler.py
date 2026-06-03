@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
 
-from django.db import OperationalError, transaction
+from django.db import IntegrityError, OperationalError, close_old_connections, transaction
 from django.utils import timezone
 
 from crm.models import ClientCall, ClientCallSource
@@ -27,6 +27,11 @@ from settings.models import CallMethod
 logger = logging.getLogger(__name__)
 
 _MAX_PUSH_LOG_BODY = 16384
+_SQLITE_LOCK_MAX_ATTEMPTS = 15
+_SQLITE_LOCK_INITIAL_DELAY = 0.05
+_SQLITE_LOCK_MAX_DELAY = 3.0
+
+T = TypeVar("T")
 
 
 def log_incoming_zycoo_push(
@@ -73,6 +78,30 @@ def log_incoming_zycoo_push(
         parsed_summary,
         preview,
     )
+
+
+def _is_sqlite_lock_error(exc: BaseException) -> bool:
+    return isinstance(exc, OperationalError) and "locked" in str(exc).lower()
+
+
+def _run_with_sqlite_retry(fn: Callable[[], T], *, company_id: int, label: str) -> T:
+    delay = _SQLITE_LOCK_INITIAL_DELAY
+    for attempt in range(_SQLITE_LOCK_MAX_ATTEMPTS):
+        try:
+            return fn()
+        except OperationalError as exc:
+            if not _is_sqlite_lock_error(exc) or attempt >= _SQLITE_LOCK_MAX_ATTEMPTS - 1:
+                raise
+            close_old_connections()
+            logger.warning(
+                "PBX %s DB locked, retry %s/%s company_id=%s",
+                label,
+                attempt + 1,
+                _SQLITE_LOCK_MAX_ATTEMPTS,
+                company_id,
+            )
+            time.sleep(delay)
+            delay = min(delay * 1.5, _SQLITE_LOCK_MAX_DELAY)
 
 
 def _resolve_agent(company, extension: str):
@@ -183,6 +212,141 @@ def _auto_log_client_call(settings: PbxSettings, record: PbxCallRecord, client, 
     )
 
 
+def _record_defaults(
+    settings: PbxSettings,
+    parsed: dict[str, Any],
+    *,
+    client,
+    agent,
+) -> dict[str, Any]:
+    return {
+        "direction": parsed["direction"],
+        "caller": parsed["caller"],
+        "callee": parsed["callee"],
+        "extension": parsed["extension"],
+        "disposition": parsed["disposition"],
+        "started_at": parsed["started_at"],
+        "answered_at": parsed["answered_at"],
+        "ended_at": parsed["ended_at"],
+        "duration_sec": parsed["duration_sec"],
+        "billsec": parsed["billsec"],
+        "recording_path": parsed["recording_path"],
+        "recording_url": _build_recording_url(
+            settings, parsed["recording_path"], parsed["recording_url"]
+        ),
+        "client": client,
+        "agent": agent,
+        "raw_payload": parsed["raw_payload"],
+    }
+
+
+def _record_updates(
+    settings: PbxSettings,
+    record: PbxCallRecord,
+    parsed: dict[str, Any],
+    *,
+    client,
+    agent,
+) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if parsed["caller"]:
+        updates["caller"] = parsed["caller"]
+    if parsed["callee"]:
+        updates["callee"] = parsed["callee"]
+    if parsed["extension"]:
+        updates["extension"] = parsed["extension"]
+    if parsed["disposition"] != PbxCallDisposition.UNKNOWN:
+        updates["disposition"] = parsed["disposition"]
+    if parsed["duration_sec"]:
+        updates["duration_sec"] = parsed["duration_sec"]
+    if parsed["billsec"]:
+        updates["billsec"] = parsed["billsec"]
+    rec_url = _build_recording_url(
+        settings, parsed["recording_path"], parsed["recording_url"]
+    )
+    if rec_url:
+        updates["recording_url"] = rec_url
+    if parsed["recording_path"]:
+        updates["recording_path"] = parsed["recording_path"]
+    if parsed["answered_at"]:
+        updates["answered_at"] = parsed["answered_at"]
+    if parsed["ended_at"]:
+        updates["ended_at"] = parsed["ended_at"]
+    if client and not record.client_id:
+        updates["client"] = client
+    if agent and not record.agent_id:
+        updates["agent"] = agent
+    return updates
+
+
+def _persist_pbx_call_record(
+    settings: PbxSettings,
+    parsed: dict[str, Any],
+    *,
+    client,
+    agent,
+) -> tuple[PbxCallRecord, bool]:
+    """Upsert call record in a short transaction (no notifications)."""
+    company = settings.company
+    uniqueid = parsed["uniqueid"]
+    event_type = parsed["event_type"]
+    lookup = {
+        "company": company,
+        "uniqueid": uniqueid,
+        "event_type": event_type,
+    }
+    defaults = _record_defaults(settings, parsed, client=client, agent=agent)
+
+    with transaction.atomic():
+        try:
+            record, created = PbxCallRecord.objects.get_or_create(
+                **lookup,
+                defaults=defaults,
+            )
+        except IntegrityError:
+            record = PbxCallRecord.objects.get(**lookup)
+            created = False
+
+        if not created:
+            updates = _record_updates(
+                settings, record, parsed, client=client, agent=agent
+            )
+            if updates:
+                for key, value in updates.items():
+                    setattr(record, key, value)
+                record.save(update_fields=list(updates.keys()) + ["updated_at"])
+
+    return record, created
+
+
+def _apply_pbx_side_effects(
+    settings: PbxSettings,
+    parsed: dict[str, Any],
+    record: PbxCallRecord,
+    *,
+    client,
+    agent,
+    external_phone: str,
+) -> Optional[ClientCall]:
+    event_type = parsed["event_type"]
+
+    if event_type == PbxEventType.RINGING and parsed["direction"] == PbxCallDirection.INBOUND:
+        _send_screen_pop(settings, client, external_phone, record, agent)
+    elif event_type == PbxEventType.MISSED or (
+        event_type == PbxEventType.HANGUP
+        and record.disposition in (PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY)
+    ):
+        _send_missed_call(settings, client, external_phone, record, agent)
+
+    if event_type in (PbxEventType.HANGUP, PbxEventType.MISSED):
+        return _run_with_sqlite_retry(
+            lambda: _auto_log_client_call(settings, record, client, agent),
+            company_id=settings.company_id,
+            label="client_call",
+        )
+    return None
+
+
 def process_pbx_payload(
     settings: PbxSettings,
     raw_body: bytes,
@@ -208,112 +372,31 @@ def process_pbx_payload(
         )
         return {"ok": False, "reason": "pbx_disabled"}
 
-    max_attempts = 6
-    delay = 0.05
-    for attempt in range(max_attempts):
-        try:
-            with transaction.atomic():
-                return _apply_pbx_payload(settings, raw_body, content_type, source=source)
-        except OperationalError as exc:
-            if "locked" not in str(exc).lower() or attempt >= max_attempts - 1:
-                raise
-            logger.warning(
-                "PBX DB locked, retry %s/%s company_id=%s",
-                attempt + 1,
-                max_attempts,
-                settings.company_id,
-            )
-            time.sleep(delay)
-            delay = min(delay * 2, 1.0)
-
-
-def _apply_pbx_payload(
-    settings: PbxSettings,
-    raw_body: bytes,
-    content_type: str,
-    *,
-    source: str,
-) -> dict[str, Any]:
     parsed = parse_zycoo_payload(raw_body, content_type)
     company = settings.company
-    uniqueid = parsed["uniqueid"]
-    event_type = parsed["event_type"]
-
     agent = _resolve_agent(company, parsed["extension"])
     external_phone = parsed["external_phone"] or ""
     client = find_client_by_phone(company, external_phone) if external_phone else None
 
-    record, created = PbxCallRecord.objects.get_or_create(
-        company=company,
-        uniqueid=uniqueid,
-        event_type=event_type,
-        defaults={
-            "direction": parsed["direction"],
-            "caller": parsed["caller"],
-            "callee": parsed["callee"],
-            "extension": parsed["extension"],
-            "disposition": parsed["disposition"],
-            "started_at": parsed["started_at"],
-            "answered_at": parsed["answered_at"],
-            "ended_at": parsed["ended_at"],
-            "duration_sec": parsed["duration_sec"],
-            "billsec": parsed["billsec"],
-            "recording_path": parsed["recording_path"],
-            "recording_url": _build_recording_url(
-                settings, parsed["recording_path"], parsed["recording_url"]
-            ),
-            "client": client,
-            "agent": agent,
-            "raw_payload": parsed["raw_payload"],
-        },
+    record, created = _run_with_sqlite_retry(
+        lambda: _persist_pbx_call_record(
+            settings, parsed, client=client, agent=agent
+        ),
+        company_id=settings.company_id,
+        label="persist",
     )
 
-    if not created:
-        updates = {}
-        if parsed["caller"]:
-            updates["caller"] = parsed["caller"]
-        if parsed["callee"]:
-            updates["callee"] = parsed["callee"]
-        if parsed["extension"]:
-            updates["extension"] = parsed["extension"]
-        if parsed["disposition"] != PbxCallDisposition.UNKNOWN:
-            updates["disposition"] = parsed["disposition"]
-        if parsed["duration_sec"]:
-            updates["duration_sec"] = parsed["duration_sec"]
-        if parsed["billsec"]:
-            updates["billsec"] = parsed["billsec"]
-        rec_url = _build_recording_url(
-            settings, parsed["recording_path"], parsed["recording_url"]
-        )
-        if rec_url:
-            updates["recording_url"] = rec_url
-        if parsed["recording_path"]:
-            updates["recording_path"] = parsed["recording_path"]
-        if parsed["answered_at"]:
-            updates["answered_at"] = parsed["answered_at"]
-        if parsed["ended_at"]:
-            updates["ended_at"] = parsed["ended_at"]
-        if client and not record.client_id:
-            updates["client"] = client
-        if agent and not record.agent_id:
-            updates["agent"] = agent
-        if updates:
-            for k, v in updates.items():
-                setattr(record, k, v)
-            record.save(update_fields=list(updates.keys()) + ["updated_at"])
+    client_call = _apply_pbx_side_effects(
+        settings,
+        parsed,
+        record,
+        client=client,
+        agent=agent,
+        external_phone=external_phone,
+    )
 
-    client_call = None
-    if event_type == PbxEventType.RINGING and parsed["direction"] == PbxCallDirection.INBOUND:
-        _send_screen_pop(settings, client, external_phone, record, agent)
-    elif event_type == PbxEventType.MISSED or (
-        event_type == PbxEventType.HANGUP
-        and record.disposition in (PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY)
-    ):
-        _send_missed_call(settings, client, external_phone, record, agent)
-
-    if event_type in (PbxEventType.HANGUP, PbxEventType.MISSED):
-        client_call = _auto_log_client_call(settings, record, client, agent)
-
+    event_type = parsed["event_type"]
+    uniqueid = parsed["uniqueid"]
     logger.info(
         "ZYCOO push processed company_id=%s source=%s event_type=%s uniqueid=%s "
         "record_id=%s created=%s client_id=%s",

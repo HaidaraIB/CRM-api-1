@@ -8,6 +8,7 @@ import json
 import logging
 import secrets
 
+from django.db import OperationalError
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -132,6 +133,12 @@ def pbx_webhook(request, webhook_token: str):
             webhook_token_prefix=webhook_token,
         )
         return JsonResponse(result)
+    except OperationalError as exc:
+        if "locked" in str(exc).lower():
+            logger.exception("PBX webhook database locked after retries")
+            # Acknowledge so ZYCOO does not retry-storm; event may need manual replay.
+            return JsonResponse({"ok": False, "reason": "database_busy"}, status=200)
+        raise
     except Exception:
         logger.exception("PBX webhook processing failed")
         return JsonResponse({"ok": False, "reason": "processing_error"}, status=500)
