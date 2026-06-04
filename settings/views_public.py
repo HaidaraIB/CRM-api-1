@@ -5,7 +5,34 @@ from rest_framework.views import APIView
 
 from crm_saas_api.responses import success_response
 
+from .maintenance_policy import (
+    get_maintenance_policy,
+    request_language_from_meta,
+    resolve_maintenance_message,
+)
 from .models import SystemSettings
+
+
+class MaintenanceStatusPublicView(APIView):
+    """
+    Public maintenance status for web/mobile/admin clients.
+    No authentication required; used to show maintenance UI before API calls.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        policy = get_maintenance_policy()
+        lang = request_language_from_meta(getattr(request, "META", {}) or {})
+        return success_response(
+            data={
+                "maintenance_mode": bool(policy.get("enabled")),
+                "message": resolve_maintenance_message(
+                    str(policy.get("message") or ""),
+                    lang=lang,
+                ),
+            }
+        )
 
 
 class MobileAppVersionPublicView(APIView):

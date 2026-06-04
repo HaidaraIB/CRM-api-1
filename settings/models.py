@@ -384,6 +384,16 @@ class SystemSettings(models.Model):
             "Schema: {feature: {global_enabled, global_message, company_overrides{company_id:{enabled,message}}}}"
         ),
     )
+    maintenance_mode = models.BooleanField(
+        default=False,
+        help_text="When enabled, all API traffic is blocked except public status and critical webhooks.",
+    )
+    maintenance_message = models.CharField(
+        max_length=500,
+        blank=True,
+        default="The system is under maintenance. Please try again later.",
+        help_text="Message shown to users while maintenance mode is active.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

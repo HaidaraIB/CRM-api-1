@@ -102,16 +102,33 @@ class VisitTypeAdmin(admin.ModelAdmin):
 class SystemSettingsAdmin(admin.ModelAdmin):
     list_display = [
         "id",
+        "maintenance_mode",
         "usd_to_iqd_rate",
         "backup_schedule",
         "mobile_minimum_version_android",
         "mobile_minimum_version_ios",
         "updated_at",
     ]
-    list_filter = ["backup_schedule"]
+    list_filter = ["backup_schedule", "maintenance_mode"]
     readonly_fields = ["created_at", "updated_at"]
 
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        from .maintenance_policy import invalidate_maintenance_cache
+
+        invalidate_maintenance_cache()
+
     fieldsets = (
+        (
+            "Maintenance mode",
+            {
+                "description": (
+                    "When enabled, all API clients are blocked except public status and "
+                    "critical webhooks. Toggle off here or via manage.py maintenance_mode."
+                ),
+                "fields": ("maintenance_mode", "maintenance_message"),
+            },
+        ),
         (
             "General",
             {

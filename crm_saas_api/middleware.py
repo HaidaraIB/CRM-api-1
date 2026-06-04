@@ -1,5 +1,6 @@
 """
 Custom middleware for API security:
+- MaintenanceMiddleware: Blocks API when platform maintenance mode is enabled.
 - DisableCSRFForAPI: Skips CSRF checks for JWT-authenticated API endpoints.
 - APIKeyValidationMiddleware: Requires X-API-Key header for non-public API routes.
 """
@@ -8,7 +9,32 @@ from django.utils.deprecation import MiddlewareMixin
 from django.http import JsonResponse
 from django.conf import settings
 
+from settings.maintenance_policy import (
+    get_maintenance_policy,
+    request_language_from_meta,
+    resolve_maintenance_message,
+)
+
 logger = logging.getLogger(__name__)
+
+# Paths that stay reachable during maintenance (same set as API key public routes).
+MAINTENANCE_WHITELIST_PREFIXES = [
+    "/api/docs/",
+    "/api/schema/",
+    "/api/redoc/",
+    "/api-auth/",
+    "/api/public/",
+    "/api/payments/paytabs-return/",
+    "/api/payments/zaincash-return/",
+    "/api/payments/stripe-return/",
+    "/api/payments/qicard-return/",
+    "/api/payments/qicard-webhook/",
+    "/api/payments/fib-callback/",
+    "/api/integrations/accounts/oauth/callback/",
+    "/api/integrations/webhooks/",
+    "/api/integrations/pbx/connector/",
+    "/api/integrations/leads/inbound/",
+]
 
 
 def _api_path_for_public_match(path: str) -> str:
@@ -19,6 +45,38 @@ def _api_path_for_public_match(path: str) -> str:
     if path.startswith("/api/v1/"):
         return "/api/" + path[len("/api/v1/") :]
     return path
+
+
+class MaintenanceMiddleware(MiddlewareMixin):
+    """Return 503 for all non-whitelisted API routes when maintenance mode is on."""
+
+    def process_request(self, request):
+        if not request.path.startswith("/api/"):
+            return None
+
+        match_path = _api_path_for_public_match(request.path)
+        if any(match_path.startswith(ep) for ep in MAINTENANCE_WHITELIST_PREFIXES):
+            return None
+
+        policy = get_maintenance_policy()
+        if not policy.get("enabled"):
+            return None
+
+        lang = request_language_from_meta(getattr(request, "META", {}) or {})
+        message = resolve_maintenance_message(
+            str(policy.get("message") or ""),
+            lang=lang,
+        )
+        return JsonResponse(
+            {
+                "success": False,
+                "error": {
+                    "code": "maintenance_mode",
+                    "message": message,
+                },
+            },
+            status=503,
+        )
 
 
 class DisableCSRFForAPI(MiddlewareMixin):

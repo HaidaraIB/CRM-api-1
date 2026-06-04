@@ -225,6 +225,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "crm_saas_api.middleware.MaintenanceMiddleware",
     "django.middleware.common.CommonMiddleware",
     "crm_saas_api.middleware.DisableCSRFForAPI",
     "crm_saas_api.middleware.APIKeyValidationMiddleware",

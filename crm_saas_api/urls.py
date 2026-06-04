@@ -88,7 +88,7 @@ from settings.views import (
     PlatformWhatsAppSettingsViewSet,
     BillingSettingsViewSet,
 )
-from settings.views_public import MobileAppVersionPublicView
+from settings.views_public import MaintenanceStatusPublicView, MobileAppVersionPublicView
 from real_estate.views import (
     DeveloperViewSet,
     ProjectViewSet,
@@ -271,6 +271,11 @@ v1_patterns = [
         "public/mobile-app-version/",
         MobileAppVersionPublicView.as_view(),
         name="public_mobile_app_version",
+    ),
+    path(
+        "public/maintenance-status/",
+        MaintenanceStatusPublicView.as_view(),
+        name="public_maintenance_status",
     ),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
