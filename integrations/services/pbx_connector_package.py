@@ -33,8 +33,10 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "connector_api_key": settings.connector_api_key,
         "pbx_host": settings.pbx_host or "192.168.1.100",
         "ami_port": settings.ami_port or 5038,
+        "ami_use_tls": False,
         "ami_username": settings.ami_username or "",
         "ami_password": "",
+        "channel_driver": "PJSIP",
         "listen_host": "0.0.0.0",
         "listen_port": 8787,
         "poll_interval_sec": 3,
@@ -79,7 +81,8 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "3. Edit config.json — set ami_password (not included for security).\n"
             "   macOS SSL error? Run: /Applications/Python 3.*/Install Certificates.command\n"
             "   Or ensure certifi is installed (included in requirements.txt).\n"
-            "4. Run: python connector.py  (or run.bat / run.sh)\n"
+            "4. Test AMI only: python connector.py --test-ami\n"
+            "   Run: python connector.py  (or run.bat / run.sh)\n"
             "5. ZYCOO Push Event URL (choose one):\n"
             "   A) Direct to CRM (recommended): paste Webhook URL from CRM PBX settings.\n"
             "   B) Via this PC: http://<this-pc-ip>:8787 (connector forwards events).\n"

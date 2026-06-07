@@ -10,6 +10,7 @@ import json
 import logging
 import socket
 import ssl
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -166,16 +167,51 @@ def api_request(cfg: dict, method: str, path: str, body: dict | None = None) -> 
 class AmiClient:
     """Minimal Asterisk AMI client for Originate."""
 
-    def __init__(self, host: str, port: int, username: str, password: str):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        *,
+        use_tls: bool = False,
+        channel_driver: str = "PJSIP",
+    ):
         self.host = host
         self.port = port
         self.username = username
         self.password = password
-        self._sock: socket.socket | None = None
+        self.use_tls = use_tls
+        self.channel_driver = (channel_driver or "PJSIP").strip() or "PJSIP"
+        self._sock: socket.socket | ssl.SSLSocket | None = None
+
+    def _open_tcp(self) -> None:
+        self._sock = socket.create_connection((self.host, self.port), timeout=10)
+        if self.use_tls:
+            context = ssl.create_default_context()
+            assert self._sock is not None
+            self._sock = context.wrap_socket(self._sock, server_hostname=self.host)
+            logger.info("AMI TLS enabled for %s:%s", self.host, self.port)
+
+    def test_connection(self) -> None:
+        """Raw TCP (+ optional TLS) and AMI banner only; no login."""
+        try:
+            self._open_tcp()
+            logger.info(
+                "TCP connection established to %s:%s",
+                self.host,
+                self.port,
+            )
+            banner = self._read_block()
+            logger.info("AMI banner received:\n%s", banner)
+        finally:
+            self.close()
 
     def connect(self) -> None:
-        self._sock = socket.create_connection((self.host, self.port), timeout=10)
-        self._read_block()
+        self._open_tcp()
+        logger.info("AMI connected to %s:%s", self.host, self.port)
+        banner = self._read_block()
+        logger.info("AMI banner:\n%s", banner)
         self._send_action(
             {
                 "Action": "Login",
@@ -184,7 +220,9 @@ class AmiClient:
             }
         )
         resp = self._read_block()
+        logger.info("AMI login response:\n%s", resp)
         if "Success" not in resp:
+            logger.error("AMI authentication failed: %s", resp)
             raise RuntimeError(f"AMI login failed: {resp}")
 
     def close(self) -> None:
@@ -193,7 +231,10 @@ class AmiClient:
                 self._send_action({"Action": "Logoff"})
             except Exception:
                 pass
-            self._sock.close()
+            try:
+                self._sock.close()
+            except Exception:
+                pass
             self._sock = None
 
     def _send_action(self, fields: dict[str, str]) -> None:
@@ -216,7 +257,13 @@ class AmiClient:
     def originate(self, extension: str, phone_number: str, caller_id: str = "") -> str:
         self.connect()
         try:
-            channel = f"SIP/{extension}"
+            channel = f"{self.channel_driver}/{extension}"
+            logger.info(
+                "Originate request ext=%s phone=%s channel=%s",
+                extension,
+                phone_number,
+                channel,
+            )
             self._send_action(
                 {
                     "Action": "Originate",
@@ -229,7 +276,9 @@ class AmiClient:
                     "Timeout": "30000",
                 }
             )
-            return self._read_block()
+            response = self._read_block()
+            logger.info("Originate response:\n%s", response)
+            return response
         finally:
             self.close()
 
@@ -293,7 +342,6 @@ def process_recording_job(cfg: dict, job: dict[str, Any]) -> None:
         return
     file_path = Path(path_str)
     if not file_path.is_file():
-        logger.error("Recording not found on PBX: %s (record_id=%s)", path_str, record_id)
         return
     try:
         upload_recording_file(cfg, int(record_id), file_path)
@@ -381,8 +429,47 @@ class ReuseAddrHTTPServer(HTTPServer):
     allow_reuse_address = True
 
 
+def _make_ami_client(cfg: dict) -> AmiClient:
+    return AmiClient(
+        cfg["pbx_host"],
+        int(cfg.get("ami_port", 5038)),
+        cfg["ami_username"],
+        cfg["ami_password"],
+        use_tls=bool(cfg.get("ami_use_tls", False)),
+        channel_driver=str(cfg.get("channel_driver", "PJSIP")),
+    )
+
+
+def run_test_ami(cfg: dict) -> None:
+    """Connect, log banner + login response, then exit (no CRM polling)."""
+    ami = _make_ami_client(cfg)
+    use_tls = bool(cfg.get("ami_use_tls", False))
+    logger.info(
+        "AMI test: host=%s port=%s tls=%s driver=%s",
+        ami.host,
+        ami.port,
+        use_tls,
+        ami.channel_driver,
+    )
+    try:
+        ami.connect()
+        logger.info("AMI test: authentication succeeded")
+    except Exception as exc:
+        logger.error("AMI test failed: %s", exc)
+        raise SystemExit(1) from exc
+    finally:
+        ami.close()
+
+
 def main() -> None:
+    import sys
+
     cfg = load_config()
+    if "--test-ami" in sys.argv:
+        logger.info("LOOP PBX Connector v%s — AMI test mode", CONNECTOR_VERSION)
+        run_test_ami(cfg)
+        return
+
     logger.info("LOOP PBX Connector v%s", CONNECTOR_VERSION)
     logger.info("CRM API base: %s", cfg.get("api_base_url"))
     logger.info(
@@ -402,12 +489,20 @@ def main() -> None:
         )
         raise SystemExit(1) from None
 
-    ami = AmiClient(
-        cfg["pbx_host"],
-        int(cfg.get("ami_port", 5038)),
-        cfg["ami_username"],
-        cfg["ami_password"],
+    ami = _make_ami_client(cfg)
+    logger.info(
+        "AMI config: port=%s tls=%s channel_driver=%s",
+        ami.port,
+        ami.use_tls,
+        ami.channel_driver,
     )
+    try:
+        ami.test_connection()
+    except Exception:
+        logger.exception(
+            "AMI startup connection test failed (TCP/banner). "
+            "Check transport, TLS (ami_use_tls), and port."
+        )
 
     poll_thread = threading.Thread(target=poll_commands, args=(cfg, ami), daemon=True)
     poll_thread.start()
@@ -428,9 +523,16 @@ def main() -> None:
                 port,
             )
         raise
-    logger.info("Connector listening on %s:%s", host, port)
-    server.serve_forever()
+    logger.info("Connector listening on %s:%s (Ctrl+C to stop)", host, port)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("Connector stopped.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Connector stopped.")
+        sys.exit(0)
