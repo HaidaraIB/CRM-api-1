@@ -607,3 +607,161 @@ class TestSearch:
         body = api_body(response)
         assert body["count"] == 1
         assert body["results"][0]["name"] == "Alice"
+
+
+@pytest.mark.django_db
+class TestClientListFilters:
+    """Server-side list filters and status-counts for leads pagination."""
+
+    def test_filter_by_status_paginates_correctly(self, authenticated_admin, company):
+        from crm.models import Client
+        from settings.models import LeadStatus
+
+        status_new = LeadStatus.objects.create(name="Filter Test New", company=company)
+        status_contacted = LeadStatus.objects.create(name="Filter Test Contacted", company=company)
+
+        for i in range(5):
+            Client.objects.create(
+                name=f"New {i}",
+                company=company,
+                priority="low",
+                type="fresh",
+                status=status_new,
+            )
+        for i in range(3):
+            Client.objects.create(
+                name=f"Contacted {i}",
+                company=company,
+                priority="low",
+                type="cold",
+                status=status_contacted,
+            )
+
+        response = authenticated_admin.get(
+            "/api/v1/clients/?status=Filter%20Test%20New&page_size=2"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["count"] == 5
+        assert len(body["results"]) == 2
+        assert all(r["status_name"] == "Filter Test New" for r in body["results"])
+
+        page2 = authenticated_admin.get(
+            "/api/v1/clients/?status=Filter%20Test%20New&page=2&page_size=2"
+        )
+        assert api_body(page2)["count"] == 5
+        assert len(api_body(page2)["results"]) == 2
+
+    def test_status_counts_returns_global_totals(self, authenticated_admin, company):
+        from crm.models import Client
+        from settings.models import LeadStatus
+
+        status_new = LeadStatus.objects.create(name="Counts Test New", company=company)
+        status_contacted = LeadStatus.objects.create(name="Counts Test Contacted", company=company)
+
+        Client.objects.create(
+            name="New 1", company=company, priority="low", type="fresh", status=status_new
+        )
+        Client.objects.create(
+            name="New 2", company=company, priority="low", type="fresh", status=status_new
+        )
+        Client.objects.create(
+            name="Contacted 1",
+            company=company,
+            priority="low",
+            type="cold",
+            status=status_contacted,
+        )
+
+        assert Client.objects.filter(status=status_new).count() == 2
+        assert Client.objects.filter(status=status_contacted).count() == 1
+
+        response = authenticated_admin.get("/api/v1/clients/status-counts/")
+        assert response.status_code == status.HTTP_200_OK
+        counts = api_body(response)
+        assert counts["All"] == 3
+        assert counts["Counts Test New"] == 2
+        assert counts["Counts Test Contacted"] == 1
+
+    def test_status_counts_excludes_status_filter_param(self, authenticated_admin, company):
+        from crm.models import Client
+        from settings.models import LeadStatus
+
+        status_new = LeadStatus.objects.create(name="Exclude Test New", company=company)
+        status_contacted = LeadStatus.objects.create(name="Exclude Test Contacted", company=company)
+
+        Client.objects.create(
+            name="New 1", company=company, priority="low", type="fresh", status=status_new
+        )
+        Client.objects.create(
+            name="Contacted 1",
+            company=company,
+            priority="low",
+            type="cold",
+            status=status_contacted,
+        )
+
+        response = authenticated_admin.get(
+            "/api/v1/clients/status-counts/?status=Exclude%20Test%20New"
+        )
+        counts = api_body(response)
+        assert counts["All"] == 2
+        assert counts["Exclude Test New"] == 1
+        assert counts["Exclude Test Contacted"] == 1
+
+    def test_filter_by_type_and_assigned_to(self, authenticated_admin, company, employee_user):
+        from crm.models import Client
+
+        Client.objects.create(
+            name="Fresh Assigned",
+            company=company,
+            priority="high",
+            type="fresh",
+            assigned_to=employee_user,
+        )
+        Client.objects.create(
+            name="Cold Unassigned",
+            company=company,
+            priority="low",
+            type="cold",
+        )
+
+        fresh_resp = authenticated_admin.get("/api/v1/clients/?type=fresh")
+        assert api_body(fresh_resp)["count"] == 1
+
+        unassigned_resp = authenticated_admin.get("/api/v1/clients/?assigned_to=unassigned")
+        assert api_body(unassigned_resp)["count"] == 1
+
+        assigned_resp = authenticated_admin.get(
+            f"/api/v1/clients/?assigned_to={employee_user.id}"
+        )
+        assert api_body(assigned_resp)["count"] == 1
+
+    def test_employee_status_counts_respect_permissions(
+        self, authenticated_employee, company, employee_user, admin_user
+    ):
+        from crm.models import Client
+        from settings.models import LeadStatus
+
+        status_new = LeadStatus.objects.create(name="Perm Test New", company=company)
+        Client.objects.create(
+            name="Mine",
+            company=company,
+            priority="low",
+            type="fresh",
+            assigned_to=employee_user,
+            status=status_new,
+        )
+        Client.objects.create(
+            name="NotMine",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=admin_user,
+            status=status_new,
+        )
+
+        response = authenticated_employee.get("/api/v1/clients/status-counts/")
+        counts = api_body(response)
+        assert counts["All"] == 1
+        assert counts["Perm Test New"] == 1

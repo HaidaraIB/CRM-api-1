@@ -1,3 +1,4 @@
+from django.db.models import Count
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -24,6 +25,8 @@ from accounts.models import User, Role
 from notifications.models import NotificationType
 from notifications.services import NotificationService
 from notifications.team_activity import notify_owner_team_activity
+from settings.models import LeadStatus
+from .client_list_filters import apply_client_list_filters
 from .serializers import (
     ClientSerializer,
     ClientListSerializer,
@@ -92,6 +95,15 @@ class ClientViewSet(viewsets.ModelViewSet):
 
         return queryset.none()
 
+    def filter_queryset(self, queryset):
+        queryset = super().filter_queryset(queryset)
+        if self.action in ("list", "status_counts"):
+            exclude_status = self.action == "status_counts"
+            queryset = apply_client_list_filters(
+                queryset, self.request, exclude_status=exclude_status
+            )
+        return queryset
+
     def get_serializer_class(self):
         if self.action == "list":
             return ClientListSerializer
@@ -151,6 +163,35 @@ class ClientViewSet(viewsets.ModelViewSet):
             lead_id=client.id,
             lead_name=client.name,
         )
+
+    @action(detail=False, methods=["get"], url_path="status-counts")
+    def status_counts(self, request):
+        """Return global per-status lead counts for the current filter set (excluding status)."""
+        queryset = self.filter_queryset(self.get_queryset())
+        company = getattr(request.user, "company", None)
+
+        client_ids = queryset.values_list("pk", flat=True).distinct()
+        agg_qs = Client.objects.filter(pk__in=client_ids)
+        counts_by_name = {
+            row["status__name"]: row["count"]
+            for row in agg_qs.values("status__name").annotate(count=Count("pk"))
+            if row["status__name"]
+        }
+
+        result = {"All": agg_qs.count()}
+        if company:
+            status_names = (
+                LeadStatus.objects.filter(company=company, is_active=True, is_hidden=False)
+                .order_by("-is_default", "name")
+                .values_list("name", flat=True)
+            )
+            for name in status_names:
+                result[name] = counts_by_name.get(name, 0)
+        else:
+            for name, count in counts_by_name.items():
+                result[name] = count
+
+        return Response(result)
 
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):
