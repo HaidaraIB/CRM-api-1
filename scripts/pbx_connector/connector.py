@@ -202,7 +202,7 @@ class AmiClient:
                 self.host,
                 self.port,
             )
-            banner = self._read_block()
+            banner = self._read_block("AMI banner")
             logger.info("AMI banner received:\n%s", banner)
         finally:
             self.close()
@@ -210,7 +210,7 @@ class AmiClient:
     def connect(self) -> None:
         self._open_tcp()
         logger.info("AMI connected to %s:%s", self.host, self.port)
-        banner = self._read_block()
+        banner = self._read_block("AMI banner")
         logger.info("AMI banner:\n%s", banner)
         self._send_action(
             {
@@ -219,7 +219,7 @@ class AmiClient:
                 "Secret": self.password,
             }
         )
-        resp = self._read_block()
+        resp = self._read_block("AMI login response")
         logger.info("AMI login response:\n%s", resp)
         if "Success" not in resp:
             logger.error("AMI authentication failed: %s", resp)
@@ -242,16 +242,29 @@ class AmiClient:
         lines = "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n"
         self._sock.sendall(lines.encode("utf-8"))
 
-    def _read_block(self) -> str:
+    def _read_block(self, purpose: str = "AMI data") -> str:
         assert self._sock
         chunks: list[str] = []
-        while True:
-            data = self._sock.recv(4096).decode("utf-8", errors="replace")
-            if not data:
-                break
-            chunks.append(data)
-            if "\r\n\r\n" in "".join(chunks):
-                break
+        try:
+            while True:
+                data = self._sock.recv(4096).decode("utf-8", errors="replace")
+                if not data:
+                    break
+                chunks.append(data)
+                if "\r\n\r\n" in "".join(chunks):
+                    break
+        except socket.timeout as exc:
+            partial = "".join(chunks)
+            hint = (
+                f"Timed out waiting for {purpose} from {self.host}:{self.port}. "
+                "TCP connected but the server sent no AMI banner. "
+            )
+            if not self.use_tls and self.port == 5038:
+                hint += "Try ami_port 5039 with ami_use_tls true. "
+            hint += "Also confirm AMI/Manager is enabled on the PBX."
+            if partial:
+                hint += f" Partial data received: {partial[:200]!r}"
+            raise TimeoutError(hint) from exc
         return "".join(chunks)
 
     def originate(self, extension: str, phone_number: str, caller_id: str = "") -> str:
@@ -276,7 +289,7 @@ class AmiClient:
                     "Timeout": "30000",
                 }
             )
-            response = self._read_block()
+            response = self._read_block("AMI Originate response")
             logger.info("Originate response:\n%s", response)
             return response
         finally:

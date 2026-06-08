@@ -90,7 +90,7 @@ class PbxSettingsSerializer(serializers.ModelSerializer):
 
 class UserPbxExtensionSerializer(serializers.ModelSerializer):
     user_id = serializers.PrimaryKeyRelatedField(
-        source="user", queryset=User.objects.all(), write_only=True
+        source="user", queryset=User.objects.all()
     )
     username = serializers.CharField(source="user.username", read_only=True)
 
