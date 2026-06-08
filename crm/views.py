@@ -1,4 +1,5 @@
 from django.db.models import Count
+from django.utils import timezone
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -192,6 +193,46 @@ class ClientViewSet(viewsets.ModelViewSet):
                 result[name] = count
 
         return Response(result)
+
+    @action(detail=False, methods=["get"], url_path="mission-bar-summary")
+    def mission_bar_summary(self, request):
+        """Return dashboard mission bar counts (role-scoped)."""
+        user = request.user
+        today = timezone.localdate()
+        client_qs = self.get_queryset()
+
+        today_new_leads = client_qs.filter(created_at__date=today).count()
+
+        unassigned_leads = 0
+        if user.is_admin():
+            unassigned_leads = client_qs.filter(assigned_to__isnull=True).count()
+
+        task_qs = ClientTask.objects.all().select_related("client")
+        if user.is_admin() or user.is_reception():
+            task_qs = task_qs.filter(client__company=user.company)
+        elif user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            task_qs = task_qs.filter(client__company=user.company)
+        elif user.is_assigned_clinical_staff():
+            task_qs = task_qs.filter(client__assigned_to=user)
+        else:
+            task_qs = task_qs.none()
+
+        overdue_follow_ups = task_qs.filter(
+            reminder_date__isnull=False,
+            reminder_date__date__lt=today,
+        ).count()
+
+        contact_today = client_qs.filter(
+            assigned_to__isnull=False,
+            client_tasks__reminder_date__date=today,
+        ).distinct().count()
+
+        return Response({
+            "contact_today": contact_today,
+            "overdue_follow_ups": overdue_follow_ups,
+            "today_new_leads": today_new_leads,
+            "unassigned_leads": unassigned_leads,
+        })
 
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):

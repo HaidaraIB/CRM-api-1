@@ -765,3 +765,99 @@ class TestClientListFilters:
         counts = api_body(response)
         assert counts["All"] == 1
         assert counts["Perm Test New"] == 1
+
+
+@pytest.mark.django_db
+class TestMissionBarSummary:
+    """Dashboard mission bar summary counts."""
+
+    def test_mission_bar_summary_counts(self, authenticated_admin, company, employee_user):
+        from datetime import datetime, timedelta, time
+
+        from crm.models import Client, ClientTask
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        yesterday = timezone.now() - timedelta(days=1)
+        today_dt = timezone.make_aware(datetime.combine(today, time.min))
+
+        assigned = Client.objects.create(
+            name="Assigned Today",
+            company=company,
+            priority="high",
+            type="fresh",
+            assigned_to=employee_user,
+        )
+        Client.objects.create(
+            name="Unassigned",
+            company=company,
+            priority="low",
+            type="cold",
+        )
+        Client.objects.create(
+            name="Created Today Unassigned",
+            company=company,
+            priority="low",
+            type="fresh",
+        )
+
+        ClientTask.objects.create(
+            client=assigned,
+            reminder_date=today_dt,
+            notes="Due today",
+        )
+        ClientTask.objects.create(
+            client=assigned,
+            reminder_date=yesterday,
+            notes="Overdue",
+        )
+
+        response = authenticated_admin.get("/api/v1/clients/mission-bar-summary/")
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["contact_today"] == 1
+        assert body["overdue_follow_ups"] == 1
+        assert body["today_new_leads"] == 3
+        assert body["unassigned_leads"] == 2
+
+    def test_mission_bar_summary_employee_scope(
+        self, authenticated_employee, company, employee_user, admin_user
+    ):
+        from datetime import datetime, timedelta, time
+
+        from crm.models import Client, ClientTask
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        yesterday = timezone.now() - timedelta(days=1)
+        today_dt = timezone.make_aware(datetime.combine(today, time.min))
+
+        mine = Client.objects.create(
+            name="Mine",
+            company=company,
+            priority="low",
+            type="fresh",
+            assigned_to=employee_user,
+        )
+        Client.objects.create(
+            name="Not Mine",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=admin_user,
+        )
+
+        ClientTask.objects.create(client=mine, reminder_date=yesterday, notes="Overdue mine")
+        ClientTask.objects.create(
+            client=mine,
+            reminder_date=today_dt,
+            notes="Today mine",
+        )
+
+        response = authenticated_employee.get("/api/v1/clients/mission-bar-summary/")
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["contact_today"] == 1
+        assert body["overdue_follow_ups"] == 1
+        assert body["today_new_leads"] == 1
+        assert body["unassigned_leads"] == 0
