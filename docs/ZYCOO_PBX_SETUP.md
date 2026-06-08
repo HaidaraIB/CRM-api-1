@@ -104,9 +104,13 @@ ZYCOO payloads may use form fields or JSON. The CRM parser accepts both and maps
 
 ## 4. Extension → CRM user mapping
 
-1. Note each agent extension under **Telephony → Extensions**.
+1. Note each agent extension under **Telephony → Extensions** on ZYCOO.
 2. In LOOP CRM: **Integrations → PBX / ZYCOO → User extensions**.
-3. Map each CRM user to their desk phone extension (e.g. User Ahmed → `101`).
+3. Map each CRM user to the **same** extension number (e.g. User Ahmed → `101`).
+4. **Register a device** for that extension:
+   - **Desk phone:** IP phone registers to the extension via SIP.
+   - **Mobile agent:** ZYCOO SIP softphone app — extension, server, password, then **Register** until connected.
+5. AMI connector login alone is **not** enough; click-to-dial rings `PJSIP/{extension}`, which must exist and have a registered endpoint.
 
 ## 5. LOOP PBX Connector (cloud CRM)
 
@@ -167,7 +171,8 @@ and whitelist the CRM server IP in AMI (less secure; connector is preferred).
 | Issue | Check |
 |-------|-------|
 | No events in CRM | Connector running? Push Event URL correct? Firewall on port 8787? |
-| Click-to-dial fails | AMI credentials, allowed IP, extension registered? |
+| Click-to-dial fails | AMI credentials, allowed IP, extension exists on PBX, CRM mapping matches ZYCOO, desk phone or SIP app registered? |
+| `Extension does not exist` | Wrong extension in CRM mapping, or extension not created under Telephony → Extensions |
 | Wrong lead on screen pop | Phone number format; add number to lead profile |
 | No recording link | Recording enabled on PBX? `RecordingFile` in hangup payload? |
 | Connector offline | `connector_last_seen_at` in CRM settings; network to cloud API |

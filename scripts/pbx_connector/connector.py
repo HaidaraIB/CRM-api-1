@@ -164,6 +164,22 @@ def api_request(cfg: dict, method: str, path: str, body: dict | None = None) -> 
         raise
 
 
+def _ami_response_ok(response: str) -> bool:
+    for line in response.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("response:"):
+            return "success" in stripped.lower()
+    return "Success" in response and "Response: Error" not in response
+
+
+def _ami_response_message(response: str) -> str:
+    for line in response.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Message:"):
+            return stripped.split(":", 1)[1].strip()
+    return response.strip()[:500]
+
+
 class AmiClient:
     """Minimal Asterisk AMI client for Originate."""
 
@@ -176,6 +192,7 @@ class AmiClient:
         *,
         use_tls: bool = False,
         channel_driver: str = "PJSIP",
+        originate_context: str = "from-internal",
     ):
         self.host = host
         self.port = port
@@ -183,6 +200,7 @@ class AmiClient:
         self.password = password
         self.use_tls = use_tls
         self.channel_driver = (channel_driver or "PJSIP").strip() or "PJSIP"
+        self.originate_context = (originate_context or "from-internal").strip() or "from-internal"
         self._sock: socket.socket | ssl.SSLSocket | None = None
 
     def _open_tcp(self) -> None:
@@ -301,7 +319,7 @@ class AmiClient:
                 {
                     "Action": "Originate",
                     "Channel": channel,
-                    "Context": "from-internal",
+                    "Context": self.originate_context,
                     "Exten": phone_number,
                     "Priority": "1",
                     "CallerID": caller_id or phone_number,
@@ -311,6 +329,10 @@ class AmiClient:
             )
             response = self._read_block("AMI Originate response")
             logger.info("Originate response:\n%s", response)
+            if not _ami_response_ok(response):
+                message = _ami_response_message(response)
+                logger.error("AMI Originate failed: %s", message)
+                raise RuntimeError(f"AMI Originate failed: {message}")
             return response
         finally:
             self.close()
@@ -470,6 +492,7 @@ def _make_ami_client(cfg: dict) -> AmiClient:
         cfg["ami_password"],
         use_tls=bool(cfg.get("ami_use_tls", False)),
         channel_driver=str(cfg.get("channel_driver", "PJSIP")),
+        originate_context=str(cfg.get("originate_context", "from-internal")),
     )
 
 

@@ -37,6 +37,7 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "ami_username": settings.ami_username or "",
         "ami_password": "",
         "channel_driver": "PJSIP",
+        "originate_context": "from-internal",
         "listen_host": "0.0.0.0",
         "listen_port": 8787,
         "poll_interval_sec": 3,
@@ -89,7 +90,10 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "6. Call recordings: connector must run on a host that can read PBX files under\n"
             "   /var/spool/asterisk/monitor/recording/ (same LAN as PBX or VPN).\n"
             "   Enable Cdr in ZYCOO Push Events. Connector polls CRM for upload jobs.\n"
-            "7. In CRM: Integrations → PBX — confirm Connector status is Online.\n\n"
+            "7. In CRM: Integrations → PBX — confirm Connector status is Online.\n"
+            "8. Click-to-dial: map each CRM user to their ZYCOO extension (same number as\n"
+            "   Telephony → Extensions). Desk phone or mobile SIP app must register to that\n"
+            "   extension. AMI login alone does not ring phones — Originate uses PJSIP/{ext}.\n\n"
             f"API base URL: {config['api_base_url']}\n"
             f"PBX host: {config['pbx_host']}\n"
             "\n"
