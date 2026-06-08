@@ -202,7 +202,7 @@ class AmiClient:
                 self.host,
                 self.port,
             )
-            banner = self._read_block("AMI banner")
+            banner = self._read_banner()
             logger.info("AMI banner received:\n%s", banner)
         finally:
             self.close()
@@ -210,7 +210,7 @@ class AmiClient:
     def connect(self) -> None:
         self._open_tcp()
         logger.info("AMI connected to %s:%s", self.host, self.port)
-        banner = self._read_block("AMI banner")
+        banner = self._read_banner()
         logger.info("AMI banner:\n%s", banner)
         self._send_action(
             {
@@ -241,6 +241,26 @@ class AmiClient:
         assert self._sock
         lines = "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n"
         self._sock.sendall(lines.encode("utf-8"))
+
+    def _read_banner(self) -> str:
+        """AMI greeting is one line (e.g. Asterisk Call Manager/7.0.1), not a double-CRLF block."""
+        assert self._sock
+        chunks: list[str] = []
+        try:
+            while True:
+                data = self._sock.recv(4096).decode("utf-8", errors="replace")
+                if not data:
+                    break
+                chunks.append(data)
+                if "\n" in "".join(chunks):
+                    break
+        except socket.timeout as exc:
+            partial = "".join(chunks)
+            raise TimeoutError(
+                f"Timed out waiting for AMI banner from {self.host}:{self.port}."
+                + (f" Partial data: {partial[:200]!r}" if partial else "")
+            ) from exc
+        return "".join(chunks)
 
     def _read_block(self, purpose: str = "AMI data") -> str:
         assert self._sock
