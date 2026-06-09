@@ -6,6 +6,7 @@ Run on a machine on the same network as the PBX.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import socket
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("pbx_connector")
@@ -353,11 +355,34 @@ def forward_event(cfg: dict, raw_body: bytes, content_type: str) -> None:
         raise
 
 
-def upload_recording_file(cfg: dict, record_id: int, file_path: Path) -> None:
-    """Upload a PBX WAV from local filesystem to CRM storage."""
+def _pbx_http_headers(cfg: dict) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    user = (cfg.get("pbx_http_user") or "").strip()
+    if user:
+        password = cfg.get("pbx_http_password") or ""
+        creds = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
+        headers["Authorization"] = f"Basic {creds}"
+    return headers
+
+
+def fetch_recording_bytes(cfg: dict, download_url: str) -> bytes:
+    """Download a recording WAV from the PBX HTTP endpoint."""
+    timeout = int(cfg.get("recording_fetch_timeout_sec", 60))
+    req = urlrequest.Request(
+        download_url,
+        headers=_pbx_http_headers(cfg),
+        method="GET",
+    )
+    # PBX is on LAN — do not use CRM API SSL settings for this fetch.
+    with urlrequest.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def upload_recording_bytes(
+    cfg: dict, record_id: int, file_bytes: bytes, filename: str
+) -> None:
+    """Upload recording bytes to CRM storage."""
     url = build_api_url(cfg, f"/integrations/pbx/connector/recordings/{record_id}/upload/")
-    filename = file_path.name
-    file_bytes = file_path.read_bytes()
     boundary = f"----LoopPbx{int(time.time() * 1000)}"
     body = b"".join(
         [
@@ -390,16 +415,52 @@ def upload_recording_file(cfg: dict, record_id: int, file_path: Path) -> None:
         raise
 
 
+def _recording_filename_from_job(job: dict[str, Any]) -> str:
+    download_url = (job.get("download_url") or "").strip()
+    if download_url:
+        name = Path(urlparse(download_url).path).name
+        if name:
+            return name
+    path_str = (job.get("file") or "").strip()
+    if path_str:
+        return Path(path_str).name
+    return "recording.wav"
+
+
 def process_recording_job(cfg: dict, job: dict[str, Any]) -> None:
     record_id = job.get("record_id")
-    path_str = (job.get("file") or "").strip()
-    if not record_id or not path_str:
+    download_url = (job.get("download_url") or "").strip()
+    if not record_id or not download_url:
         return
-    file_path = Path(path_str)
-    if not file_path.is_file():
+    if not download_url.startswith(("http://", "https://")):
+        logger.warning(
+            "Recording job missing HTTP download_url record_id=%s", record_id
+        )
         return
+    filename = _recording_filename_from_job(job)
     try:
-        upload_recording_file(cfg, int(record_id), file_path)
+        file_bytes = fetch_recording_bytes(cfg, download_url)
+        if not file_bytes:
+            logger.warning(
+                "Recording fetch returned empty body record_id=%s url=%s",
+                record_id,
+                download_url[:120],
+            )
+            return
+        upload_recording_bytes(cfg, int(record_id), file_bytes, filename)
+    except HTTPError as exc:
+        if exc.code == 404:
+            logger.info(
+                "Recording not ready yet (404) record_id=%s url=%s",
+                record_id,
+                download_url[:120],
+            )
+            return
+        logger.exception(
+            "Recording HTTP fetch failed record_id=%s status=%s",
+            record_id,
+            exc.code,
+        )
     except Exception:
         logger.exception("Recording upload failed record_id=%s", record_id)
 

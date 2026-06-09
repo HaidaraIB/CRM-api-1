@@ -13,5 +13,8 @@
   "listen_port": 8787,
   "poll_interval_sec": 3,
   "recording_poll_interval_sec": 5,
+  "recording_fetch_timeout_sec": 60,
+  "pbx_http_user": "",
+  "pbx_http_password": "",
   "ssl_verify": true
 }

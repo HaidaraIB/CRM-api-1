@@ -157,7 +157,25 @@ and whitelist the CRM server IP in AMI (less secure; connector is preferred).
 
 **Addons → API → PMS** is for hotel/property systems. Leave disabled for standard CRM use.
 
-## 8. CRM configuration checklist
+## 8. Call recording HTTP access (required for CRM playback)
+
+After enabling call recording on extensions, verify the PBX serves recordings over HTTP from a machine on the LAN:
+
+```
+http://<pbx-lan-ip>/monitor/recording/<date>/<ext>/<filename>.wav
+```
+
+Example (replace with a real file from Reports → Records → Call Record):
+
+```
+curl -I "http://192.168.1.100/monitor/recording/20260603/104/example.wav"
+```
+
+- CRM stores the PBX host from **Integrations → PBX / ZYCOO** and builds this URL from the CDR `recording_filename` field.
+- The LAN connector downloads the file via HTTP and uploads it to CRM storage.
+- If the PBX requires HTTP Basic auth, set `pbx_http_user` and `pbx_http_password` in connector `config.json`.
+
+## 9. CRM configuration checklist
 
 1. Enable PBX integration in **Integrations → PBX / ZYCOO**.
 2. Copy **Webhook URL** and **Connector API key**.
@@ -166,7 +184,7 @@ and whitelist the CRM server IP in AMI (less secure; connector is preferred).
 5. Place a test inbound call → screen pop + auto call log on lead timeline.
 6. Test click-to-dial from a lead page.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Issue | Check |
 |-------|-------|
@@ -174,5 +192,5 @@ and whitelist the CRM server IP in AMI (less secure; connector is preferred).
 | Click-to-dial fails | AMI credentials, allowed IP, extension exists on PBX, CRM mapping matches ZYCOO, desk phone or SIP app registered? |
 | `Extension does not exist` | Wrong extension in CRM mapping, or extension not created under Telephony → Extensions |
 | Wrong lead on screen pop | Phone number format; add number to lead profile |
-| No recording link | Recording enabled on PBX? `RecordingFile` in hangup payload? |
+| No recording link | Recording enabled on PBX? `recording_filename` in CDR payload? PBX host set in CRM? HTTP `/monitor/recording/...` reachable from connector PC? |
 | Connector offline | `connector_last_seen_at` in CRM settings; network to cloud API |

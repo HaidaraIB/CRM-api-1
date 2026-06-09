@@ -42,6 +42,9 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "listen_port": 8787,
         "poll_interval_sec": 3,
         "recording_poll_interval_sec": 5,
+        "recording_fetch_timeout_sec": 60,
+        "pbx_http_user": "",
+        "pbx_http_password": "",
         "ssl_verify": True,
         "x_api_key": "",
     }
@@ -87,9 +90,9 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "5. ZYCOO Push Event URL (choose one):\n"
             "   A) Direct to CRM (recommended): paste Webhook URL from CRM PBX settings.\n"
             "   B) Via this PC: http://<this-pc-ip>:8787 (connector forwards events).\n"
-            "6. Call recordings: connector must run on a host that can read PBX files under\n"
-            "   /var/spool/asterisk/monitor/recording/ (same LAN as PBX or VPN).\n"
-            "   Enable Cdr in ZYCOO Push Events. Connector polls CRM for upload jobs.\n"
+            "6. Call recordings: enable Cdr in ZYCOO Push Events. Connector downloads each\n"
+            "   recording via HTTP from the PBX (http://<pbx>/monitor/recording/...).\n"
+            "   Verify that URL works from this PC. Optional: pbx_http_user/password in config.\n"
             "7. In CRM: Integrations → PBX — confirm Connector status is Online.\n"
             "8. Click-to-dial: map each CRM user to their ZYCOO extension (same number as\n"
             "   Telephony → Extensions). Desk phone or mobile SIP app must register to that\n"
