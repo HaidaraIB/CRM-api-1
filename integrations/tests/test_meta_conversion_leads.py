@@ -178,6 +178,23 @@ def test_pixel_id_validation_rejects_non_numeric(company):
 
 
 @pytest.mark.django_db
+def test_pixel_id_update_without_name(company):
+    account = _create_meta_account(company, metadata={})
+
+    serializer = IntegrationAccountUpdateSerializer(
+        instance=account,
+        data={"pixel_id": "1234567890"},
+        partial=True,
+    )
+
+    assert serializer.is_valid(), serializer.errors
+    account = serializer.save()
+    account.refresh_from_db()
+
+    assert account.metadata["pixel_id"] == "1234567890"
+
+
+@pytest.mark.django_db
 def test_pixel_id_validation_strips_whitespace(company):
     account = _create_meta_account(company, metadata={})
 

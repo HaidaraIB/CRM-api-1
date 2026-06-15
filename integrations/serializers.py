@@ -112,6 +112,10 @@ class IntegrationAccountUpdateSerializer(serializers.ModelSerializer):
             'pixel_id',
             'conversion_leads_enabled',
         ]
+        extra_kwargs = {
+            'name': {'required': False},
+            'is_active': {'required': False},
+        }
 
     def validate_pixel_id(self, value):
         if value is None or value == "":
