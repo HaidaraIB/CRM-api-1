@@ -11,7 +11,7 @@ import hashlib
 import base64
 from urllib.parse import urlencode, parse_qs, urlparse
 
-META_GRAPH_API_VERSION = "v21.0"
+META_GRAPH_API_VERSION = "v25.0"
 META_GRAPH_API_BASE_URL = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}"
 META_DIALOG_API_BASE_URL = f"https://www.facebook.com/{META_GRAPH_API_VERSION}"
 

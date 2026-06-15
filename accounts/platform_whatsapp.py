@@ -8,6 +8,8 @@ from typing import Any
 import requests
 from django.conf import settings
 
+from integrations.oauth_utils import META_GRAPH_API_VERSION
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +49,7 @@ def effective_graph_api_version() -> str:
     row = _db_whatsapp_row()
     if row and (row.graph_api_version or "").strip():
         return row.graph_api_version.strip()
-    return (getattr(settings, "PLATFORM_WHATSAPP_GRAPH_API_VERSION", "v21.0") or "v21.0").strip()
+    return (getattr(settings, "PLATFORM_WHATSAPP_GRAPH_API_VERSION", META_GRAPH_API_VERSION) or META_GRAPH_API_VERSION).strip()
 
 
 def effective_otp_template_name() -> str:
@@ -83,7 +85,7 @@ def platform_whatsapp_configured() -> bool:
 
 
 def _graph_base() -> str:
-    ver = effective_graph_api_version() or "v21.0"
+    ver = effective_graph_api_version() or META_GRAPH_API_VERSION
     return f"https://graph.facebook.com/{ver}"
 
 
