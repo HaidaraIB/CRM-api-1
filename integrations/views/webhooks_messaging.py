@@ -32,7 +32,7 @@ from ..policy import (
     get_plan_integration_access,
 )
 from settings.models import SystemSettings
-from ..oauth_utils import get_oauth_handler, MetaOAuth
+from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_BASE_URL, META_GRAPH_API_VERSION
 from .templates_whatsapp import (
     count_template_body_placeholders,
     meta_slug_template_name,
@@ -156,7 +156,7 @@ def whatsapp_send_message(request):
             'WhatsApp account has no access token',
             code='whatsapp_no_access_token',
         )
-    url = f"https://graph.facebook.com/v18.0/{wa_account.phone_number_id}/messages"
+    url = f"{META_GRAPH_API_BASE_URL}/{wa_account.phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     payload = {
         "messaging_product": "whatsapp",
@@ -438,7 +438,7 @@ def whatsapp_send_template(request):
             }
         ]
 
-    url = f"https://graph.facebook.com/v18.0/{wa_account.phone_number_id}/messages"
+    url = f"{META_GRAPH_API_BASE_URL}/{wa_account.phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     payload = {
         'messaging_product': 'whatsapp',
@@ -1233,7 +1233,10 @@ def meta_webhook(request):
                             # Send Raw Lead stage to Meta Conversion Leads (best-effort)
                             try:
                                 from integrations.services.meta_conversion_leads import send_raw_lead_event
-                                send_raw_lead_event(client)
+                                raw_event_time = value.get("created_time")
+                                if raw_event_time is not None:
+                                    raw_event_time = int(raw_event_time)
+                                send_raw_lead_event(client, event_time=raw_event_time)
                             except Exception as capi_err:
                                 logger.warning(
                                     "Meta Raw Lead CAPI event failed for client %s: %s",

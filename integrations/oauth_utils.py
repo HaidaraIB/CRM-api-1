@@ -11,6 +11,10 @@ import hashlib
 import base64
 from urllib.parse import urlencode, parse_qs, urlparse
 
+META_GRAPH_API_VERSION = "v21.0"
+META_GRAPH_API_BASE_URL = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}"
+META_DIALOG_API_BASE_URL = f"https://www.facebook.com/{META_GRAPH_API_VERSION}"
+
 
 class OAuthBase:
     """كلاس أساسي لـ OAuth"""
@@ -47,9 +51,9 @@ class MetaOAuth(OAuthBase):
     
     def __init__(self):
         super().__init__('META')
-        self.auth_url = 'https://www.facebook.com/v18.0/dialog/oauth'
-        self.token_url = 'https://graph.facebook.com/v18.0/oauth/access_token'
-        self.graph_api_url = 'https://graph.facebook.com/v18.0'
+        self.auth_url = f'{META_DIALOG_API_BASE_URL}/dialog/oauth'
+        self.token_url = f'{META_GRAPH_API_BASE_URL}/oauth/access_token'
+        self.graph_api_url = META_GRAPH_API_BASE_URL
 
     def _appsecret_proof(self, access_token):
         """مطلوب عند استدعاء Graph API من السيرفر."""
@@ -423,9 +427,9 @@ class WhatsAppOAuth(OAuthBase):
     
     def __init__(self):
         super().__init__('WHATSAPP')
-        self.auth_url = 'https://www.facebook.com/v18.0/dialog/oauth'
-        self.token_url = 'https://graph.facebook.com/v18.0/oauth/access_token'
-        self.graph_api_url = 'https://graph.facebook.com/v18.0'
+        self.auth_url = f'{META_DIALOG_API_BASE_URL}/dialog/oauth'
+        self.token_url = f'{META_GRAPH_API_BASE_URL}/oauth/access_token'
+        self.graph_api_url = META_GRAPH_API_BASE_URL
     
     def get_authorization_url(self, state):
         scopes = [
@@ -498,7 +502,7 @@ class WhatsAppOAuth(OAuthBase):
         يُستدعى بعد exchange_code_for_token.
         Returns: list of dicts [{"waba_id", "business_id", "phone_numbers": [{"id", "display_phone_number"}, ...]}, ...]
         """
-        graph = "https://graph.facebook.com/v18.0"
+        graph = META_GRAPH_API_BASE_URL
         out = []
         # محاولة 1: من me/accounts (صفحات قد ترتبط بـ WABA)
         try:

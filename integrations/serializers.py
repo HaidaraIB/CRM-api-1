@@ -113,6 +113,16 @@ class IntegrationAccountUpdateSerializer(serializers.ModelSerializer):
             'conversion_leads_enabled',
         ]
 
+    def validate_pixel_id(self, value):
+        if value is None or value == "":
+            return value
+        stripped = str(value).strip()
+        if not stripped.isdigit() or not (10 <= len(stripped) <= 20):
+            raise serializers.ValidationError(
+                "Pixel ID must be a numeric string (10–20 digits). Check Meta Events Manager → Settings."
+            )
+        return stripped
+
     def update(self, instance, validated_data):
         pixel_id = validated_data.pop('pixel_id', None)
         conversion_leads_enabled = validated_data.pop('conversion_leads_enabled', None)

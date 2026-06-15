@@ -26,7 +26,7 @@ from ..models import (
     WhatsAppAccount, OAuthState, TwilioSettings,
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
 )
-from ..oauth_utils import get_oauth_handler, MetaOAuth
+from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_BASE_URL
 from ..serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -273,7 +273,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         }
         if example_values:
             payload['parameter_format'] = 'positional'
-        url = f'https://graph.facebook.com/v18.0/{wa.waba_id}/message_templates'
+        url = f'{META_GRAPH_API_BASE_URL}/{wa.waba_id}/message_templates'
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=30)
@@ -326,7 +326,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 'WhatsApp account has no access token.',
                 code='whatsapp_no_access_token',
             )
-        url = f'https://graph.facebook.com/v18.0/{wa.waba_id}/message_templates?fields=id,name,status'
+        url = f'{META_GRAPH_API_BASE_URL}/{wa.waba_id}/message_templates?fields=id,name,status'
         headers = {'Authorization': f'Bearer {token}'}
         try:
             resp = requests.get(url, headers=headers, timeout=30)
@@ -392,7 +392,7 @@ def whatsapp_limits(request):
             'WhatsApp account has no access token.',
             code='whatsapp_no_access_token',
         )
-    url = f'https://graph.facebook.com/v18.0/{wa.phone_number_id}?fields=messaging_limit_tier,quality_rating'
+    url = f'{META_GRAPH_API_BASE_URL}/{wa.phone_number_id}?fields=messaging_limit_tier,quality_rating'
     headers = {'Authorization': f'Bearer {token}'}
     try:
         resp = requests.get(url, headers=headers, timeout=10)

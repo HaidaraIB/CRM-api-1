@@ -22,6 +22,24 @@ def _format_client_location_pair(latitude, longitude):
     return f"{latitude},{longitude}"
 
 
+META_QUALIFICATION_ERROR_MESSAGES = {
+    "metaQualificationErrorNotMetaLead": "This lead is not from a Meta Lead Form.",
+    "metaQualificationErrorNoLeadgenId": "Missing Meta lead ID on this lead.",
+    "metaQualificationErrorNoAccount": "No Meta integration account is linked to this lead.",
+    "metaQualificationErrorNoPixelConfigured": "Meta Pixel ID is not configured for this integration account.",
+    "metaQualificationErrorNoToken": "No access token configured for this Meta integration.",
+    "metaQualificationErrorUnknownStatus": "Unknown qualification status.",
+    "metaQualificationErrorSendFailed": "Failed to send qualification event to Meta.",
+}
+
+
+def _serialize_meta_qualification_error(client):
+    key = client.meta_qualification_error
+    if not key:
+        return None
+    return {"key": key, "message": META_QUALIFICATION_ERROR_MESSAGES.get(key, key)}
+
+
 from .models import (
     Client,
     Deal,
@@ -229,6 +247,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
     )
     location_latitude = QuantizedCoordinateField(required=False, allow_null=True)
     location_longitude = QuantizedCoordinateField(required=False, allow_null=True)
+    meta_qualification_error = serializers.SerializerMethodField()
 
     class Meta:
         model = Client
@@ -289,6 +308,9 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "meta_qualification_sent_at",
             "meta_qualification_error",
         ]
+
+    def get_meta_qualification_error(self, obj):
+        return _serialize_meta_qualification_error(obj)
 
     def validate_meta_qualification_status(self, value):
         if value is not None and value not in ("qualified", "unqualified"):
@@ -708,6 +730,7 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
     interested_unit_code = serializers.CharField(
         source="interested_unit.code", read_only=True, allow_null=True
     )
+    meta_qualification_error = serializers.SerializerMethodField()
 
     class Meta:
         model = Client
@@ -756,6 +779,9 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
             "last_stage",
             "last_feedback_at",
         ]
+
+    def get_meta_qualification_error(self, obj):
+        return _serialize_meta_qualification_error(obj)
 
 
 @extend_schema_serializer(component_name="Deal")

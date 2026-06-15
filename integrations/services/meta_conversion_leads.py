@@ -88,6 +88,7 @@ def _resolve_access_token_for_client(client) -> str | None:
 
 def build_conversion_lead_event(
     *,
+    client_id: int,
     event_name: str,
     leadgen_id: str,
     event_time: int | None = None,
@@ -99,6 +100,7 @@ def build_conversion_lead_event(
     return {
         "event_name": event_name,
         "event_time": ts,
+        "event_id": f"{client_id}-{event_name}-{int(ts)}",
         "user_data": {"lead_id": lead_id_val},
         "action_source": "system_generated",
         "custom_data": {
@@ -108,7 +110,9 @@ def build_conversion_lead_event(
     }
 
 
-def send_conversion_lead_event(client, event_name: str) -> dict[str, Any]:
+def send_conversion_lead_event(
+    client, event_name: str, event_time: int | None = None
+) -> dict[str, Any]:
     """
     Send a single Conversion Leads stage event to Meta for a Client.
     Returns dict with keys: success, error_key (optional), message (optional), response (optional).
@@ -128,16 +132,20 @@ def send_conversion_lead_event(client, event_name: str) -> dict[str, Any]:
     if not pixel_id or not access_token:
         return {"success": False, "error_key": "metaQualificationErrorNoToken"}
 
-    event_time = int(timezone.now().timestamp())
-    if client.created_at:
-        created_ts = int(client.created_at.timestamp())
-        if created_ts >= event_time:
-            event_time = created_ts + 1
+    if event_time is not None:
+        resolved_time = int(event_time)
+    else:
+        resolved_time = int(timezone.now().timestamp())
+        if client.created_at:
+            created_ts = int(client.created_at.timestamp())
+            if created_ts >= resolved_time:
+                resolved_time = created_ts + 1
 
     payload_event = build_conversion_lead_event(
+        client_id=client.id,
         event_name=event_name,
         leadgen_id=client.meta_leadgen_id,
-        event_time=event_time,
+        event_time=resolved_time,
     )
 
     meta_oauth = MetaOAuth()
@@ -181,8 +189,8 @@ def send_conversion_lead_event(client, event_name: str) -> dict[str, Any]:
         return {"success": False, "error_key": "metaQualificationErrorSendFailed", "message": err_msg}
 
 
-def send_raw_lead_event(client) -> dict[str, Any]:
-    return send_conversion_lead_event(client, EVENT_RAW_LEAD)
+def send_raw_lead_event(client, event_time: int | None = None) -> dict[str, Any]:
+    return send_conversion_lead_event(client, EVENT_RAW_LEAD, event_time=event_time)
 
 
 def send_qualification_event(client, status: str) -> dict[str, Any]:
@@ -205,8 +213,9 @@ def apply_qualification_status_change(client, new_status: str | None, previous_s
     if new_status == previous_status:
         return
     if new_status not in ("qualified", "unqualified"):
+        client.meta_qualification_sent_at = None
         client.meta_qualification_error = None
-        client.save(update_fields=["meta_qualification_error"])
+        client.save(update_fields=["meta_qualification_sent_at", "meta_qualification_error"])
         return
 
     result = send_qualification_event(client, new_status)

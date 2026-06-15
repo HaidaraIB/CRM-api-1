@@ -26,7 +26,7 @@ from ..models import (
     WhatsAppAccount, OAuthState, TwilioSettings,
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
 )
-from ..oauth_utils import get_oauth_handler, MetaOAuth
+from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_VERSION
 from ..serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -447,7 +447,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                     'enabled': bool(cfg and app_id),
                     'app_id': app_id,
                     'config_id': cfg,
-                    'graph_api_version': 'v18.0',
+                    'graph_api_version': META_GRAPH_API_VERSION,
                 }
             return success_response(data=data)
         except Exception as e:
