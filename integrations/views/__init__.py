@@ -47,7 +47,7 @@ from .pbx import (
     pbx_recording_play_view,
     pbx_dial_view,
     pbx_dial_status_view,
-    pbx_extension_delete_view,
+    pbx_extension_detail_view,
     pbx_extensions_view,
     pbx_health_view,
     pbx_connector_download_view,
@@ -55,6 +55,8 @@ from .pbx import (
     pbx_reports_summary_view,
     pbx_rotate_connector_key_view,
     pbx_settings_view,
+    pbx_softphone_config_view,
+    pbx_softphone_devices_view,
     pbx_webhook,
 )
 
@@ -92,7 +94,7 @@ __all__ = [
     "pbx_settings_view",
     "pbx_rotate_connector_key_view",
     "pbx_extensions_view",
-    "pbx_extension_delete_view",
+    "pbx_extension_detail_view",
     "pbx_dial_view",
     "pbx_dial_status_view",
     "pbx_health_view",
@@ -106,4 +108,6 @@ __all__ = [
     "pbx_recording_play_view",
     "pbx_reports_summary_view",
     "pbx_reports_agents_view",
+    "pbx_softphone_config_view",
+    "pbx_softphone_devices_view",
 ]

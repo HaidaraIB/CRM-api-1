@@ -24,6 +24,7 @@ class NotificationType(models.TextChoices):
     # PBX / Telephony
     PBX_INCOMING_CALL = 'pbx_incoming_call', 'PBX Incoming Call'
     PBX_CALL_MISSED = 'pbx_call_missed', 'PBX Call Missed'
+    SOFTPHONE_INCOMING_CALL = 'softphone_incoming_call', 'Softphone Incoming Call'
     
     # WhatsApp Notifications
     WHATSAPP_MESSAGE_RECEIVED = 'whatsapp_message_received', 'WhatsApp Message Received'

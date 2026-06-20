@@ -29,7 +29,7 @@ from .views import (
     pbx_settings_view,
     pbx_rotate_connector_key_view,
     pbx_extensions_view,
-    pbx_extension_delete_view,
+    pbx_extension_detail_view,
     pbx_dial_view,
     pbx_dial_status_view,
     pbx_health_view,
@@ -43,6 +43,8 @@ from .views import (
     pbx_recording_play_view,
     pbx_reports_summary_view,
     pbx_reports_agents_view,
+    pbx_softphone_config_view,
+    pbx_softphone_devices_view,
 )
 from .whatsapp_webhook import whatsapp_webhook
 from .views.lead_api import (
@@ -81,7 +83,7 @@ urlpatterns = [
     path('pbx/settings/', pbx_settings_view, name='pbx_settings'),
     path('pbx/settings/rotate-connector-key/', pbx_rotate_connector_key_view, name='pbx_rotate_connector_key'),
     path('pbx/extensions/', pbx_extensions_view, name='pbx_extensions'),
-    path('pbx/extensions/<int:pk>/', pbx_extension_delete_view, name='pbx_extension_delete'),
+    path('pbx/extensions/<int:pk>/', pbx_extension_detail_view, name='pbx_extension_detail'),
     path('pbx/dial/', pbx_dial_view, name='pbx_dial'),
     path('pbx/dial/<int:command_id>/', pbx_dial_status_view, name='pbx_dial_status'),
     path('pbx/health/', pbx_health_view, name='pbx_health'),
@@ -95,6 +97,8 @@ urlpatterns = [
     path('pbx/recordings/<int:record_id>/play/', pbx_recording_play_view, name='pbx_recording_play'),
     path('pbx/reports/summary/', pbx_reports_summary_view, name='pbx_reports_summary'),
     path('pbx/reports/agents/', pbx_reports_agents_view, name='pbx_reports_agents'),
+    path('pbx/softphone/config/', pbx_softphone_config_view, name='pbx_softphone_config'),
+    path('pbx/softphone/devices/', pbx_softphone_devices_view, name='pbx_softphone_devices'),
     path('twilio/settings/', twilio_settings_view, name='twilio_settings'),
     path('twilio/send/', send_lead_sms_view, name='send_lead_sms'),
     path('openai/settings/', openai_settings_view, name='openai_settings'),

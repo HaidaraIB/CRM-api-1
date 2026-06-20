@@ -18,7 +18,7 @@ from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from accounts.permissions import HasActiveSubscription
+from accounts.permissions import HasActiveSubscription, IsAdmin, IsAdminOrReadOnlyForEmployee
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 from integrations.decorators import rate_limit_webhook
 from integrations.models import (
@@ -27,7 +27,9 @@ from integrations.models import (
     PbxDialCommandStatus,
     PbxRecordingStatus,
     PbxSettings,
+    SoftphonePlatform,
     UserPbxExtension,
+    UserSoftphoneDevice,
 )
 from integrations.services.pbx_recording_service import (
     finalize_recording_upload,
@@ -42,8 +44,14 @@ from integrations.serializers_pbx import (
     PbxDialCommandSerializer,
     PbxDialRequestSerializer,
     PbxSettingsSerializer,
+    SoftphoneDeviceSerializer,
     UserPbxExtensionSerializer,
 )
+from integrations.services.softphone_config import (
+    build_softphone_config,
+    user_softphone_ready,
+)
+from integrations.services.softphone_offboarding import offboard_softphone_user
 from integrations.services.pbx_handler import log_incoming_zycoo_push, process_pbx_payload
 from integrations.pbx_connector_meta import get_pbx_connector_version
 
@@ -193,7 +201,7 @@ def pbx_rotate_connector_key_view(request):
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
+@permission_classes([IsAuthenticated, HasActiveSubscription, IsAdminOrReadOnlyForEmployee])
 def pbx_extensions_view(request):
     company = request.user.company
     gate = _integration_gate(company, "pbx")
@@ -207,27 +215,69 @@ def pbx_extensions_view(request):
     serializer = UserPbxExtensionSerializer(data=request.data, context={"request": request})
     if not serializer.is_valid():
         return validation_error_response(serializer.errors)
-    obj, _ = UserPbxExtension.objects.update_or_create(
-        user=serializer.validated_data["user"],
-        defaults={
-            "company": company,
-            "extension": serializer.validated_data["extension"],
-        },
+
+    user = serializer.validated_data["user"]
+    defaults = {
+        "company": company,
+        "extension": serializer.validated_data["extension"],
+        "softphone_enabled": serializer.validated_data.get("softphone_enabled", True),
+    }
+    obj, created = UserPbxExtension.objects.update_or_create(
+        user=user,
+        defaults=defaults,
     )
-    return success_response(UserPbxExtensionSerializer(obj).data, status_code=201)
+    sip_password = request.data.get("sip_password")
+    if sip_password:
+        from integrations.encryption import encrypt_token
+
+        obj.sip_password = encrypt_token(str(sip_password))
+        obj.save(update_fields=["sip_password", "updated_at"])
+    return success_response(
+        UserPbxExtensionSerializer(obj).data,
+        status_code=201 if created else 200,
+    )
 
 
-@api_view(["DELETE"])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
-def pbx_extension_delete_view(request, pk: int):
+@api_view(["PATCH", "DELETE"])
+@permission_classes([IsAuthenticated, HasActiveSubscription, IsAdmin])
+def pbx_extension_detail_view(request, pk: int):
     company = request.user.company
     gate = _integration_gate(company, "pbx")
     if gate:
         return gate
-    deleted, _ = UserPbxExtension.objects.filter(company=company, pk=pk).delete()
-    if not deleted:
+
+    try:
+        obj = UserPbxExtension.objects.select_related("user").get(company=company, pk=pk)
+    except UserPbxExtension.DoesNotExist:
         return error_response("Not found.", status_code=404)
-    return success_response({"deleted": True})
+
+    if request.method == "DELETE":
+        offboard_softphone_user(obj.user, clear_sip_password=True, mapping=obj)
+        obj.delete()
+        return success_response({"deleted": True})
+
+    prev_user_id = obj.user_id
+    prev_softphone_enabled = obj.softphone_enabled
+    serializer = UserPbxExtensionSerializer(
+        obj,
+        data=request.data,
+        partial=True,
+        context={"request": request},
+    )
+    if not serializer.is_valid():
+        return validation_error_response(serializer.errors)
+    obj = serializer.save()
+    if prev_user_id != obj.user_id:
+        from accounts.models import User
+
+        try:
+            prev_user = User.objects.get(pk=prev_user_id)
+            offboard_softphone_user(prev_user, clear_sip_password=True)
+        except User.DoesNotExist:
+            pass
+    if prev_softphone_enabled and not obj.softphone_enabled:
+        offboard_softphone_user(obj.user, mapping=obj)
+    return success_response(UserPbxExtensionSerializer(obj).data)
 
 
 @api_view(["POST"])
@@ -672,3 +722,96 @@ def pbx_reports_agents_view(request):
             }
         )
     return success_response({"agents": agents})
+
+
+def _get_user_pbx_extension(user) -> UserPbxExtension | None:
+    try:
+        return UserPbxExtension.objects.select_related("user").get(user=user)
+    except UserPbxExtension.DoesNotExist:
+        return None
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def pbx_softphone_config_view(request):
+    company = request.user.company
+    gate = _integration_gate(company, "pbx")
+    if gate:
+        return gate
+
+    settings = _ensure_pbx_settings(company)
+    mapping = _get_user_pbx_extension(request.user)
+    if mapping is None:
+        return error_response(
+            "No PBX extension mapped for your user.",
+            code="no_extension",
+            status_code=400,
+        )
+    if not user_softphone_ready(settings, mapping):
+        return error_response(
+            "Softphone is not configured for your user.",
+            code="softphone_not_configured",
+            status_code=400,
+        )
+
+    platform = (request.query_params.get("platform") or "web").lower()
+    if platform not in SoftphonePlatform.values:
+        platform = SoftphonePlatform.WEB
+
+    config = build_softphone_config(settings, mapping, platform=platform)
+    config["softphone_enabled"] = True
+    config["expires_in"] = 300
+    return success_response(config)
+
+
+@api_view(["POST", "DELETE"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def pbx_softphone_devices_view(request):
+    company = request.user.company
+    gate = _integration_gate(company, "pbx")
+    if gate:
+        return gate
+
+    settings = _ensure_pbx_settings(company)
+    if not settings.softphone_enabled:
+        return error_response(
+            "Softphone is not enabled for your company.",
+            code="softphone_disabled",
+            status_code=400,
+        )
+
+    if request.method == "DELETE":
+        platform = (request.query_params.get("platform") or "").lower()
+        device_id = (request.query_params.get("device_id") or "").strip()
+        qs = UserSoftphoneDevice.objects.filter(user=request.user, company=company)
+        if platform:
+            qs = qs.filter(platform=platform)
+        if device_id:
+            qs = qs.filter(device_id=device_id)
+        deleted, _ = qs.delete()
+        return success_response({"deleted": deleted})
+
+    serializer = SoftphoneDeviceSerializer(data=request.data)
+    if not serializer.is_valid():
+        return validation_error_response(serializer.errors)
+
+    data = serializer.validated_data
+    device, _ = UserSoftphoneDevice.objects.update_or_create(
+        user=request.user,
+        platform=data["platform"],
+        device_id=data.get("device_id") or "",
+        defaults={
+            "company": company,
+            "fcm_token": data.get("fcm_token") or "",
+            "voip_token": data.get("voip_token") or "",
+        },
+    )
+    return success_response(
+        {
+            "id": device.id,
+            "platform": device.platform,
+            "device_id": device.device_id,
+            "last_registered_at": device.last_registered_at,
+        },
+        status_code=201,
+    )

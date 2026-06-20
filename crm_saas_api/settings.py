@@ -543,6 +543,9 @@ TIKTOK_LEADGEN_REQUIRE_SIGNED_COMPANY_QUERY = os.getenv("TIKTOK_LEADGEN_REQUIRE_
 # Integration Encryption Key
 INTEGRATION_ENCRYPTION_KEY = os.getenv("INTEGRATION_ENCRYPTION_KEY", "")
 
+# Ephemeral TURN credentials for softphone WebRTC (coturn REST-style HMAC secret)
+PBX_TURN_SHARED_SECRET = os.getenv("PBX_TURN_SHARED_SECRET", "")
+
 # ============================================================================
 # API Keys for Application Authentication
 # ============================================================================
@@ -578,6 +581,14 @@ RECORDING_S3_REGION = (os.getenv("RECORDING_S3_REGION", "") or "").strip()
 # ============================================================================
 
 FIREBASE_CREDENTIALS_PATH = (os.getenv("FIREBASE_CREDENTIALS_PATH", "") or "").strip()
+
+# APNs VoIP push (iOS softphone lock-screen incoming calls)
+APNS_VOIP_KEY_PATH = (os.getenv("APNS_VOIP_KEY_PATH", "") or "").strip()
+APNS_VOIP_KEY_CONTENT = (os.getenv("APNS_VOIP_KEY_CONTENT", "") or "").strip()
+APNS_VOIP_KEY_ID = (os.getenv("APNS_VOIP_KEY_ID", "") or "").strip()
+APNS_VOIP_TEAM_ID = (os.getenv("APNS_VOIP_TEAM_ID", "") or "").strip()
+APNS_BUNDLE_ID = (os.getenv("APNS_BUNDLE_ID", "com.loopcrm.mobile") or "com.loopcrm.mobile").strip()
+APNS_VOIP_USE_SANDBOX = os.getenv("APNS_VOIP_USE_SANDBOX", "false").lower() in ("1", "true", "yes")
 
 # ============================================================================
 # Django Q2 Settings (for scheduled tasks)

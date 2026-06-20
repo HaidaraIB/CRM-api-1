@@ -354,3 +354,59 @@ class NotificationService:
             data,
             image_url,
         )
+
+    @classmethod
+    def send_softphone_call_push(
+        cls,
+        user: "AbstractUser",
+        *,
+        title: str,
+        body: str,
+        data: Dict[str, Any],
+    ) -> bool:
+        """High-priority data-only FCM for Android softphone incoming call wake-up."""
+        if not cls.initialize():
+            return False
+
+        user_tokens = user.iter_fcm_tokens_for_push()
+        if not user_tokens:
+            return False
+
+        message_data = {
+            "type": "softphone_incoming_call",
+            "kind": "softphone_incoming_call",
+            "title": title,
+            "body": body,
+        }
+        for key, value in (data or {}).items():
+            message_data[key] = str(value)
+
+        success_count = 0
+        for token in user_tokens:
+            try:
+                message = messaging.Message(
+                    data=message_data,
+                    token=token,
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        ttl=30,
+                    ),
+                    apns=messaging.APNSConfig(
+                        headers={
+                            "apns-priority": "10",
+                            "apns-push-type": "background",
+                        },
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(content_available=True),
+                        ),
+                    ),
+                )
+                messaging.send(message)
+                success_count += 1
+            except messaging.UnregisteredError:
+                user.remove_fcm_token(token)
+                user.save(update_fields=["fcm_token", "fcm_tokens"])
+            except Exception as exc:
+                logger.warning("Softphone FCM push failed for %s: %s", user.username, exc)
+
+        return success_count > 0

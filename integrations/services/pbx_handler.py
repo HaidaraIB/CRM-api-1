@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any, Callable, Optional, TypeVar
 
 from django.db import IntegrityError, OperationalError, close_old_connections, transaction
@@ -21,6 +22,7 @@ from integrations.models import (
 from integrations.services.phone_match import find_client_by_phone
 from integrations.services.pbx_recording_service import apply_recording_path_from_cdr
 from integrations.services.zycoo_parser import parse_zycoo_payload
+from integrations.services.softphone_push import send_softphone_incoming_push
 from notifications.models import NotificationType
 from notifications.services import NotificationService
 from settings.models import CallMethod
@@ -359,6 +361,37 @@ def _apply_pbx_side_effects(
 
     if event_type == PbxEventType.RINGING and parsed["direction"] == PbxCallDirection.INBOUND:
         _send_screen_pop(settings, client, external_phone, record, agent)
+        if settings.softphone_enabled and agent:
+            try:
+                mapping = UserPbxExtension.objects.get(company=settings.company, user=agent)
+            except UserPbxExtension.DoesNotExist:
+                mapping = None
+            if mapping and mapping.softphone_enabled:
+                call_uuid = str(uuid.uuid4())
+                logger.info(
+                    "softphone_ringing call_id=%s call_uuid=%s user_id=%s extension=%s caller=%s",
+                    record.id,
+                    call_uuid,
+                    agent.id,
+                    mapping.extension,
+                    external_phone,
+                )
+                push_ok = send_softphone_incoming_push(
+                    agent,
+                    caller=external_phone,
+                    extension=mapping.extension,
+                    client_name=client.name if client else "",
+                    lead_id=client.id if client else None,
+                    call_id=record.id,
+                    call_uuid=call_uuid,
+                )
+                logger.info(
+                    "softphone_push_result call_id=%s call_uuid=%s user_id=%s success=%s",
+                    record.id,
+                    call_uuid,
+                    agent.id,
+                    push_ok,
+                )
     elif event_type == PbxEventType.MISSED or (
         event_type == PbxEventType.HANGUP
         and record.disposition in (PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY)

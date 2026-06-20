@@ -909,6 +909,17 @@ class PbxRecordingStatus(models.TextChoices):
     SKIPPED = "skipped", "Skipped"
 
 
+class PbxSipTransport(models.TextChoices):
+    TLS = "tls", "TLS"
+    WSS = "wss", "WSS"
+
+
+class SoftphonePlatform(models.TextChoices):
+    IOS = "ios", "iOS"
+    ANDROID = "android", "Android"
+    WEB = "web", "Web"
+
+
 class PbxSettings(models.Model):
     """Per-company PBX integration (ZYCOO CooVox / Asterisk AMI)."""
 
@@ -933,6 +944,22 @@ class PbxSettings(models.Model):
     is_enabled = models.BooleanField(default=False)
     auto_log_calls = models.BooleanField(default=True)
     screen_pop_enabled = models.BooleanField(default=True)
+    softphone_enabled = models.BooleanField(default=False)
+    sip_domain = models.CharField(max_length=255, blank=True, default="")
+    sip_port = models.PositiveIntegerField(default=5162)
+    sip_transport = models.CharField(
+        max_length=8,
+        choices=PbxSipTransport.choices,
+        default=PbxSipTransport.TLS,
+    )
+    wss_uri = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="WebRTC WSS URI, e.g. wss://domain:8089/ws",
+    )
+    stun_server = models.CharField(max_length=255, blank=True, default="")
+    turn_server = models.CharField(max_length=255, blank=True, default="")
     connector_last_seen_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -958,6 +985,12 @@ class UserPbxExtension(models.Model):
         related_name="pbx_extension",
     )
     extension = models.CharField(max_length=32, help_text="PBX extension number, e.g. 101")
+    sip_password = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Encrypted SIP password for softphone registration",
+    )
+    softphone_enabled = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1091,4 +1124,42 @@ class PbxDialCommand(models.Model):
 
     def __str__(self):
         return f"Dial {self.phone_number} via {self.extension} ({self.status})"
+
+
+class UserSoftphoneDevice(models.Model):
+    """FCM / VoIP tokens for embedded softphone wake-up on mobile."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="softphone_devices",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="softphone_devices",
+    )
+    platform = models.CharField(max_length=16, choices=SoftphonePlatform.choices)
+    device_id = models.CharField(max_length=128, blank=True, default="")
+    fcm_token = models.CharField(max_length=512, blank=True, default="")
+    voip_token = models.CharField(max_length=512, blank=True, default="")
+    last_registered_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "integrations_user_softphone_device"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "platform", "device_id"],
+                name="uniq_softphone_device_user_platform_device",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["company", "user"],
+                name="integration_company_4f8a21_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} softphone ({self.platform})"
 
