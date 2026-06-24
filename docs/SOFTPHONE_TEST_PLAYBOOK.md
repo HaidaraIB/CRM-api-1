@@ -64,6 +64,10 @@ Additional cases:
 ### Pre-flight (automated)
 
 ```bash
+# Backend — config + WSS probe + extension readiness (run on server with prod DB)
+.venv/Scripts/python.exe manage.py softphone_diagnose
+.venv/Scripts/python.exe manage.py softphone_diagnose --username=agent_username
+
 # Backend — APNs VoIP env check (run on server)
 .venv/Scripts/python.exe manage.py softphone_apns_check
 
