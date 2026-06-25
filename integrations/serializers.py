@@ -182,6 +182,9 @@ class OAuthCallbackSerializer(serializers.Serializer):
 class WhatsAppEmbeddedSignupCompleteSerializer(serializers.Serializer):
     """Code returned by FB.login (Embedded Signup) — exchanged server-side."""
     code = serializers.CharField(required=True, trim_whitespace=True)
+    waba_id = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+    phone_number_id = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+    business_id = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
 
 
 # --------------- Twilio SMS ---------------
@@ -338,11 +341,13 @@ class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
             'body',
             'direction',
             'whatsapp_message_id',
+            'delivery_status',
+            'delivery_error',
             'created_by',
             'created_by_username',
             'created_at',
         ]
-        read_only_fields = ['id', 'created_at', 'direction', 'whatsapp_message_id']
+        read_only_fields = ['id', 'created_at', 'direction', 'whatsapp_message_id', 'delivery_status', 'delivery_error']
 
     def get_created_by_username(self, obj):
         if obj.created_by_id is None:

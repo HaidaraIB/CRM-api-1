@@ -32,7 +32,8 @@ from ..policy import (
     get_plan_integration_access,
 )
 from settings.models import SystemSettings
-from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_BASE_URL, META_GRAPH_API_VERSION
+from ..oauth_utils import MetaOAuth, META_GRAPH_API_BASE_URL
+from ..whatsapp_account_sync import resolve_whatsapp_account_for_api
 from .templates_whatsapp import (
     count_template_body_placeholders,
     meta_slug_template_name,
@@ -103,6 +104,27 @@ def _redact_phone_e164(phone: str) -> str:
     return f'...{p[-4:]}'
 
 
+_META_GRAPH_ERROR_CODES = {
+    131037: 'whatsapp_display_name_not_approved',
+    131026: 'whatsapp_recipient_not_deliverable',
+    131047: 'whatsapp_outside_session_use_template',
+    132000: 'whatsapp_template_parameter_count',
+    132001: 'whatsapp_template_parameter_mismatch',
+}
+
+
+def _api_code_from_graph_error(err_body) -> str:
+    """Map known Meta Graph API error codes to CRM error_key values."""
+    if not isinstance(err_body, dict):
+        return 'bad_request'
+    err = err_body.get('error')
+    if isinstance(err, dict):
+        code = err.get('code')
+        if isinstance(code, int) and code in _META_GRAPH_ERROR_CODES:
+            return _META_GRAPH_ERROR_CODES[code]
+    return 'bad_request'
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_send_message(request):
@@ -140,14 +162,19 @@ def whatsapp_send_message(request):
             'Invalid "to" phone number',
             code='bad_request',
         )
-    qs = WhatsAppAccount.objects.filter(company=company, status='connected')
-    if phone_number_id:
-        qs = qs.filter(phone_number_id=phone_number_id)
-    wa_account = qs.first()
+    wa_account, wa_err = resolve_whatsapp_account_for_api(company, phone_number_id)
     if not wa_account:
+        if wa_err == 'whatsapp_phone_numbers_not_synced':
+            return error_response(
+                'WhatsApp is connected but your phone number could not be loaded from Meta. '
+                'Disconnect and reconnect the account, or check Meta permissions '
+                '(whatsapp_business_management, whatsapp_business_messaging).',
+                code=wa_err,
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
         return error_response(
             'No connected WhatsApp number for this company',
-            code='no_connected_whatsapp_number',
+            code=wa_err or 'no_connected_whatsapp_number',
             status_code=status.HTTP_404_NOT_FOUND,
         )
     access_token = wa_account.get_access_token()
@@ -200,7 +227,7 @@ def whatsapp_send_message(request):
         )
         return error_response(
             "WhatsApp API request failed.",
-            code="bad_request",
+            code=_api_code_from_graph_error(err_body),
             details=err_body if isinstance(err_body, dict) else {"error": str(err_body)},
         )
 
@@ -237,25 +264,66 @@ def whatsapp_send_message(request):
             message=f'Message sent to {to}',
             response_data=data,
         )
-    # تخزين الرسالة في LeadWhatsAppMessage للتايملاين ومركز المراسلات (عند وجود client_id)
-    if client_id:
+    # تخزين الرسالة في LeadWhatsAppMessage للتايملاين ومركز المراسلات
+    client = _resolve_whatsapp_client(
+        company,
+        client_id,
+        to,
+        integration_account=wa_account.integration_account,
+        create_if_missing=True,
+    )
+    if client:
         try:
-            client = company.clients.get(id=client_id)
             LeadWhatsAppMessage.objects.create(
                 client=client,
                 phone_number=to,
                 body=(message or '')[:65535],
                 direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
                 whatsapp_message_id=wam_id,
+                delivery_status='sent',
                 created_by=request.user,
             )
         except Exception:
-            pass
+            logger.exception("Failed to persist outbound WhatsApp message client_id=%s", client.id)
     return success_response(data=data)
 
 
 # WhatsApp customer service window: ~24h after the user's last inbound message (session messages).
 _WHATSAPP_SESSION_HOURS = 24
+
+
+def _resolve_whatsapp_client(company, client_id, to_phone, integration_account=None, create_if_missing=False):
+    """Resolve CRM client for message logging (by id or matching phone)."""
+    if client_id is not None:
+        try:
+            return company.clients.get(id=int(client_id))
+        except (TypeError, ValueError, Exception):
+            pass
+    from integrations.services.phone_match import find_client_by_phone
+    from integrations.services.whatsapp_client import ensure_client_for_whatsapp_phone
+
+    client = find_client_by_phone(company, to_phone)
+    if client:
+        return client
+    if create_if_missing and to_phone:
+        return ensure_client_for_whatsapp_phone(company, to_phone, integration_account=integration_account)
+    return None
+
+
+def _template_outbound_log_body(template, param_values=None) -> str:
+    """Human-readable body for chat history after sending a Meta template."""
+    meta_name = meta_slug_template_name(template.name, template.id)
+    content = (template.content or '').strip()
+    if content.lower().startswith('(imported from meta:'):
+        content = ''
+    if param_values and content:
+        out = content
+        for i, val in enumerate(param_values, start=1):
+            out = re.sub(rf'\{{\{{\s*{i}\s*\}}\}}', str(val), out)
+        return out[:65535]
+    if content:
+        return content[:65535]
+    return f'[Template: {meta_name}]'
 
 
 @api_view(['GET'])
@@ -270,14 +338,23 @@ def whatsapp_session_window(request):
     if not gate["enabled"]:
         return error_response(gate["message"], code="integration_disabled", status_code=403)
     client_id = request.query_params.get('client_id')
-    if not client_id or not str(client_id).isdigit():
+    phone = (request.query_params.get('phone') or '').strip()
+    resolved_client_id = None
+    if client_id and str(client_id).isdigit():
+        resolved_client_id = int(client_id)
+    elif phone:
+        from integrations.services.phone_match import find_client_by_phone
+        client = find_client_by_phone(company, phone)
+        if client:
+            resolved_client_id = client.id
+    if resolved_client_id is None:
         return error_response(
-            'client_id query parameter is required',
+            'client_id or phone query parameter is required',
             code='bad_request',
         )
     last_inbound = (
         LeadWhatsAppMessage.objects.filter(
-            client_id=int(client_id),
+            client_id=resolved_client_id,
             client__company=company,
             direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
         ).aggregate(m=Max('created_at'))['m']
@@ -388,15 +465,22 @@ def whatsapp_send_template(request):
             )
     else:
         if n_placeholders > 0:
-            if not client_id:
+            client = None
+            if client_id:
+                try:
+                    client = company.clients.select_related('company').get(id=int(client_id))
+                except Exception:
+                    return error_response('Client not found', code='not_found', status_code=status.HTTP_404_NOT_FOUND)
+            else:
+                client = _resolve_whatsapp_client(company, None, to)
+                if client:
+                    client = company.clients.select_related('company').get(pk=client.pk)
+            if not client:
                 return error_response(
-                    'client_id is required for templates with placeholders (or pass body_parameters).',
+                    'client_id or a matching lead phone is required for templates with placeholders '
+                    '(or pass body_parameters).',
                     code='bad_request',
                 )
-            try:
-                client = company.clients.get(id=int(client_id))
-            except Exception:
-                return error_response('Client not found', code='not_found', status_code=status.HTTP_404_NOT_FOUND)
             param_values = whatsapp_template_body_parameter_values_for_client(template.content or '', client)
             if len(param_values) != n_placeholders:
                 return error_response(
@@ -407,14 +491,19 @@ def whatsapp_send_template(request):
         else:
             param_values = []
 
-    qs = WhatsAppAccount.objects.filter(company=company, status='connected')
-    if phone_number_id:
-        qs = qs.filter(phone_number_id=phone_number_id)
-    wa_account = qs.first()
+    wa_account, wa_err = resolve_whatsapp_account_for_api(company, phone_number_id)
     if not wa_account:
+        if wa_err == 'whatsapp_phone_numbers_not_synced':
+            return error_response(
+                'WhatsApp is connected but your phone number could not be loaded from Meta. '
+                'Disconnect and reconnect the account, or check Meta permissions '
+                '(whatsapp_business_management, whatsapp_business_messaging).',
+                code=wa_err,
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
         return error_response(
             'No connected WhatsApp number for this company',
-            code='no_connected_whatsapp_number',
+            code=wa_err or 'no_connected_whatsapp_number',
             status_code=status.HTTP_404_NOT_FOUND,
         )
     access_token = wa_account.get_access_token()
@@ -482,7 +571,7 @@ def whatsapp_send_template(request):
         )
         return error_response(
             "WhatsApp API request failed.",
-            code="bad_request",
+            code=_api_code_from_graph_error(err_body),
             details=err_body if isinstance(err_body, dict) else {"error": str(err_body)},
         )
 
@@ -504,6 +593,15 @@ def whatsapp_send_template(request):
         wam_id,
         meta_name,
     )
+    display = (wa_account.display_phone_number or '').replace(' ', '').replace('-', '')
+    if display.startswith('+1555') or display.startswith('1555'):
+        logger.warning(
+            "Sender %s looks like a Meta sandbox/test number. Add recipient %s as a test number in "
+            "Meta Developer Console (WhatsApp > API Setup) or complete Business Verification for "
+            "production delivery.",
+            wa_account.display_phone_number or display,
+            redacted_to,
+        )
 
     increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
     if wa_account.integration_account_id:
@@ -515,21 +613,27 @@ def whatsapp_send_template(request):
             response_data=data,
         )
 
-    preview = (template.content or '')[:500]
-    log_body = f'[Template: {meta_name}] {preview}'
-    if client_id:
+    preview = _template_outbound_log_body(template, param_values if param_values else None)
+    client = _resolve_whatsapp_client(
+        company,
+        client_id,
+        to,
+        integration_account=wa_account.integration_account,
+        create_if_missing=True,
+    )
+    if client:
         try:
-            client = company.clients.get(id=int(client_id))
             LeadWhatsAppMessage.objects.create(
                 client=client,
                 phone_number=to,
-                body=log_body[:65535],
+                body=preview[:65535],
                 direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
                 whatsapp_message_id=wam_id,
+                delivery_status='sent',
                 created_by=request.user,
             )
         except Exception:
-            pass
+            logger.exception("Failed to persist outbound WhatsApp template client_id=%s", client.id)
 
     return success_response(data=data)
 

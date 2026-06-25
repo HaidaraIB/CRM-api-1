@@ -9,7 +9,7 @@ from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount, LeadWhatsAppMessage
 from .decorators import rate_limit_webhook
-from crm.models import Client, ClientPhoneNumber, ClientEvent
+from crm.models import ClientEvent
 import json
 import hmac
 import hashlib
@@ -146,9 +146,23 @@ def whatsapp_webhook(request):
                                 continue
                     
                     elif 'statuses' in value:
-                        # تحديث حالة الرسالة (delivered, read, etc.)
-                        # يمكن تجاهله أو تسجيله
-                        logger.debug("WhatsApp status update received")
+                        phone_number_id = value.get('metadata', {}).get('phone_number_id')
+                        statuses = value.get('statuses', [])
+                        logger.info(
+                            "WhatsApp webhook statuses: phone_number_id=%s count=%s",
+                            phone_number_id,
+                            len(statuses),
+                        )
+                        for status_obj in statuses:
+                            try:
+                                process_whatsapp_status_update(status_obj, phone_number_id)
+                            except Exception as e:
+                                logger.error(
+                                    "Error processing WhatsApp status update: %s",
+                                    e,
+                                    exc_info=True,
+                                )
+                                continue
             
             return JsonResponse({'status': 'ok'}, status=200)
             
@@ -208,46 +222,44 @@ def process_whatsapp_message(message, phone_number_id):
     """
     معالجة رسالة WhatsApp واردة.
     Multi-tenant: نستخرج phone_number_id → نبحث في WhatsAppAccount → نحصل على tenant (company).
+    Tenant CRM accounts take priority over the platform admin number when both share a phone_number_id.
     """
     from accounts.platform_whatsapp import effective_platform_phone_number_id
-
-    platform_pid = effective_platform_phone_number_id()
-    if platform_pid and str(phone_number_id) == str(platform_pid):
-        process_platform_admin_inbound(message)
-        return
 
     from_number = message.get('from')
     message_id = message.get('id')
     message_type = message.get('type')
-    timestamp = message.get('timestamp')
-    
+
     if message_type == 'text':
         text_body = message.get('text', {}).get('body', '')
     else:
         text_body = f"[{message_type} message]"
-    
+
     if not from_number:
         logger.warning("No 'from' number in WhatsApp message")
         return
-    
-    try:
-        # البحث عن WhatsAppAccount بالـ phone_number_id (كل عميل له رقم مختلف)
-        wa_account = WhatsAppAccount.objects.filter(
-            phone_number_id=phone_number_id,
-            status='connected',
-        ).select_related('company', 'integration_account').first()
-        
-        if not wa_account:
-            logger.warning(
-                "No WhatsAppAccount found for phone_number_id=%s. "
-                "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "
-                "Meta dashboard 'Test' events often use a sample ID (e.g. 123456123) — send a real message to your business "
-                "number instead, or compare with phone_number_id in your successful outbound send logs / "
-                "python manage.py whatsapp_debug_check",
-                phone_number_id,
-            )
-            return
 
+    wa_account = WhatsAppAccount.objects.filter(
+        phone_number_id=phone_number_id,
+        status='connected',
+    ).select_related('company', 'integration_account').first()
+
+    if not wa_account:
+        platform_pid = effective_platform_phone_number_id()
+        if platform_pid and str(phone_number_id) == str(platform_pid):
+            process_platform_admin_inbound(message)
+            return
+        logger.warning(
+            "No WhatsAppAccount found for phone_number_id=%s. "
+            "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "
+            "Meta dashboard 'Test' events often use a sample ID (e.g. 123456123) — send a real message to your business "
+            "number instead, or compare with phone_number_id in your successful outbound send logs / "
+            "python manage.py whatsapp_debug_check",
+            phone_number_id,
+        )
+        return
+
+    try:
         logger.info(
             "WhatsApp inbound matched tenant: phone_number_id=%s company_id=%s",
             phone_number_id,
@@ -275,59 +287,23 @@ def process_whatsapp_message(message, phone_number_id):
             )
             return
         account = wa_account.integration_account
-        
-        # البحث عن Client موجود برقم الهاتف
-        client = None
-        
-        # البحث في ClientPhoneNumber
-        phone_number_obj = ClientPhoneNumber.objects.filter(
-            phone_number=from_number,
-            client__company=company
-        ).first()
-        
-        if phone_number_obj:
-            client = phone_number_obj.client
-        else:
-            client = Client.objects.filter(
-                phone_number=from_number,
-                company=company
-            ).first()
-        
+
+        from integrations.services.whatsapp_client import (
+            ensure_client_for_whatsapp_phone,
+            touch_client_last_contacted,
+        )
+
+        client = ensure_client_for_whatsapp_phone(company, from_number, integration_account=account)
         if not client:
-            name = f"WhatsApp: {from_number}"
-            client = Client.objects.create(
-                name=name,
-                priority='medium',
-                type='fresh',
-                company=company,
-                source='whatsapp',
-                integration_account=account,
-                phone_number=from_number,
-            )
-            
-            # إضافة رقم الهاتف
-            ClientPhoneNumber.objects.create(
-                client=client,
-                phone_number=from_number,
-                phone_type='mobile',
-                is_primary=True,
-            )
-            
-            # تسجيل الحدث
-            ClientEvent.objects.create(
-                client=client,
-                event_type='created',
-                new_value='WhatsApp',
-                notes=f"Client created from WhatsApp message",
-            )
-            
-            logger.info(f"Created new client from WhatsApp: {client.id} - {client.name}")
-        
-        # تحديث last_contacted_at
-        client.last_contacted_at = timezone.now()
-        client.save(update_fields=['last_contacted_at'])
-        
-        # تخزين الرسالة في LeadWhatsAppMessage للتايملاين ومركز المراسلات
+            logger.warning("WhatsApp inbound: could not resolve client for from=%s", from_number)
+            return
+
+        touch_client_last_contacted(client)
+
+        if message_id and LeadWhatsAppMessage.objects.filter(whatsapp_message_id=message_id).exists():
+            logger.info("WhatsApp inbound duplicate skipped message_id=%s", message_id)
+            return
+
         LeadWhatsAppMessage.objects.create(
             client=client,
             phone_number=from_number,
@@ -335,16 +311,14 @@ def process_whatsapp_message(message, phone_number_id):
             direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
             whatsapp_message_id=message_id,
         )
-        
-        # تسجيل الرسالة في ClientEvent (اختياري)
+
         ClientEvent.objects.create(
             client=client,
             event_type='whatsapp_message',
-            new_value=text_body[:255],  # أول 255 حرف
+            new_value=text_body[:255],
             notes=f"WhatsApp message received: {message_type}",
         )
-        
-        # تسجيل في IntegrationLog إن وُجد integration_account
+
         if account:
             IntegrationLog.objects.create(
                 account=account,
@@ -357,12 +331,99 @@ def process_whatsapp_message(message, phone_number_id):
                     'from': from_number,
                 },
             )
-        
+
         logger.info("Processed WhatsApp message from %s for client %s", from_number, client.id)
-        
+
+        from integrations.services.whatsapp_push import notify_whatsapp_inbound
+
+        notify_whatsapp_inbound(
+            client=client,
+            body=text_body,
+            phone=from_number,
+            message_id=message_id,
+        )
+
     except Exception as e:
         logger.error("Error processing WhatsApp message: %s", e, exc_info=True)
         raise
 
 
+def process_whatsapp_status_update(status_obj, phone_number_id=None):
+    """
+    Update outbound LeadWhatsAppMessage rows from Meta delivery webhooks.
+    Status values: sent, delivered, read, failed.
+    """
+    message_id = status_obj.get('id')
+    status = (status_obj.get('status') or '').strip().lower()
+    recipient = status_obj.get('recipient_id')
+    errors = status_obj.get('errors') or []
+
+    if not message_id or not status:
+        return
+
+    error_text = ''
+    if errors:
+        err = errors[0] if isinstance(errors[0], dict) else {}
+        code = err.get('code')
+        title = err.get('title') or err.get('message') or ''
+        details = err.get('error_data', {}).get('details') if isinstance(err.get('error_data'), dict) else ''
+        error_text = ': '.join(
+            part for part in (str(code) if code else '', title, details) if part
+        )[:512]
+
+    updated = LeadWhatsAppMessage.objects.filter(
+        whatsapp_message_id=message_id,
+        direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+    ).update(
+        delivery_status=status,
+        delivery_error=error_text if status == 'failed' else None,
+    )
+
+    redacted_recipient = (
+        f"...{str(recipient)[-4:]}" if recipient and len(str(recipient)) >= 4 else '????'
+    )
+
+    if status == 'failed':
+        logger.warning(
+            "WhatsApp message delivery failed: wam_id=%s phone_number_id=%s recipient=%s error=%s",
+            message_id,
+            phone_number_id,
+            redacted_recipient,
+            error_text or 'unknown',
+        )
+        msg = LeadWhatsAppMessage.objects.filter(whatsapp_message_id=message_id).select_related(
+            'client__company'
+        ).first()
+        if msg and msg.client_id:
+            account = WhatsAppAccount.objects.filter(
+                company_id=msg.client.company_id,
+                status='connected',
+            ).select_related('integration_account').first()
+            if account and account.integration_account_id:
+                IntegrationLog.objects.create(
+                    account_id=account.integration_account_id,
+                    action='whatsapp_message_delivery_failed',
+                    status='error',
+                    message=f'WhatsApp delivery failed to {redacted_recipient}',
+                    response_data={
+                        'whatsapp_message_id': message_id,
+                        'recipient_id': recipient,
+                        'delivery_status': status,
+                        'error': error_text,
+                        'phone_number_id': phone_number_id,
+                    },
+                )
+    elif updated:
+        logger.info(
+            "WhatsApp message status %s: wam_id=%s recipient=%s",
+            status,
+            message_id,
+            redacted_recipient,
+        )
+    else:
+        logger.debug(
+            "WhatsApp status %s for wam_id=%s (no matching outbound LeadWhatsAppMessage)",
+            status,
+            message_id,
+        )
 

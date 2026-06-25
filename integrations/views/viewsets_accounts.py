@@ -27,6 +27,10 @@ from ..models import (
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
 )
 from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_VERSION
+from ..whatsapp_account_sync import (
+    sync_whatsapp_accounts_from_integration,
+    upsert_whatsapp_account_from_embedded_signup,
+)
 from ..serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -112,10 +116,13 @@ def _build_tiktok_company_sig(company_id: int) -> str:
     ).hexdigest()
 
 
-def apply_oauth_token_to_account(account, token_data, user_info):
+def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup_session=None):
     """
     Persist OAuth access token, IntegrationAccount metadata, Meta pages, and WhatsAppAccount rows.
     Used by redirect oauth_callback and by WhatsApp Embedded Signup (FB.login) completion.
+
+    embedded_signup_session: optional dict with waba_id, phone_number_id, business_id from
+    Meta WA_EMBEDDED_SIGNUP postMessage (required for display-name-only / 555 numbers).
     """
     oauth_handler = get_oauth_handler(account.platform)
     account.set_access_token(token_data['access_token'])
@@ -140,42 +147,24 @@ def apply_oauth_token_to_account(account, token_data, user_info):
         account.metadata['pages'] = []
 
     if account.platform == 'whatsapp':
+        token = token_data['access_token']
+        session = embedded_signup_session if isinstance(embedded_signup_session, dict) else {}
+        waba_id = str(session.get('waba_id') or '').strip()
+        phone_number_id = str(session.get('phone_number_id') or '').strip()
+        business_id = str(session.get('business_id') or '').strip() or None
+        if waba_id and phone_number_id:
+            try:
+                upsert_whatsapp_account_from_embedded_signup(
+                    account,
+                    token,
+                    waba_id=waba_id,
+                    phone_number_id=phone_number_id,
+                    business_id=business_id,
+                )
+            except Exception as e:
+                logger.warning("WhatsApp embedded signup session upsert failed: %s", e)
         try:
-            wa_handler = get_oauth_handler('whatsapp')
-            if hasattr(wa_handler, 'get_waba_and_phone_numbers'):
-                waba_list = wa_handler.get_waba_and_phone_numbers(token_data['access_token'])
-                for item in waba_list:
-                    waba_id = item.get('waba_id')
-                    business_id = item.get('business_id')
-                    for ph in item.get('phone_numbers') or []:
-                        phone_number_id = ph.get('id')
-                        if not phone_number_id:
-                            continue
-                        display = (ph.get('display_phone_number') or '').strip()
-                        wa_account, _created = WhatsAppAccount.objects.update_or_create(
-                            phone_number_id=phone_number_id,
-                            defaults={
-                                'company': account.company,
-                                'waba_id': waba_id,
-                                'business_id': business_id or '',
-                                'display_phone_number': display or None,
-                                'status': 'connected',
-                                'integration_account': account,
-                            },
-                        )
-                        wa_account.set_access_token(token_data['access_token'])
-                        wa_account.save()
-                if waba_list:
-                    first_waba = waba_list[0]
-                    first_phones = first_waba.get('phone_numbers') or []
-                    if first_phones:
-                        account.metadata['waba_id'] = first_waba.get('waba_id')
-                        account.metadata['phone_number_id'] = first_phones[0].get('id')
-                        display_phone = (first_phones[0].get('display_phone_number') or '').strip()
-                        if display_phone and (
-                            not account.name or account.name.strip().lower() == 'whatsapp'
-                        ):
-                            account.name = display_phone
+            sync_whatsapp_accounts_from_integration(account, token)
         except Exception as e:
             logger.warning("WhatsApp WABA/phone fetch failed: %s", e)
 
@@ -469,6 +458,11 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         if not ser.is_valid():
             return validation_error_response(ser.errors)
         code = ser.validated_data['code']
+        embedded_session = {
+            k: ser.validated_data.get(k)
+            for k in ('waba_id', 'phone_number_id', 'business_id')
+            if (ser.validated_data.get(k) or '').strip()
+        }
         oauth_handler = get_oauth_handler('whatsapp')
         embedded_redirect = getattr(
             settings,
@@ -493,7 +487,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             logger.warning("get_user_info (/me) failed after embedded signup: %s", get_me_err)
             user_info = {'id': f'meta_fallback_embedded_{account.id}', 'name': account.name or 'Meta User'}
         try:
-            apply_oauth_token_to_account(account, token_data, user_info)
+            apply_oauth_token_to_account(
+                account,
+                token_data,
+                user_info,
+                embedded_signup_session=embedded_session or None,
+            )
         except Exception as e:
             account.status = 'error'
             account.error_message = str(e)
@@ -508,6 +507,73 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             return error_response(str(e), code='bad_request')
         return success_response(
             data={'account_id': account.id, 'connected': True},
+        )
+
+    @action(detail=True, methods=['post'], url_path='whatsapp/sync-phone-numbers')
+    def whatsapp_sync_phone_numbers(self, request, pk=None):
+        """
+        Re-fetch WABA / phone_number_id from Meta for a connected WhatsApp integration account.
+        POST /api/integrations/accounts/:id/whatsapp/sync-phone-numbers/
+        """
+        account = self.get_object()
+        if account.platform != 'whatsapp':
+            return error_response(
+                'This action is only for WhatsApp integration accounts.',
+                code='bad_request',
+            )
+        if account.status != 'connected':
+            return error_response(
+                'WhatsApp account is not connected.',
+                code='bad_request',
+            )
+        token = account.get_access_token()
+        if not token:
+            return error_response(
+                'WhatsApp account has no access token.',
+                code='whatsapp_no_access_token',
+            )
+
+        synced = sync_whatsapp_accounts_from_integration(account, token)
+        wa = WhatsAppAccount.objects.filter(
+            company=account.company,
+            status='connected',
+            integration_account=account,
+        ).first()
+        if not wa:
+            wa = WhatsAppAccount.objects.filter(
+                company=account.company,
+                status='connected',
+            ).first()
+
+        debug_payload = {}
+        try:
+            handler = get_oauth_handler('whatsapp')
+            if hasattr(handler, 'debug_token'):
+                debug_payload = handler.debug_token(token) or {}
+        except Exception as e:
+            debug_payload = {'error': str(e)}
+
+        if not wa:
+            return error_response(
+                'Could not load WhatsApp phone numbers from Meta. '
+                'Ensure Embedded Signup granted whatsapp_business_messaging on your WABA '
+                '(App Review → Permissions → whatsapp_business_messaging should show assets > 0).',
+                code='whatsapp_phone_numbers_not_synced',
+                details={
+                    'synced': synced,
+                    'scopes': debug_payload.get('scopes'),
+                    'granular_scopes': debug_payload.get('granular_scopes'),
+                    'metadata': account.metadata,
+                },
+            )
+
+        return success_response(
+            data={
+                'synced': synced,
+                'phone_number_id': wa.phone_number_id,
+                'display_phone_number': wa.display_phone_number,
+                'waba_id': wa.waba_id,
+            },
         )
     
     @action(detail=False, methods=['get', 'post'], url_path='oauth/callback/(?P<platform>[^/]+)', permission_classes=[AllowAny])
@@ -635,6 +701,10 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         account.save()
         if account.platform == 'meta':
             self._meta_cache_invalidate(account.id)
+        elif account.platform == 'whatsapp':
+            WhatsAppAccount.objects.filter(integration_account=account).update(
+                status='disconnected'
+            )
 
         IntegrationLog.objects.create(
             account=account,

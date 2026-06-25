@@ -98,11 +98,11 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     'whatsapp_message_received': {
         'ar': {
             'title': 'رسالة واتساب واردة',
-            'body': 'رسالة جديدة من عميل محتمل عبر واتساب'
+            'body': '{lead_name}: {message_preview}'
         },
         'en': {
             'title': 'WhatsApp Message Received',
-            'body': 'New message from a lead via WhatsApp'
+            'body': '{lead_name}: {message_preview}'
         }
     },
     'whatsapp_template_sent': {

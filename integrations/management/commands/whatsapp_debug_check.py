@@ -21,8 +21,14 @@ class Command(BaseCommand):
         send_path = "/api/integrations/whatsapp/send/"
         self.stdout.write("Meta Developer -> WhatsApp -> Configuration:")
         self.stdout.write(f"  Callback URL: {api_base}{webhook_path}")
-        self.stdout.write("  Subscribe webhook field: messages (and statuses if you use delivery receipts)")
+        self.stdout.write("  Subscribe webhook field: messages (includes delivery status updates)")
         self.stdout.write("")
+        self.stdout.write(
+            self.style.WARNING(
+                "  graph_status=200 only means Meta ACCEPTED the message. Delivery failures arrive as "
+                "status webhooks (failed). Check logs for 'WhatsApp message delivery failed'."
+            )
+        )
 
         wa_verify = getattr(settings, "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "") or ""
         meta_verify = getattr(settings, "META_WEBHOOK_VERIFY_TOKEN", "") or ""
@@ -81,4 +87,27 @@ class Command(BaseCommand):
                 f"  id={wa.id} company_id={wa.company_id} "
                 f"phone_number_id={wa.phone_number_id} status={wa.status} "
                 f"has_token={bool(tok)} display={wa.display_phone_number or '-'}"
+            )
+            disp = (wa.display_phone_number or '').replace(' ', '').replace('-', '')
+            if disp.startswith('+1555') or disp.startswith('1555'):
+                self.stdout.write(
+                    self.style.WARNING(
+                        "    ^ Meta sandbox/test number (+1 555-...). Add each recipient phone in "
+                        "Meta Developer Console -> WhatsApp -> API Setup -> test numbers, or complete "
+                        "Business Verification for real delivery."
+                    )
+                )
+
+        from integrations.models import LeadWhatsAppMessage
+        inbound = LeadWhatsAppMessage.objects.filter(direction='inbound').count()
+        outbound = LeadWhatsAppMessage.objects.filter(direction='outbound').count()
+        self.stdout.write("")
+        failed = LeadWhatsAppMessage.objects.filter(direction='outbound', delivery_status='failed').count()
+        self.stdout.write(f"LeadWhatsAppMessage totals: inbound={inbound} outbound={outbound} failed_delivery={failed}")
+        if inbound == 0:
+            self.stdout.write(
+                self.style.WARNING(
+                    "  No inbound messages in DB - Meta webhooks must POST to your PUBLIC API URL "
+                    "(not localhost). Check Meta Developer -> WhatsApp -> Configuration -> Webhook."
+                )
             )

@@ -741,6 +741,18 @@ class LeadWhatsAppMessage(models.Model):
         null=True,
         help_text="معرف الرسالة من WhatsApp Cloud API",
     )
+    delivery_status = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="Meta delivery status: sent, delivered, read, failed",
+    )
+    delivery_error = models.CharField(
+        max_length=512,
+        blank=True,
+        null=True,
+        help_text="Meta error message when delivery_status=failed",
+    )
     created_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,

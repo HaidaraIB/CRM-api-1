@@ -13,7 +13,7 @@ from django.shortcuts import redirect
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from rest_framework import viewsets, status
+from rest_framework import mixins, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
@@ -228,10 +228,16 @@ class LeadSMSMessageViewSet(viewsets.ReadOnlyModelViewSet):
         return qs
 
 
-class LeadWhatsAppMessageViewSet(viewsets.ReadOnlyModelViewSet):
+class LeadWhatsAppMessageViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     """
     قائمة رسائل واتساب للعميل. للعرض في التايملاين ومركز المراسلات.
     GET /api/integrations/whatsapp/messages/?client=:client_id
+    DELETE /api/integrations/whatsapp/messages/:id/
     """
     permission_classes = [IsAuthenticated, HasActiveSubscription]
     serializer_class = LeadWhatsAppMessageSerializer
@@ -240,8 +246,32 @@ class LeadWhatsAppMessageViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         qs = LeadWhatsAppMessage.objects.filter(client__company=user.company).order_by('-created_at')
         client_id = self.request.query_params.get('client')
+        phone = (self.request.query_params.get('phone') or '').strip()
+        client_ids: set[int] = set()
+        phone_q = None
+
         if client_id and str(client_id).isdigit():
-            qs = qs.filter(client_id=client_id)
+            client_ids.add(int(client_id))
+
+        if phone:
+            from django.db.models import Q
+            from integrations.services.phone_match import find_client_by_phone, phone_match_keys
+
+            client = find_client_by_phone(user.company, phone)
+            if client:
+                client_ids.add(client.id)
+            keys = phone_match_keys(phone)
+            phone_q = Q()
+            for k in keys:
+                if len(k) >= 7:
+                    phone_q |= Q(phone_number=k) | Q(phone_number__endswith=k[-10:])
+
+        if client_ids and phone_q is not None:
+            qs = qs.filter(Q(client_id__in=client_ids) | phone_q)
+        elif client_ids:
+            qs = qs.filter(client_id__in=client_ids)
+        elif phone_q is not None:
+            qs = qs.filter(phone_q)
         return qs
 
 

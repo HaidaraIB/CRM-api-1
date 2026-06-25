@@ -2,6 +2,7 @@
 from .templates_whatsapp import (
     MessageTemplateViewSet,
     whatsapp_conversations_list,
+    whatsapp_contact_by_phone,
     whatsapp_limits,
 )
 from .twilio_sms import (
@@ -72,6 +73,7 @@ __all__ = [
     "tiktok_leadgen_webhook",
     "twilio_settings_view",
     "whatsapp_conversations_list",
+    "whatsapp_contact_by_phone",
     "whatsapp_limits",
     "whatsapp_send_message",
     "whatsapp_send_template",

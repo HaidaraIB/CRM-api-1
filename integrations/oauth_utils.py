@@ -2,6 +2,8 @@
 أدوات OAuth للتكامل مع المنصات المختلفة
 """
 import hmac
+import logging
+import re
 import requests
 from django.conf import settings
 from django.utils import timezone
@@ -14,6 +16,22 @@ from urllib.parse import urlencode, parse_qs, urlparse
 META_GRAPH_API_VERSION = "v25.0"
 META_GRAPH_API_BASE_URL = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}"
 META_DIALOG_API_BASE_URL = f"https://www.facebook.com/{META_GRAPH_API_VERSION}"
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_graph_error(exc: Exception) -> str:
+    """Log Graph API failures without leaking access_token query params."""
+    resp = getattr(exc, 'response', None)
+    if resp is not None:
+        try:
+            err = resp.json().get('error', {})
+            msg = err.get('message') or f'HTTP {resp.status_code}'
+            code = err.get('code')
+            return f'({code}) {msg}' if code else msg
+        except Exception:
+            pass
+    return re.sub(r'access_token=[^\s&]+', 'access_token=***', str(exc))
 
 
 class OAuthBase:
@@ -496,6 +514,102 @@ class WhatsAppOAuth(OAuthBase):
         response.raise_for_status()
         return response.json()
 
+    def get_app_access_token(self):
+        url = f"{self.graph_api_url}/oauth/access_token"
+        params = {
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'grant_type': 'client_credentials',
+        }
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json().get('access_token', '')
+
+    def debug_token(self, user_access_token):
+        app_token = self.get_app_access_token()
+        if not app_token:
+            return {'is_valid': False, 'error': 'Could not get app access token'}
+        url = f"{self.graph_api_url}/debug_token"
+        params = {
+            'input_token': user_access_token,
+            'access_token': app_token,
+        }
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json().get('data', {})
+
+    def _append_waba_entry(self, out, access_token, waba_id, business_id=None):
+        """Fetch phone numbers for a WABA and append to out if not already present."""
+        graph = self.graph_api_url
+        waba_id = str(waba_id).strip()
+        if not waba_id:
+            return
+        for item in out:
+            if str(item.get('waba_id')) == waba_id:
+                return
+        phones = []
+        try:
+            ph_resp = requests.get(
+                f"{graph}/{waba_id}/phone_numbers",
+                params={
+                    'access_token': access_token,
+                    'fields': 'id,display_phone_number,verified_name',
+                },
+                timeout=15,
+            )
+            if ph_resp.status_code == 200:
+                phones = ph_resp.json().get('data') or []
+            else:
+                logger.warning(
+                    "WABA %s phone_numbers HTTP %s: %s",
+                    waba_id,
+                    ph_resp.status_code,
+                    ph_resp.text[:300],
+                )
+        except Exception as e:
+            logger.warning("WABA %s phone_numbers request failed: %s", waba_id, e)
+        out.append({
+            'waba_id': waba_id,
+            'business_id': business_id,
+            'phone_numbers': [
+                {
+                    'id': p.get('id'),
+                    'display_phone_number': p.get('display_phone_number') or '',
+                }
+                for p in phones if p.get('id')
+            ],
+        })
+
+    def _append_phone_number_id_entry(self, out, access_token, phone_number_id, waba_id=None):
+        """Treat a granular-scope target id as a phone_number_id when /phone_numbers is empty."""
+        pid = str(phone_number_id).strip()
+        if not pid:
+            return
+        for item in out:
+            for ph in item.get('phone_numbers') or []:
+                if str(ph.get('id')) == pid:
+                    return
+        display = ''
+        try:
+            resp = requests.get(
+                f"{self.graph_api_url}/{pid}",
+                params={
+                    'access_token': access_token,
+                    'fields': 'id,display_phone_number,verified_name',
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                j = resp.json()
+                display = (j.get('display_phone_number') or '').strip()
+        except Exception:
+            pass
+        out.append({
+            'waba_id': waba_id,
+            'business_id': None,
+            'phone_numbers': [{'id': pid, 'display_phone_number': display}],
+        })
+
     def get_waba_and_phone_numbers(self, access_token):
         """
         جلب WABA ID و Phone Number IDs بعد OAuth.
@@ -504,81 +618,76 @@ class WhatsAppOAuth(OAuthBase):
         """
         graph = META_GRAPH_API_BASE_URL
         out = []
-        # محاولة 1: من me/accounts (صفحات قد ترتبط بـ WABA)
+        businesses = []
         try:
-            # قائمة الـ Businesses التي يملكها المستخدم
             resp = requests.get(
                 f"{graph}/me/businesses",
                 params={
                     'access_token': access_token,
-                    'fields': 'id,name,owned_whatsapp_business_accounts',
+                    'fields': (
+                        'id,name,owned_whatsapp_business_accounts{id,name},'
+                        'client_whatsapp_business_accounts{id,name}'
+                    ),
                 },
+                timeout=15,
             )
             resp.raise_for_status()
-            data = resp.json()
-            businesses = data.get('data') or []
-        except Exception:
-            businesses = []
+            businesses = resp.json().get('data') or []
+        except Exception as e:
+            logger.warning("me/businesses failed: %s", _safe_graph_error(e))
+
         for biz in businesses:
             business_id = biz.get('id')
-            wabas = (biz.get('owned_whatsapp_business_accounts') or {}).get('data') or []
-            for waba in wabas:
+            owned = (biz.get('owned_whatsapp_business_accounts') or {}).get('data') or []
+            client = (biz.get('client_whatsapp_business_accounts') or {}).get('data') or []
+            for waba in owned + client:
                 waba_id = waba.get('id')
-                if not waba_id:
-                    continue
-                try:
-                    ph_resp = requests.get(
-                        f"{graph}/{waba_id}/phone_numbers",
-                        params={'access_token': access_token},
-                    )
-                    ph_resp.raise_for_status()
-                    phones = (ph_resp.json().get('data') or [])
-                except Exception:
-                    phones = []
-                out.append({
-                    'waba_id': waba_id,
-                    'business_id': business_id,
-                    'phone_numbers': [
-                        {'id': p.get('id'), 'display_phone_number': p.get('display_phone_number') or ''}
-                        for p in phones if p.get('id')
-                    ],
-                })
-        # إذا لم نجد من businesses، نجرب me?fields=whatsapp_business_accounts
+                if waba_id:
+                    self._append_waba_entry(out, access_token, waba_id, business_id)
+
         if not out:
             try:
                 resp = requests.get(
                     f"{graph}/me",
                     params={
                         'access_token': access_token,
-                        'fields': 'id,name,whatsapp_business_accounts',
+                        'fields': 'id,name,whatsapp_business_accounts{id,name}',
                     },
+                    timeout=15,
                 )
                 resp.raise_for_status()
-                data = resp.json()
-                waba_list = (data.get('whatsapp_business_accounts') or {}).get('data') or []
+                waba_list = (resp.json().get('whatsapp_business_accounts') or {}).get('data') or []
                 for waba in waba_list:
                     waba_id = waba.get('id')
-                    if not waba_id:
+                    if waba_id:
+                        self._append_waba_entry(out, access_token, waba_id, None)
+            except Exception as e:
+                logger.warning("me/whatsapp_business_accounts failed: %s", _safe_graph_error(e))
+
+        # Embedded Signup tokens often expose WABA ids only via debug_token granular_scopes.
+        try:
+            debug = self.debug_token(access_token)
+            for g in debug.get('granular_scopes') or []:
+                scope = (g.get('scope') or '').strip()
+                if scope not in (
+                    'whatsapp_business_management',
+                    'whatsapp_business_messaging',
+                ):
+                    continue
+                for target_id in g.get('target_ids') or []:
+                    tid = str(target_id).strip()
+                    if not tid:
                         continue
-                    try:
-                        ph_resp = requests.get(
-                            f"{graph}/{waba_id}/phone_numbers",
-                            params={'access_token': access_token},
-                        )
-                        ph_resp.raise_for_status()
-                        phones = (ph_resp.json().get('data') or [])
-                    except Exception:
-                        phones = []
-                    out.append({
-                        'waba_id': waba_id,
-                        'business_id': None,
-                        'phone_numbers': [
-                            {'id': p.get('id'), 'display_phone_number': p.get('display_phone_number') or ''}
-                            for p in phones if p.get('id')
-                        ],
-                    })
-            except Exception:
-                pass
+                    # Try as WABA first; if no phones, treat as phone_number_id.
+                    before = len(out)
+                    self._append_waba_entry(out, access_token, tid, None)
+                    new_entry = out[-1] if len(out) > before else None
+                    if new_entry and not (new_entry.get('phone_numbers') or []):
+                        out.pop()
+                        self._append_phone_number_id_entry(out, access_token, tid, waba_id=tid)
+        except Exception as e:
+            logger.warning("debug_token granular_scopes failed: %s", _safe_graph_error(e))
+
         return out
 
 
