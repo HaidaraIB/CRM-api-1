@@ -39,6 +39,14 @@ def _send_via_otpiq(
     api_key = settings.get_otpiq_api_key()
     sender_id = (settings.sender_id or '').strip() or None
     route = (settings.otpiq_route_provider or 'sms').strip() or 'sms'
+
+    ok_sender, sender_err_key, sender_err_msg = otpiq_sms.validate_sender_id_for_send(
+        api_key or '',
+        sender_id,
+    )
+    if not ok_sender:
+        return False, None, sender_err_key, sender_err_msg, SmsProvider.OTPIQ
+
     ok, sms_id, error_key, error_msg = otpiq_sms.send_custom_message(
         api_key=api_key or '',
         phone=to_phone,

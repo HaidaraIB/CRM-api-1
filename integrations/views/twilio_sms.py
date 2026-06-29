@@ -49,6 +49,7 @@ from settings.models import SystemSettings
 
 logger = logging.getLogger(__name__)
 from ..services.company_sms import send_company_sms
+from ..services.otpiq_sms import body_preview_for_log, mask_phone_for_log
 
 
 def _integration_gate(company, platform: str):
@@ -179,6 +180,17 @@ def send_lead_sms_view(request):
     if blocked is not None:
         return blocked
 
+    provider_used = twilio_settings.provider or SmsProvider.TWILIO
+    logger.info(
+        'SMS send request lead_id=%s to=%s provider=%s body_len=%s body_preview=%r user_id=%s',
+        lead_id,
+        mask_phone_for_log(phone_number),
+        provider_used,
+        len(body or ''),
+        body_preview_for_log(body),
+        getattr(request.user, 'id', None),
+    )
+
     ok, external_id, error_key, error_msg, provider_used = send_company_sms(
         twilio_settings,
         to_phone=phone_number,
@@ -191,6 +203,14 @@ def send_lead_sms_view(request):
             code=error_key or 'sms_error_send_failed',
             status_code=status.HTTP_502_BAD_GATEWAY if error_key == 'sms_error_send_failed' else status.HTTP_400_BAD_REQUEST,
         )
+
+    logger.info(
+        'SMS send success lead_id=%s provider=%s external_id=%s to=%s',
+        lead_id,
+        provider_used,
+        external_id,
+        mask_phone_for_log(phone_number),
+    )
 
     twilio_sid = external_id if provider_used == SmsProvider.TWILIO else None
     sms_record = LeadSMSMessage.objects.create(
