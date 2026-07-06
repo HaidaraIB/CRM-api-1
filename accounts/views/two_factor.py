@@ -153,26 +153,10 @@ def request_two_factor_auth(request):
     try:
         expiry_minutes = 10  # 2FA codes expire in 10 minutes
 
-        # For demo accounts (Google/Apple store review), use constant 2FA from .env
-        demo_2fa_code = None
-        is_google_demo = (
-            settings.DEMO_GOOGLE_ACCOUNT_USERNAME
-            and user.username.lower() == settings.DEMO_GOOGLE_ACCOUNT_USERNAME.lower()
-        ) or (
-            settings.DEMO_GOOGLE_ACCOUNT_EMAIL
-            and user.email.lower() == settings.DEMO_GOOGLE_ACCOUNT_EMAIL.lower()
-        )
-        is_apple_demo = (
-            settings.DEMO_APPLE_ACCOUNT_USERNAME
-            and user.username.lower() == settings.DEMO_APPLE_ACCOUNT_USERNAME.lower()
-        ) or (
-            settings.DEMO_APPLE_ACCOUNT_EMAIL
-            and user.email.lower() == settings.DEMO_APPLE_ACCOUNT_EMAIL.lower()
-        )
-        if is_google_demo and getattr(settings, "DEMO_GOOGLE_ACCOUNT_2FA_CODE", ""):
-            demo_2fa_code = settings.DEMO_GOOGLE_ACCOUNT_2FA_CODE
-        elif is_apple_demo and getattr(settings, "DEMO_APPLE_ACCOUNT_2FA_CODE", ""):
-            demo_2fa_code = settings.DEMO_APPLE_ACCOUNT_2FA_CODE
+        # For demo accounts (Google/Apple/Meta store review), use constant 2FA from .env
+        from accounts.demo_accounts import get_demo_2fa_code_for_user, is_demo_review_account
+
+        demo_2fa_code = get_demo_2fa_code_for_user(user)
 
         if demo_2fa_code:
             # Use constant code for demo account (Google or Apple)
@@ -198,7 +182,7 @@ def request_two_factor_auth(request):
 
         # Use user's chosen language, then Accept-Language header, then default
         language = get_email_language_for_user(user, request, default="ar")
-        if not is_apple_demo and not is_google_demo:
+        if not is_demo_review_account(user):
             sent = send_two_factor_auth_email(user, two_fa, language=language)
         else:
             sent = True

@@ -564,6 +564,9 @@ DEMO_GOOGLE_ACCOUNT_2FA_CODE = os.getenv("DEMO_GOOGLE_ACCOUNT_2FA_CODE", "")
 DEMO_APPLE_ACCOUNT_USERNAME = os.getenv("DEMO_APPLE_ACCOUNT_USERNAME", "")
 DEMO_APPLE_ACCOUNT_EMAIL = os.getenv("DEMO_APPLE_ACCOUNT_EMAIL", "")
 DEMO_APPLE_ACCOUNT_2FA_CODE = os.getenv("DEMO_APPLE_ACCOUNT_2FA_CODE", "")
+DEMO_META_ACCOUNT_USERNAME = os.getenv("DEMO_META_ACCOUNT_USERNAME", "")
+DEMO_META_ACCOUNT_EMAIL = os.getenv("DEMO_META_ACCOUNT_EMAIL", "")
+DEMO_META_ACCOUNT_2FA_CODE = os.getenv("DEMO_META_ACCOUNT_2FA_CODE", "")
 
 # ============================================================================
 # PBX call recording storage (local disk or S3-compatible e.g. Cloudflare R2)

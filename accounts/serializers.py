@@ -497,25 +497,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if request and is_company_owner(self.user) and not is_trusted_device_valid(self.user, request):
             expiry_minutes = 10
 
-            demo_2fa_code = None
-            is_google_demo = (
-                settings.DEMO_GOOGLE_ACCOUNT_USERNAME
-                and self.user.username.lower() == settings.DEMO_GOOGLE_ACCOUNT_USERNAME.lower()
-            ) or (
-                settings.DEMO_GOOGLE_ACCOUNT_EMAIL
-                and self.user.email.lower() == settings.DEMO_GOOGLE_ACCOUNT_EMAIL.lower()
-            )
-            is_apple_demo = (
-                settings.DEMO_APPLE_ACCOUNT_USERNAME
-                and self.user.username.lower() == settings.DEMO_APPLE_ACCOUNT_USERNAME.lower()
-            ) or (
-                settings.DEMO_APPLE_ACCOUNT_EMAIL
-                and self.user.email.lower() == settings.DEMO_APPLE_ACCOUNT_EMAIL.lower()
-            )
-            if is_google_demo and getattr(settings, "DEMO_GOOGLE_ACCOUNT_2FA_CODE", ""):
-                demo_2fa_code = settings.DEMO_GOOGLE_ACCOUNT_2FA_CODE
-            elif is_apple_demo and getattr(settings, "DEMO_APPLE_ACCOUNT_2FA_CODE", ""):
-                demo_2fa_code = settings.DEMO_APPLE_ACCOUNT_2FA_CODE
+            from .demo_accounts import get_demo_2fa_code_for_user
+
+            demo_2fa_code = get_demo_2fa_code_for_user(self.user)
 
             if demo_2fa_code:
                 TwoFactorAuth.objects.filter(user=self.user, is_verified=False).delete()
