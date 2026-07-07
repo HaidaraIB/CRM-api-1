@@ -10,7 +10,7 @@ from .models import (
     ClientVisit,
     Deal,
 )
-from crm.assignment import get_least_busy_employee
+from crm.assignment import get_auto_assign_employee
 
 
 def _assignee_acted_since_assignment():
@@ -123,7 +123,7 @@ def re_assign_inactive_clients():
         for client in clients_to_reassign:
             # Get new employee (different from current one)
             current_employee = client.assigned_to
-            new_employee = get_least_busy_employee(company)
+            new_employee = get_auto_assign_employee(company)
             
             # Only reassign if we have a different employee available
             if new_employee and new_employee != current_employee:

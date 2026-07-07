@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from crm.availability import user_accepts_new_assignments
-from crm.assignment import get_least_busy_employee
+from crm.assignment import get_auto_assign_employee
 from .models import Client, ClientEvent
 
 
@@ -129,7 +129,7 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
     events = []
 
     for client in clients:
-        employee = get_least_busy_employee(company)
+        employee = get_auto_assign_employee(company)
         if not employee:
             skipped_count += 1
             continue

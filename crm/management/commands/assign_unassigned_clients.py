@@ -4,7 +4,7 @@ Use this to assign existing unassigned clients when auto_assign is enabled
 """
 from django.core.management.base import BaseCommand
 from crm.models import Client
-from crm.assignment import get_least_busy_employee
+from crm.assignment import get_auto_assign_employee
 from django.utils import timezone
 
 
@@ -65,7 +65,7 @@ class Command(BaseCommand):
                 continue
 
             # Get the least busy employee
-            employee = get_least_busy_employee(client.company)
+            employee = get_auto_assign_employee(client.company)
 
             if not employee:
                 self.stdout.write(

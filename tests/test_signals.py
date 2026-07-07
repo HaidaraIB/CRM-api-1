@@ -6,7 +6,7 @@ Tests for CRM signal callbacks and routing behavior.
 import pytest
 from django.contrib.auth import get_user_model
 from crm.models import Client, ClientEvent
-from crm.assignment import get_least_busy_employee
+from crm.assignment import get_auto_assign_employee, get_least_busy_employee, get_round_robin_employee
 from settings.models import LeadStatus, StatusCategory
 from integrations.models import IntegrationAccount, IntegrationPlatform
 
@@ -154,3 +154,64 @@ def test_integration_lead_respects_auto_assign_toggle(company):
     ev = ClientEvent.objects.filter(client=client_on, event_type="assignment").first()
     assert ev is not None
     assert "TikTok" in (ev.notes or "")
+
+
+@pytest.mark.django_db
+def test_get_round_robin_ignores_workload(company):
+    """Round robin rotates regardless of how many leads each employee holds."""
+    from companies.models import Company
+
+    employees = [
+        User.objects.create_user(
+            username=f"rr_workload_{i}",
+            email=f"rr_workload_{i}@test.com",
+            role="employee",
+            company=company,
+            is_active=True,
+        )
+        for i in range(3)
+    ]
+    for _ in range(5):
+        Client.objects.create(name="busy", company=company, assigned_to=employees[0])
+
+    company.auto_assign_algorithm = Company.AutoAssignAlgorithm.ROUND_ROBIN
+    company.save(update_fields=["auto_assign_algorithm"])
+
+    picks = [get_round_robin_employee(company).id for _ in range(6)]
+    assert employees[0].id in picks
+    assert employees[1].id in picks
+    assert employees[2].id in picks
+    assert len(set(picks)) >= 2
+
+
+@pytest.mark.django_db
+def test_get_auto_assign_employee_uses_company_algorithm(company):
+    """Dispatcher respects company.auto_assign_algorithm."""
+    from companies.models import Company
+
+    emp_busy = User.objects.create_user(
+        username="algo_busy",
+        email="algo_busy@test.com",
+        role="employee",
+        company=company,
+        is_active=True,
+    )
+    emp_light = User.objects.create_user(
+        username="algo_light",
+        email="algo_light@test.com",
+        role="employee",
+        company=company,
+        is_active=True,
+    )
+    for _ in range(3):
+        Client.objects.create(name="busy", company=company, assigned_to=emp_busy)
+
+    company.auto_assign_algorithm = Company.AutoAssignAlgorithm.LEAST_BUSY
+    company.save(update_fields=["auto_assign_algorithm"])
+    assert get_auto_assign_employee(company) == emp_light
+
+    company.auto_assign_algorithm = Company.AutoAssignAlgorithm.ROUND_ROBIN
+    company.save(update_fields=["auto_assign_algorithm"])
+    picks = [get_auto_assign_employee(company).id for _ in range(4)]
+    assert emp_busy.id in picks
+    assert emp_light.id in picks

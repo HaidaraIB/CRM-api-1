@@ -2,7 +2,7 @@ from django.db.models.signals import post_save, pre_save
 from django.db import transaction
 from django.dispatch import receiver
 from django.utils import timezone
-from crm.assignment import get_least_busy_employee
+from crm.assignment import get_auto_assign_employee
 from crm.availability import user_accepts_new_assignments
 from .models import (
     Client,
@@ -96,9 +96,8 @@ def get_next_data_entry_round_robin_employee(company):
 @receiver(post_save, sender=Client)
 def auto_assign_client(sender, instance, created, **kwargs):
     """
-    Auto-assign new clients to the least busy employee when company.auto_assign_enabled
-    is True. Applies to all new leads (manual, API, and integration sources such as
-    Meta, TikTok, WhatsApp) so the Lead Assignment toggle is the single switch.
+    Auto-assign new clients to an available employee when company.auto_assign_enabled
+    is True, using the company's chosen algorithm (least busy or round robin).
     """
     if not created:
         return  # Only for new clients
@@ -115,7 +114,7 @@ def auto_assign_client(sender, instance, created, **kwargs):
     if instance.assigned_to_id:
         return
 
-    employee = get_least_busy_employee(company)
+    employee = get_auto_assign_employee(company)
     if not employee:
         return
 

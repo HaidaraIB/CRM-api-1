@@ -8,6 +8,7 @@ from django.db.models import Count, F, FloatField, Q
 from django.db.models.functions import Coalesce
 
 from accounts.models import Role, User
+from companies.models import Company
 from crm.availability import user_accepts_new_assignments
 from settings.models import StatusCategory
 
@@ -26,6 +27,15 @@ def _assignment_role_filter(company) -> list[str]:
     if getattr(company, "specialization", None) == "medical":
         roles.append(Role.DOCTOR.value)
     return roles
+
+
+def _eligible_assignees_queryset(company):
+    """Active employees (and doctors for medical) eligible for lead assignment."""
+    return User.objects.filter(
+        company=company,
+        role__in=_assignment_role_filter(company),
+        is_active=True,
+    ).select_related("company").order_by("id")
 
 
 def _employees_with_workload_queryset(company):
@@ -97,6 +107,35 @@ def has_assignable_employee(company) -> bool:
         return False
     employees = _employees_with_workload_queryset(company)
     return any(user_accepts_new_assignments(employee) for employee in employees)
+
+
+def get_round_robin_employee(company):
+    """
+    Pick the next assignee by simple rotation among eligible users.
+
+    Skips users on their weekly day off. Uses ``Company.last_auto_assigned_employee``
+    as the rotation pointer.
+    """
+    if not company:
+        return None
+
+    employees = list(_eligible_assignees_queryset(company))
+    available = [employee for employee in employees if user_accepts_new_assignments(employee)]
+    if not available:
+        return None
+
+    return _pick_round_robin_among_tied(company, available)
+
+
+def get_auto_assign_employee(company):
+    """Pick an assignee using the company's configured auto-assign algorithm."""
+    if not company:
+        return None
+
+    algorithm = getattr(company, "auto_assign_algorithm", None) or Company.AutoAssignAlgorithm.LEAST_BUSY
+    if algorithm == Company.AutoAssignAlgorithm.ROUND_ROBIN:
+        return get_round_robin_employee(company)
+    return get_least_busy_employee(company)
 
 
 def get_least_busy_employee(company):

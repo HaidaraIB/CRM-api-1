@@ -146,6 +146,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
         PATCH /api/companies/{id}/update_assignment_settings/
         Body: {
             "auto_assign_enabled": true/false,
+            "auto_assign_algorithm": "least_busy" | "round_robin",
             "re_assign_enabled": true/false,
             "re_assign_hours": 24,
             "timezone": "Asia/Baghdad"
@@ -166,12 +167,24 @@ class CompanyViewSet(viewsets.ModelViewSet):
         
         # Update settings
         auto_assign_enabled = request.data.get('auto_assign_enabled')
+        auto_assign_algorithm = request.data.get('auto_assign_algorithm')
         re_assign_enabled = request.data.get('re_assign_enabled')
         re_assign_hours = request.data.get('re_assign_hours')
         tz_value = request.data.get('timezone')
         
         if auto_assign_enabled is not None:
             company.auto_assign_enabled = bool(auto_assign_enabled)
+        if auto_assign_algorithm is not None:
+            from companies.models import Company
+
+            valid = {choice.value for choice in Company.AutoAssignAlgorithm}
+            value = str(auto_assign_algorithm).strip()
+            if value not in valid:
+                return error_response(
+                    "auto_assign_algorithm must be 'least_busy' or 'round_robin'.",
+                    code="invalid_auto_assign_algorithm",
+                )
+            company.auto_assign_algorithm = value
         if re_assign_enabled is not None:
             company.re_assign_enabled = bool(re_assign_enabled)
         if re_assign_hours is not None:
@@ -199,7 +212,13 @@ class CompanyViewSet(viewsets.ModelViewSet):
                 )
             company.timezone = name
 
-        update_fields = ['auto_assign_enabled', 're_assign_enabled', 're_assign_hours', 'timezone']
+        update_fields = [
+            'auto_assign_enabled',
+            'auto_assign_algorithm',
+            're_assign_enabled',
+            're_assign_hours',
+            'timezone',
+        ]
         company.save(update_fields=update_fields)
         
         serializer = CompanySerializer(company, context={'request': request})

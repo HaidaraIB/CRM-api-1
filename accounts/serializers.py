@@ -208,6 +208,9 @@ class UserSerializer(serializers.ModelSerializer):
             "domain": company.domain,
             "specialization": company.specialization,
             "auto_assign_enabled": company.auto_assign_enabled,
+            "auto_assign_algorithm": getattr(
+                company, "auto_assign_algorithm", Company.AutoAssignAlgorithm.LEAST_BUSY
+            ),
             "re_assign_enabled": company.re_assign_enabled,
             "re_assign_hours": company.re_assign_hours,
             "free_trial_consumed": getattr(company, "free_trial_consumed", False),

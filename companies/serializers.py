@@ -23,6 +23,7 @@ class CompanySerializer(serializers.ModelSerializer):
             "owner_phone",
             "owner_phone_verified",
             "auto_assign_enabled",
+            "auto_assign_algorithm",
             "re_assign_enabled",
             "re_assign_hours",
             "free_trial_consumed",

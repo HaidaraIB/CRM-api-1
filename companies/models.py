@@ -39,9 +39,19 @@ class Company(models.Model):
         help_text="Last employee chosen by smart auto-assign (tie-break rotation).",
     )
     # Auto assignment settings
+    class AutoAssignAlgorithm(models.TextChoices):
+        LEAST_BUSY = "least_busy", "Least busy (workload-based)"
+        ROUND_ROBIN = "round_robin", "Round robin (take turns)"
+
     auto_assign_enabled = models.BooleanField(
         default=False,
         help_text="توزيع العملاء على الموظفين حسب عبء العمل (العملاء النشطون فقط)",
+    )
+    auto_assign_algorithm = models.CharField(
+        max_length=20,
+        choices=AutoAssignAlgorithm.choices,
+        default=AutoAssignAlgorithm.LEAST_BUSY,
+        help_text="Algorithm used when auto-assigning new leads.",
     )
     re_assign_enabled = models.BooleanField(
         default=False,
