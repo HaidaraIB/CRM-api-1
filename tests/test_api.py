@@ -737,6 +737,83 @@ class TestClientListFilters:
         )
         assert api_body(assigned_resp)["count"] == 1
 
+    def test_filter_by_multi_priority(self, authenticated_admin, company):
+        from crm.models import Client
+
+        Client.objects.create(name="High Lead", company=company, priority="high", type="fresh")
+        Client.objects.create(name="Medium Lead", company=company, priority="medium", type="fresh")
+        Client.objects.create(name="Low Lead", company=company, priority="low", type="fresh")
+
+        response = authenticated_admin.get("/api/v1/clients/?priority=medium,high")
+        assert response.status_code == status.HTTP_200_OK
+        names = {item["name"] for item in api_body(response)["results"]}
+        assert names == {"High Lead", "Medium Lead"}
+
+    def test_filter_by_multi_type(self, authenticated_admin, company):
+        from crm.models import Client
+
+        Client.objects.create(name="Fresh Lead", company=company, priority="low", type="fresh")
+        Client.objects.create(name="Hot Lead", company=company, priority="low", type="hot")
+        Client.objects.create(name="Cold Lead", company=company, priority="low", type="cold")
+
+        response = authenticated_admin.get("/api/v1/clients/?type=fresh,hot")
+        assert response.status_code == status.HTTP_200_OK
+        names = {item["name"] for item in api_body(response)["results"]}
+        assert names == {"Fresh Lead", "Hot Lead"}
+
+    def test_message_logs_campaign_outbound_only(self, authenticated_admin, company):
+        from crm.models import Client
+        from integrations.models import (
+            LeadSMSMessage,
+            LeadWhatsAppMessage,
+            MessageCampaignBatch,
+            MessageCampaignFailure,
+            MessageSendSource,
+        )
+
+        client = Client.objects.create(name="Log Test Lead", company=company, priority="low", type="fresh")
+        batch = MessageCampaignBatch.objects.create(
+            company=company,
+            channel=MessageCampaignBatch.CHANNEL_WHATSAPP,
+            message_preview="Campaign hello",
+            recipient_count=2,
+        )
+        LeadSMSMessage.objects.create(
+            client=client,
+            phone_number="+1234567890",
+            body="Hello SMS",
+            direction="outbound",
+            provider="twilio",
+            send_source=MessageSendSource.CAMPAIGN,
+        )
+        LeadWhatsAppMessage.objects.create(
+            client=client,
+            phone_number="+1234567890",
+            body="Hello WA",
+            direction="outbound",
+            delivery_status="delivered",
+            send_source=MessageSendSource.CAMPAIGN,
+            campaign_batch=batch,
+        )
+        MessageCampaignFailure.objects.create(
+            batch=batch,
+            client=client,
+            phone_number="+1999999999",
+            error="Network error",
+        )
+
+        response = authenticated_admin.get("/api/v1/integrations/message-logs/?page_size=10")
+        assert response.status_code == status.HTTP_200_OK
+        payload = api_body(response)
+        assert payload["count"] == 3
+        channels = {row["channel"] for row in payload["results"]}
+        assert channels == {"sms", "whatsapp"}
+        assert payload["summary"]["failed"] == 1
+        assert payload["summary"]["delivered"] == 1
+        assert payload["summary"]["sent"] == 1
+        assert all(row["direction"] == "outbound" for row in payload["results"])
+        assert "read" not in {row["status"] for row in payload["results"]}
+
     def test_employee_status_counts_respect_permissions(
         self, authenticated_employee, company, employee_user, admin_user
     ):
@@ -861,3 +938,61 @@ class TestMissionBarSummary:
         assert body["overdue_follow_ups"] == 1
         assert body["today_new_leads"] == 1
         assert body["unassigned_leads"] == 0
+
+
+@pytest.mark.django_db
+class TestMessageTemplateClone:
+    def test_clone_whatsapp_template_to_sms(self, authenticated_admin, company):
+        from integrations.models import MessageTemplate
+
+        wa = MessageTemplate.objects.create(
+            company=company,
+            name="hello",
+            channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+            content="Hi {{1}}, welcome from {{2}}.",
+            category=MessageTemplate.CATEGORY_UTILITY,
+            meta_status="APPROVED",
+        )
+        response = authenticated_admin.post(f"/api/v1/integrations/templates/{wa.id}/clone-to-channel/")
+        assert response.status_code == status.HTTP_201_CREATED
+        body = api_body(response)
+        assert body["name"] == "hello_sms"
+        assert body["channel_type"] == MessageTemplate.CHANNEL_SMS
+        assert "[Customer Name]" in body["content"]
+        assert "[Company]" in body["content"]
+
+        dup = authenticated_admin.post(f"/api/v1/integrations/templates/{wa.id}/clone-to-channel/")
+        assert dup.status_code == status.HTTP_400_BAD_REQUEST
+        assert api_body(dup)["error"]["code"] == "template_conversion_locked"
+
+    def test_converted_templates_cannot_clone_again(self, authenticated_admin, company):
+        from integrations.models import MessageTemplate
+
+        sms = MessageTemplate.objects.create(
+            company=company,
+            name="promo_sms",
+            channel_type=MessageTemplate.CHANNEL_SMS,
+            content="Hi there",
+            category=MessageTemplate.CATEGORY_MARKETING,
+        )
+        response = authenticated_admin.post(f"/api/v1/integrations/templates/{sms.id}/clone-to-channel/")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert api_body(response)["error"]["code"] == "template_conversion_locked"
+
+        wa = MessageTemplate.objects.create(
+            company=company,
+            name="offer",
+            channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+            content="Hi",
+            category=MessageTemplate.CATEGORY_MARKETING,
+        )
+        MessageTemplate.objects.create(
+            company=company,
+            name="offer_sms",
+            channel_type=MessageTemplate.CHANNEL_SMS,
+            content="Hi there",
+            category=MessageTemplate.CATEGORY_MARKETING,
+        )
+        locked = authenticated_admin.post(f"/api/v1/integrations/templates/{wa.id}/clone-to-channel/")
+        assert locked.status_code == status.HTTP_400_BAD_REQUEST
+        assert api_body(locked)["error"]["code"] == "template_conversion_locked"

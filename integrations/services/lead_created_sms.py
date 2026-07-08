@@ -12,7 +12,7 @@ from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
 from crm.models import Client, ClientPhoneNumber
-from integrations.models import LeadSMSMessage, SmsProvider, TwilioSettings
+from integrations.models import LeadSMSMessage, MessageSendSource, SmsProvider, TwilioSettings
 from integrations.policy import is_integration_allowed
 from integrations.services.company_sms import send_company_sms
 from subscriptions.entitlements import increment_monthly_usage, require_monthly_usage
@@ -185,6 +185,7 @@ def _send_lead_created_welcome_sms_impl(client_id: int) -> None:
         external_message_id=external_id,
         twilio_sid=twilio_sid,
         created_by=None,
+        send_source=MessageSendSource.AUTO_WELCOME,
     )
     increment_monthly_usage(company, "monthly_sms_messages", requested_delta=1)
 

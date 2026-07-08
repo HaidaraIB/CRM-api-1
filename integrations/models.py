@@ -635,6 +635,79 @@ class AIManagementReport(models.Model):
         return f"AI management report company={self.company_id}"
 
 
+class MessageSendSource(models.TextChoices):
+    MANUAL = "manual", "Manual"
+    CAMPAIGN = "campaign", "Campaign"
+    AUTO_WELCOME = "auto_welcome", "Auto welcome"
+
+
+class MessageCampaignBatch(models.Model):
+    """One bulk send action from Messaging Center → Message Campaign."""
+
+    CHANNEL_SMS = "sms"
+    CHANNEL_WHATSAPP = "whatsapp"
+    CHANNEL_CHOICES = [
+        (CHANNEL_SMS, "SMS"),
+        (CHANNEL_WHATSAPP, "WhatsApp"),
+    ]
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="message_campaign_batches",
+    )
+    channel = models.CharField(max_length=16, choices=CHANNEL_CHOICES)
+    message_preview = models.TextField(blank=True, default="")
+    recipient_count = models.PositiveIntegerField(default=0)
+    sent_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="message_campaign_batches",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "message_campaign_batches"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["company", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Campaign batch {self.id} ({self.channel}) company={self.company_id}"
+
+
+class MessageCampaignFailure(models.Model):
+    """Recipient that failed during a campaign send (no SMS/WA message row created)."""
+
+    batch = models.ForeignKey(
+        MessageCampaignBatch,
+        on_delete=models.CASCADE,
+        related_name="failures",
+    )
+    client = models.ForeignKey(
+        "crm.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="campaign_send_failures",
+    )
+    phone_number = models.CharField(max_length=20, blank=True, default="")
+    error = models.CharField(max_length=512, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "message_campaign_failures"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["batch", "created_at"]),
+        ]
+
+
 class LeadSMSMessage(models.Model):
     """
     رسالة SMS مرسلة إلى عميل محتمل (Lead).
@@ -690,6 +763,18 @@ class LeadSMSMessage(models.Model):
         blank=True,
         related_name='sent_sms_messages',
         help_text="المستخدم الذي أرسل الرسالة",
+    )
+    send_source = models.CharField(
+        max_length=20,
+        choices=MessageSendSource.choices,
+        default=MessageSendSource.MANUAL,
+    )
+    campaign_batch = models.ForeignKey(
+        MessageCampaignBatch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sms_messages",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -760,6 +845,18 @@ class LeadWhatsAppMessage(models.Model):
         blank=True,
         related_name='sent_whatsapp_messages',
         help_text="المستخدم الذي أرسل الرسالة (للصادرة)",
+    )
+    send_source = models.CharField(
+        max_length=20,
+        choices=MessageSendSource.choices,
+        default=MessageSendSource.MANUAL,
+    )
+    campaign_batch = models.ForeignKey(
+        MessageCampaignBatch,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="whatsapp_messages",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -24,6 +24,7 @@ from ..models import (
     IntegrationAccount, IntegrationLog, IntegrationPlatform,
     WhatsAppAccount, OAuthState, TwilioSettings,
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
+    MessageSendSource,
     SmsProvider,
 )
 from ..oauth_utils import get_oauth_handler, MetaOAuth
@@ -148,6 +149,8 @@ def send_lead_sms_view(request):
     lead_id = data['lead_id']
     phone_number = data['phone_number']
     body = data['body']
+    send_source = data.get('send_source') or MessageSendSource.MANUAL
+    campaign_batch_id = data.get('campaign_batch_id')
 
     company = request.user.company
     # Plan gating: monthly usage only (integration access handled by integration gate).
@@ -213,6 +216,9 @@ def send_lead_sms_view(request):
     )
 
     twilio_sid = external_id if provider_used == SmsProvider.TWILIO else None
+    from integrations.views.campaign_batches import resolve_campaign_batch
+
+    campaign_batch = resolve_campaign_batch(company, campaign_batch_id, send_source)
     sms_record = LeadSMSMessage.objects.create(
         client=client,
         phone_number=phone_number,
@@ -222,6 +228,8 @@ def send_lead_sms_view(request):
         external_message_id=external_id,
         twilio_sid=twilio_sid,
         created_by=request.user,
+        send_source=send_source,
+        campaign_batch=campaign_batch,
     )
     # Increment usage after success only
     increment_monthly_usage(company, "monthly_sms_messages", requested_delta=1)

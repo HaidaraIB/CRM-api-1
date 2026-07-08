@@ -311,6 +311,108 @@ def _content_to_meta_body(content):
     return ''.join(parts), ordered_examples
 
 
+_BRACKET_PLACEHOLDERS_BY_INDEX = [
+    '[Customer Name]',
+    '[Company]',
+    '[Amount]',
+    '[Invoice Number]',
+]
+
+
+def _is_whatsapp_channel(channel_type: str | None) -> bool:
+    return (channel_type or '').lower() in ('whatsapp', 'whatsapp_api')
+
+
+def _meta_positional_to_bracket_content(content: str) -> str:
+    """Map Meta {{1}}..{{n}} placeholders to CRM bracket placeholders for SMS."""
+
+    def repl(match):
+        n = int(match.group(1))
+        idx = n - 1
+        if idx < len(_BRACKET_PLACEHOLDERS_BY_INDEX):
+            return _BRACKET_PLACEHOLDERS_BY_INDEX[idx]
+        return f'[Value {n}]'
+
+    return re.sub(r'\{\{\s*(\d+)\s*\}\}', repl, content or '')
+
+
+def _sms_body_from_template(template: MessageTemplate) -> str:
+    """Build SMS-friendly body from a WhatsApp template."""
+    parts: list[str] = []
+    header_type = (template.header_type or '').strip().lower()
+    if header_type == 'text' and (template.header_text or '').strip():
+        parts.append(_meta_positional_to_bracket_content(template.header_text.strip()))
+    body = template.content or ''
+    if _positional_variable_count(body):
+        body = _meta_positional_to_bracket_content(body)
+    elif body.lower().startswith('(imported from meta:'):
+        body = body.split(')', 1)[-1].strip() or body
+    if body.strip():
+        parts.append(body.strip())
+    if (template.footer or '').strip():
+        parts.append((template.footer or '').strip())
+    return '\n\n'.join(parts).strip()
+
+
+def _clone_counterpart_suffix(target_channel: str) -> str:
+    return '_sms' if target_channel == MessageTemplate.CHANNEL_SMS else '_wa'
+
+
+def _is_converted_clone_name(name: str) -> bool:
+    """Names ending with _sms or _wa were created via channel conversion."""
+    n = (name or '').strip().lower()
+    return n.endswith('_sms') or n.endswith('_wa')
+
+
+def _counterpart_name_for_source(name: str, source_is_wa: bool) -> str:
+    suffix = '_sms' if source_is_wa else '_wa'
+    stem = (name or '').strip()
+    if stem.lower().endswith(suffix):
+        return stem
+    return f'{stem}{suffix}'[:255]
+
+
+def _template_has_counterpart_link(company, template: MessageTemplate) -> bool:
+    """True when conversion is locked (source already converted or target is a conversion)."""
+    stem = (template.name or '').strip()
+    if _is_converted_clone_name(stem):
+        return True
+
+    is_wa = _is_whatsapp_channel(template.channel_type)
+    expected = _counterpart_name_for_source(stem, is_wa)
+    opposite = MessageTemplate.CHANNEL_SMS if is_wa else MessageTemplate.CHANNEL_WHATSAPP_API
+    if MessageTemplate.objects.filter(company=company, channel_type=opposite, name=expected).exists():
+        return True
+
+    for other in MessageTemplate.objects.filter(company=company).exclude(pk=template.pk).only(
+        'id', 'name', 'channel_type'
+    ):
+        other_is_wa = _is_whatsapp_channel(other.channel_type)
+        if other_is_wa == is_wa:
+            continue
+        if _counterpart_name_for_source(other.name, other_is_wa) == stem:
+            return True
+
+    return False
+
+
+def _unique_clone_name(company, base_name: str, target_channel: str) -> str:
+    suffix = _clone_counterpart_suffix(target_channel)
+    stem = (base_name or 'template').strip()
+    if stem.lower().endswith(suffix):
+        stem = stem[: -len(suffix)].rstrip('_') or 'template'
+    candidate = f'{stem}{suffix}'[:255]
+    if not MessageTemplate.objects.filter(company=company, name=candidate, channel_type=target_channel).exists():
+        return candidate
+    n = 2
+    while n < 1000:
+        candidate = f'{stem}{suffix}_{n}'[:255]
+        if not MessageTemplate.objects.filter(company=company, name=candidate, channel_type=target_channel).exists():
+            return candidate
+        n += 1
+    return f'{stem}{suffix}_{n}'[:255]
+
+
 def meta_slug_template_name(name: str, template_id=None) -> str:
     """Same slug as submit-to-whatsapp; must match when sending template messages."""
     meta_name = re.sub(r'[^a-z0-9_]', '_', (name or '').lower())[:512]
@@ -583,6 +685,77 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 code='bad_gateway',
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
+
+    @action(detail=True, methods=['post'], url_path='clone-to-channel')
+    def clone_to_channel(self, request, pk=None):
+        """
+        Create a counterpart template on the other channel (WhatsApp ↔ SMS).
+        POST /api/integrations/templates/:id/clone-to-channel/
+        """
+        template = self.get_object()
+        company = request.user.company
+        blocked = _integration_gate(company, 'whatsapp')
+        if blocked is not None:
+            return blocked
+
+        if _template_has_counterpart_link(company, template):
+            return error_response(
+                'This template is already linked to a channel counterpart and cannot be converted again.',
+                code='template_conversion_locked',
+            )
+
+        is_wa = _is_whatsapp_channel(template.channel_type)
+        target_channel = MessageTemplate.CHANNEL_SMS if is_wa else MessageTemplate.CHANNEL_WHATSAPP_API
+        suffix = _clone_counterpart_suffix(target_channel)
+        stem = (template.name or '').strip()
+        expected_name = f'{stem}{suffix}'[:255]
+        if MessageTemplate.objects.filter(company=company, channel_type=target_channel, name=expected_name).exists():
+            return error_response(
+                'A counterpart template already exists for this channel.',
+                code='template_counterpart_exists',
+                details={'name': expected_name},
+            )
+
+        new_name = _unique_clone_name(company, stem, target_channel)
+        if target_channel == MessageTemplate.CHANNEL_SMS:
+            content = _sms_body_from_template(template)
+            if not content:
+                return error_response(
+                    'Template has no content to copy to SMS.',
+                    code='template_content_empty',
+                )
+            new_tpl = MessageTemplate.objects.create(
+                company=company,
+                name=new_name,
+                channel_type=MessageTemplate.CHANNEL_SMS,
+                content=content,
+                category=template.category or MessageTemplate.CATEGORY_UTILITY,
+                language=template.language or 'en_US',
+            )
+        else:
+            content = (template.content or '').strip()
+            if not content:
+                return error_response(
+                    'Template has no content to copy to WhatsApp.',
+                    code='template_content_empty',
+                )
+            new_tpl = MessageTemplate.objects.create(
+                company=company,
+                name=new_name,
+                channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+                content=content,
+                category=template.category or MessageTemplate.CATEGORY_UTILITY,
+                language=template.language or 'en_US',
+                header_type='none',
+                header_text='',
+                footer='',
+                buttons=[],
+            )
+
+        return success_response(
+            data=MessageTemplateSerializer(new_tpl).data,
+            status_code=status.HTTP_201_CREATED,
+        )
 
     @action(detail=False, methods=['post'], url_path='sync-whatsapp')
     def sync_whatsapp(self, request):

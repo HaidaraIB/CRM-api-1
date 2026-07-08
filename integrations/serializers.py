@@ -8,6 +8,7 @@ from .models import (
     ClientAIInsight,
     LeadSMSMessage,
     LeadWhatsAppMessage,
+    MessageSendSource,
     MessageTemplate,
     SmsProvider,
 )
@@ -326,6 +327,12 @@ class SendLeadSMSSerializer(serializers.Serializer):
     lead_id = serializers.IntegerField(help_text='معرف العميل المحتمل (الليد)')
     phone_number = serializers.CharField(max_length=20, help_text='رقم الهاتف المستلم')
     body = serializers.CharField(allow_blank=False, help_text='نص الرسالة')
+    send_source = serializers.ChoiceField(
+        choices=MessageSendSource.choices,
+        required=False,
+        default=MessageSendSource.MANUAL,
+    )
+    campaign_batch_id = serializers.IntegerField(required=False, allow_null=True)
 
 
 class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):

@@ -29,42 +29,81 @@ def _end_of_day(d):
     return timezone.make_aware(datetime.combine(d, time(23, 59, 59, 999000)), tz)
 
 
+def _csv_values(params, key):
+    """Split comma-separated query param into non-empty values (ignores 'all')."""
+    raw = (params.get(key) or "").strip()
+    if not raw:
+        return []
+    return [
+        part.strip()
+        for part in raw.split(",")
+        if part.strip() and part.strip().lower() != "all"
+    ]
+
+
+def _filter_multi_iexact(queryset, field, values):
+    if not values:
+        return queryset
+    normalized = [v.lower() for v in values]
+    if len(normalized) == 1:
+        return queryset.filter(**{f"{field}__iexact": normalized[0]})
+    return queryset.filter(**{f"{field}__in": normalized})
+
+
 def apply_client_list_filters(queryset, request, *, exclude_status=False):
     """Apply list query params to a permission-scoped Client queryset."""
     params = request.query_params
 
-    type_val = (params.get("type") or "").strip()
-    if type_val and type_val.lower() != "all":
-        queryset = queryset.filter(type__iexact=type_val)
+    type_values = _csv_values(params, "type")
+    if type_values:
+        queryset = _filter_multi_iexact(queryset, "type", type_values)
 
-    priority_val = (params.get("priority") or "").strip()
-    if priority_val and priority_val.lower() != "all":
-        queryset = queryset.filter(priority__iexact=priority_val)
+    priority_values = _csv_values(params, "priority")
+    if priority_values:
+        queryset = _filter_multi_iexact(queryset, "priority", priority_values)
 
     if not exclude_status:
-        status_val = (params.get("status") or "").strip()
-        if status_val and status_val.lower() != "all":
-            queryset = queryset.filter(status__name=status_val)
+        status_values = _csv_values(params, "status")
+        if status_values:
+            if len(status_values) == 1:
+                queryset = queryset.filter(status__name=status_values[0])
+            else:
+                queryset = queryset.filter(status__name__in=status_values)
 
     if _truthy_param(params.get("assigned_to_me")):
         queryset = queryset.filter(assigned_to=request.user)
     else:
-        assigned_to_val = (params.get("assigned_to") or "").strip()
-        if assigned_to_val and assigned_to_val.lower() != "all":
-            if assigned_to_val.lower() == "unassigned":
-                queryset = queryset.filter(assigned_to__isnull=True)
-            else:
-                try:
-                    queryset = queryset.filter(assigned_to_id=int(assigned_to_val))
-                except (TypeError, ValueError):
-                    pass
+        assigned_values = _csv_values(params, "assigned_to")
+        if assigned_values:
+            user_ids = []
+            include_unassigned = False
+            for value in assigned_values:
+                if value.lower() == "unassigned":
+                    include_unassigned = True
+                else:
+                    try:
+                        user_ids.append(int(value))
+                    except (TypeError, ValueError):
+                        pass
+            assignee_q = Q()
+            if user_ids:
+                assignee_q |= Q(assigned_to_id__in=user_ids)
+            if include_unassigned:
+                assignee_q |= Q(assigned_to__isnull=True)
+            if assignee_q:
+                queryset = queryset.filter(assignee_q)
 
-    comm_val = (params.get("communication_way") or "").strip()
-    if comm_val and comm_val.lower() != "all":
-        if comm_val.isdigit():
-            queryset = queryset.filter(communication_way_id=int(comm_val))
-        else:
-            queryset = queryset.filter(communication_way__name=comm_val)
+    comm_values = _csv_values(params, "communication_way")
+    if comm_values:
+        comm_ids = [int(v) for v in comm_values if v.isdigit()]
+        comm_names = [v for v in comm_values if not v.isdigit()]
+        comm_q = Q()
+        if comm_ids:
+            comm_q |= Q(communication_way_id__in=comm_ids)
+        if comm_names:
+            comm_q |= Q(communication_way__name__in=comm_names)
+        if comm_q:
+            queryset = queryset.filter(comm_q)
 
     budget_min = _parse_decimal(params.get("budget_min"))
     budget_max = _parse_decimal(params.get("budget_max"))

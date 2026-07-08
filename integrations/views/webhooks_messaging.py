@@ -25,6 +25,7 @@ from ..models import (
     IntegrationAccount, IntegrationLog, IntegrationPlatform,
     WhatsAppAccount, OAuthState, TwilioSettings,
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
+    MessageSendSource,
 )
 from ..policy import (
     INTEGRATION_POLICY_PLATFORMS,
@@ -150,6 +151,10 @@ def whatsapp_send_message(request):
     to = request.data.get('to')
     message = request.data.get('message') or request.data.get('text')
     client_id = request.data.get('client_id')
+    send_source = (request.data.get('send_source') or MessageSendSource.MANUAL).strip()
+    if send_source not in MessageSendSource.values:
+        send_source = MessageSendSource.MANUAL
+    campaign_batch_id = request.data.get('campaign_batch_id')
     if not to or not message:
         return error_response(
             'to and message are required',
@@ -274,6 +279,9 @@ def whatsapp_send_message(request):
     )
     if client:
         try:
+            from integrations.views.campaign_batches import resolve_campaign_batch
+
+            campaign_batch = resolve_campaign_batch(company, campaign_batch_id, send_source)
             LeadWhatsAppMessage.objects.create(
                 client=client,
                 phone_number=to,
@@ -282,6 +290,8 @@ def whatsapp_send_message(request):
                 whatsapp_message_id=wam_id,
                 delivery_status='sent',
                 created_by=request.user,
+                send_source=send_source,
+                campaign_batch=campaign_batch,
             )
         except Exception:
             logger.exception("Failed to persist outbound WhatsApp message client_id=%s", client.id)
@@ -413,6 +423,10 @@ def whatsapp_send_template(request):
     template_id = request.data.get('template_id')
     client_id = request.data.get('client_id')
     phone_number_id = request.data.get('phone_number_id')
+    send_source = (request.data.get('send_source') or MessageSendSource.MANUAL).strip()
+    if send_source not in MessageSendSource.values:
+        send_source = MessageSendSource.MANUAL
+    campaign_batch_id = request.data.get('campaign_batch_id')
     if not to or template_id is None:
         return error_response(
             'to and template_id are required',
@@ -623,6 +637,9 @@ def whatsapp_send_template(request):
     )
     if client:
         try:
+            from integrations.views.campaign_batches import resolve_campaign_batch
+
+            campaign_batch = resolve_campaign_batch(company, campaign_batch_id, send_source)
             LeadWhatsAppMessage.objects.create(
                 client=client,
                 phone_number=to,
@@ -631,6 +648,8 @@ def whatsapp_send_template(request):
                 whatsapp_message_id=wam_id,
                 delivery_status='sent',
                 created_by=request.user,
+                send_source=send_source,
+                campaign_batch=campaign_batch,
             )
         except Exception:
             logger.exception("Failed to persist outbound WhatsApp template client_id=%s", client.id)
