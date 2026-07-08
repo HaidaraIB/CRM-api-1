@@ -217,7 +217,7 @@ def ai_insights_run_view(request):
     if result.get("error"):
         return error_response(
             result["error"],
-            code="ai_analysis_failed",
+            code=result.get("code") or "ai_analysis_failed",
             status_code=status.HTTP_502_BAD_GATEWAY,
         )
     return success_response(data=result)

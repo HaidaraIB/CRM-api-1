@@ -15,6 +15,7 @@ from django.utils.dateparse import parse_datetime
 
 from crm.models import Client, ClientCall, ClientTask, ClientVisit
 from integrations.ai_insight_i18n import extract_bilingual_pair
+from integrations.services.openai_errors import log_openai_failure, persist_openai_settings_error
 from integrations.models import (
     AIInsightPriorityLevel,
     AIInsightStatus,
@@ -186,8 +187,11 @@ def test_openai_connection(api_key: str, model: str) -> tuple[bool, str]:
         )
         return True, ""
     except Exception as exc:
-        logger.warning("OpenAI connection test failed: %s", exc)
-        return False, str(exc)[:500]
+        from integrations.services.openai_errors import classify_openai_error
+
+        info = classify_openai_error(exc)
+        logger.warning("OpenAI connection test failed (%s): %s", info.code, info.message)
+        return False, info.message
 
 
 @transaction.atomic
@@ -308,11 +312,9 @@ def run_company_analysis(company, *, force: bool = False) -> dict:
     try:
         leads_payload, tokens_used = _call_openai(api_key, model, snapshots)
     except Exception as exc:
-        err = str(exc)[:500]
-        settings.last_error = err
-        settings.save(update_fields=["last_error"])
-        logger.exception("OpenAI analysis failed for company %s", company.id)
-        return {"error": err}
+        log_openai_failure(logger, exc, company_id=company.id, context="analysis")
+        info = persist_openai_settings_error(settings, exc)
+        return {"error": info.message, "code": info.code}
 
     client_map = {c.id: c for c in clients}
     created = 0

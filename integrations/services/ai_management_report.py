@@ -14,6 +14,7 @@ from accounts.models import Role, User
 from crm.models import Client, ClientCall, ClientTask, ClientVisit
 from integrations.models import AIInsightStatus, AIManagementReport, ClientAIInsight, OpenAISettings
 from integrations.services.ai_lead_analysis import TERMINAL_STAGE_NAMES, _is_terminal_stage, _stage_key
+from integrations.services.openai_errors import log_openai_failure, persist_openai_settings_error
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +228,9 @@ def generate_management_report(company) -> dict:
     try:
         ai_payload, tokens_used = _call_openai_management_report(api_key, model, context)
     except Exception as exc:
-        err = str(exc)[:500]
-        logger.exception("Management report AI failed for company %s", company.id)
-        return {"error": err, "code": "ai_report_failed"}
+        log_openai_failure(logger, exc, company_id=company.id, context="management report")
+        info = persist_openai_settings_error(settings, exc)
+        return {"error": info.message, "code": info.code}
 
     stored = {
         **context,

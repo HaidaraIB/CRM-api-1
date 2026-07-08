@@ -176,3 +176,56 @@ class TestAIAnalysisService:
         assert insight.summary_en == "Hot lead from notes"
         assert insight.summary_ar == "عميل مهم من الملاحظات"
         assert insight.suggested_task_notes_ar == "متابعة غداً"
+
+    def test_run_company_analysis_handles_insufficient_quota(self, company):
+        from openai import RateLimitError
+        from unittest.mock import MagicMock
+
+        from integrations.services.ai_lead_analysis import run_company_analysis
+
+        client = Client.objects.create(
+            name="Quota Lead",
+            company=company,
+            priority="high",
+            type="fresh",
+            notes="Needs follow-up",
+            patient_file_number=4,
+        )
+        ClientTask.objects.create(
+            client=client,
+            notes="Recent activity",
+        )
+        settings = OpenAISettings.objects.create(
+            company=company,
+            is_enabled=True,
+            auto_analyze_enabled=True,
+        )
+        settings.set_api_key("sk-fake")
+        settings.save()
+
+        response = MagicMock()
+        response.request = MagicMock()
+        quota_error = RateLimitError(
+            "quota exceeded",
+            response=response,
+            body={
+                "error": {
+                    "message": "You exceeded your current quota, please check your plan and billing details.",
+                    "type": "insufficient_quota",
+                    "code": "insufficient_quota",
+                }
+            },
+        )
+
+        with patch(
+            "integrations.services.ai_lead_analysis._call_openai",
+            side_effect=quota_error,
+        ):
+            result = run_company_analysis(company)
+
+        assert result["code"] == "openai_insufficient_quota"
+        assert "quota" in result["error"].lower()
+        settings.refresh_from_db()
+        assert settings.auto_analyze_enabled is False
+        assert settings.last_error == result["error"]
+        assert ClientAIInsight.objects.filter(client=client).count() == 0
