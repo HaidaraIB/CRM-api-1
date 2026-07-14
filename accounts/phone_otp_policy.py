@@ -1,13 +1,9 @@
 """
-Runtime registration phone OTP policy (admin-controlled via cache).
+Runtime registration phone OTP policy (admin-controlled via SystemSettings).
 """
-from django.core.cache import cache
+from settings.models import SystemSettings
 
 from .platform_whatsapp import platform_whatsapp_configured
-
-# Legacy key name kept for backward compatibility with existing deployments.
-PHONE_OTP_REQUIRED_CACHE_KEY = "platform_whatsapp_otp_required_override"
-PHONE_OTP_CHANNEL_CACHE_KEY = "registration_phone_otp_channel"
 
 CHANNEL_WHATSAPP = "whatsapp"
 CHANNEL_TWILIO_SMS = "twilio_sms"
@@ -15,14 +11,14 @@ VALID_CHANNELS = frozenset({CHANNEL_WHATSAPP, CHANNEL_TWILIO_SMS})
 
 
 def effective_phone_otp_required() -> bool:
-    return bool(cache.get(PHONE_OTP_REQUIRED_CACHE_KEY, False))
+    return bool(SystemSettings.get_settings().registration_phone_otp_required)
 
 
 def effective_phone_otp_channel():
     """Active delivery channel when OTP is required; None if OTP off or not set."""
     if not effective_phone_otp_required():
         return None
-    ch = cache.get(PHONE_OTP_CHANNEL_CACHE_KEY)
+    ch = (SystemSettings.get_settings().registration_phone_otp_channel or "").strip().lower()
     if ch in VALID_CHANNELS:
         return ch
     return None

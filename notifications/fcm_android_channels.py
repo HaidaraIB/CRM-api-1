@@ -21,6 +21,34 @@ def android_notification_raw_sound_basename(notification_type: str) -> str | Non
     return f"notif_{cid}"
 
 
+def ios_notification_sound_filename(notification_type: str) -> str | None:
+    """
+    Filename (with extension) of a bundled iOS sound for this type, or None for default.
+
+    Must match crm_mobile `NotificationService._iosSoundFileForChannelId` and files under
+    ios/Runner/*.wav included in the Xcode Copy Bundle Resources phase.
+    """
+    base = android_notification_raw_sound_basename(notification_type)
+    if base is None:
+        return None
+    return f"{base}.wav"
+
+
+def tenant_chat_ios_sound_filename() -> str:
+    """Bundled iOS sound for team chat pushes (ios/Runner/notif_tenant_chat.wav)."""
+    return "notif_tenant_chat.wav"
+
+
+def tenant_chat_apns_collapse_id(conversation_id: str | int | None) -> str | None:
+    """APNs collapse id so iOS replaces the previous banner for the same conversation."""
+    if conversation_id is None:
+        return None
+    cid = str(conversation_id).strip()
+    if not cid:
+        return None
+    return f"tenant_chat_{cid}"[:64]
+
+
 def android_notification_channel_id(notification_type: str) -> str:
     """
     Return the Android channel_id to attach to FCM so the system tray uses

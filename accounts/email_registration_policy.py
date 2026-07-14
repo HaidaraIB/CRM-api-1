@@ -1,8 +1,5 @@
-from django.core.cache import cache
-
-
-EMAIL_VERIFICATION_REQUIRED_CACHE_KEY = "registration_email_verification_required_override"
+from settings.models import SystemSettings
 
 
 def effective_registration_email_verification_required() -> bool:
-    return bool(cache.get(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, False))
+    return bool(SystemSettings.get_settings().registration_email_verification_required)

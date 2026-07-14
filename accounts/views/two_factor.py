@@ -30,7 +30,6 @@ from ..serializers import (
 from ..permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
 from companies.models import Company
 from django.conf import settings
-from django.core.cache import cache
 from django.utils import timezone
 from datetime import timedelta
 import secrets
@@ -45,10 +44,24 @@ from ..two_factor_policy import (
     OWNER_TRUST_DAYS,
     is_company_owner,
     issue_trusted_device,
+    owner_login_two_factor_required,
 )
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _issue_login_tokens_response(user, request):
+    refresh = RefreshToken.for_user(user)
+    return success_response(
+        data={
+            "requires_two_factor": False,
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "user": build_user_auth_payload(user, request),
+        }
+    )
+
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -149,6 +162,9 @@ def request_two_factor_auth(request):
                     status_code=status.HTTP_403_FORBIDDEN,
                 )
 
+    if is_owner and not owner_login_two_factor_required(user):
+        return _issue_login_tokens_response(user, request)
+
     # Create 2FA code
     try:
         expiry_minutes = 10  # 2FA codes expire in 10 minutes
@@ -188,6 +204,7 @@ def request_two_factor_auth(request):
             sent = True
         return success_response(
             data={
+                "requires_two_factor": True,
                 "message": "2FA code has been sent to your email.",
                 "sent": sent,
                 "token": two_fa.token,  # Return token for verification
@@ -263,6 +280,13 @@ def verify_two_factor_auth(request):
             status_code=status.HTTP_403_FORBIDDEN,
             verify_email_url=verification_payload.get("verify_email_url"),
             verify_phone_url=verification_payload.get("verify_phone_url"),
+        )
+
+    if is_company_owner(user) and not owner_login_two_factor_required(user):
+        return error_response(
+            "Two-factor authentication is disabled for your account.",
+            code="login_two_factor_disabled",
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
     # Now verify 2FA code

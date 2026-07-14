@@ -395,6 +395,27 @@ class SystemSettings(models.Model):
         help_text="Message shown to users while maintenance mode is active.",
     )
 
+    REGISTRATION_PHONE_OTP_CHANNEL_CHOICES = [
+        ("", "None"),
+        ("whatsapp", "WhatsApp"),
+        ("twilio_sms", "Twilio SMS"),
+    ]
+    registration_phone_otp_required = models.BooleanField(
+        default=False,
+        help_text="Require phone OTP verification before company registration.",
+    )
+    registration_phone_otp_channel = models.CharField(
+        max_length=20,
+        choices=REGISTRATION_PHONE_OTP_CHANNEL_CHOICES,
+        blank=True,
+        default="",
+        help_text="Delivery channel when registration phone OTP is required.",
+    )
+    registration_email_verification_required = models.BooleanField(
+        default=False,
+        help_text="Require email verification before company registration.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

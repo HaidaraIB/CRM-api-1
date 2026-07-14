@@ -13,14 +13,18 @@ from django.core.cache import cache
 from companies.models import Company
 from subscriptions.models import Plan, Subscription, BillingCycle
 from accounts.models import OwnerTrustedDevice
-from accounts.email_registration_policy import EMAIL_VERIFICATION_REQUIRED_CACHE_KEY
-from accounts.phone_otp_policy import PHONE_OTP_REQUIRED_CACHE_KEY
 from accounts.two_factor_policy import OWNER_TRUST_COOKIE_NAME, hash_device_token, hash_user_agent
+from tests.platform_auth_settings_helpers import (
+    reset_platform_auth_settings,
+    set_registration_email_verification_required,
+    set_registration_phone_otp_required,
+)
 
 User = get_user_model()
 
 @pytest.fixture(autouse=True)
 def _clear_throttle_cache():
+    reset_platform_auth_settings()
     cache.clear()
 
 
@@ -307,7 +311,7 @@ def test_employee_login_allowed_when_phone_not_verified(api_client):
 
 @pytest.mark.django_db
 def test_owner_login_blocked_when_email_not_verified(api_client):
-    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, True, timeout=None)
+    set_registration_email_verification_required(True)
     owner = User.objects.create_user(
         username="owner_email_unverified",
         email="owner_email_unverified@example.com",
@@ -338,7 +342,7 @@ def test_owner_login_blocked_when_email_not_verified(api_client):
 
 @pytest.mark.django_db
 def test_owner_login_blocked_when_phone_not_verified(api_client):
-    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, True, timeout=None)
+    set_registration_phone_otp_required(True)
     owner = User.objects.create_user(
         username="owner_phone_unverified",
         email="owner_phone_unverified@example.com",
@@ -366,8 +370,8 @@ def test_owner_login_blocked_when_phone_not_verified(api_client):
 @pytest.mark.django_db
 def test_owner_login_allowed_when_registration_otp_toggles_disabled(api_client):
     """Matches super-admin Registration OTP: both off => no pre-login verification gate."""
-    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, False, timeout=None)
-    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, False, timeout=None)
+    set_registration_email_verification_required(False)
+    set_registration_phone_otp_required(False)
     owner = User.objects.create_user(
         username="owner_both_flags_off",
         email="owner_both_flags_off@example.com",
@@ -394,8 +398,8 @@ def test_owner_login_allowed_when_registration_otp_toggles_disabled(api_client):
 
 @pytest.mark.django_db
 def test_owner_login_blocked_when_both_platform_verification_flags_enabled(api_client):
-    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, True, timeout=None)
-    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, True, timeout=None)
+    set_registration_email_verification_required(True)
+    set_registration_phone_otp_required(True)
     owner = User.objects.create_user(
         username="owner_both_unverified",
         email="owner_both_unverified@example.com",

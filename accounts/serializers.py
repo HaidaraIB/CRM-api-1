@@ -7,7 +7,7 @@ from drf_spectacular.utils import extend_schema_field
 from .models import User, Role, TwoFactorAuth, LimitedAdmin, SupervisorPermission
 from companies.models import Company
 from subscriptions.models import Plan, Subscription, SubscriptionStatus, BillingCycle
-from .two_factor_policy import is_company_owner, is_trusted_device_valid
+from .two_factor_policy import is_company_owner, is_trusted_device_valid, owner_login_two_factor_required
 from .utils import get_email_language_for_user, send_two_factor_auth_email
 from django.conf import settings
 
@@ -58,6 +58,7 @@ class UserSerializer(serializers.ModelSerializer):
     limited_admin = serializers.SerializerMethodField()
     supervisor_permissions = serializers.SerializerMethodField()
     is_online = serializers.SerializerMethodField()
+    is_company_owner = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -83,6 +84,8 @@ class UserSerializer(serializers.ModelSerializer):
             "date_joined",
             "last_login",
             "is_me",
+            "is_company_owner",
+            "login_two_factor_enabled",
             "fcm_token",  # Include FCM token (read-only for security)
             "fcm_tokens",  # Include multi-device FCM tokens (read-only)
             "language",  # User preferred language
@@ -154,6 +157,21 @@ class UserSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
+        request = self.context.get("request")
+        inst = getattr(self, "instance", None)
+
+        if "login_two_factor_enabled" in attrs:
+            user = getattr(request, "user", None) if request else None
+            can_set = bool(
+                user
+                and user.is_authenticated
+                and inst
+                and inst.id == user.id
+                and is_company_owner(inst)
+            )
+            if not can_set:
+                attrs.pop("login_two_factor_enabled", None)
+
         if "weekly_day_off" not in attrs:
             return attrs
         request = self.context.get("request")
@@ -183,6 +201,10 @@ class UserSerializer(serializers.ModelSerializer):
         if request and request.user:
             return obj.id == request.user.id
         return False
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_is_company_owner(self, obj):
+        return is_company_owner(obj)
     
     def get_company(self, obj):
         """Return full company object with subscription information"""
@@ -496,8 +518,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     }
                 )
 
-        # Owner-only intelligent 2FA: challenge only when trusted-device check fails.
-        if request and is_company_owner(self.user) and not is_trusted_device_valid(self.user, request):
+        # Owner-only intelligent 2FA: challenge only when owner opted in and trusted-device check fails.
+        if (
+            request
+            and owner_login_two_factor_required(self.user)
+            and not is_trusted_device_valid(self.user, request)
+        ):
             expiry_minutes = 10
 
             from .demo_accounts import get_demo_2fa_code_for_user
@@ -629,6 +655,8 @@ def build_user_auth_payload(user, request=None):
         "email_verified": user.email_verified,
         "phone_verified": getattr(user, "phone_verified", False),
         "is_superuser": user.is_superuser,
+        "is_company_owner": is_company_owner(user),
+        "login_two_factor_enabled": bool(getattr(user, "login_two_factor_enabled", True)),
         "language": getattr(user, "language", None) or "ar",
     }
     try:

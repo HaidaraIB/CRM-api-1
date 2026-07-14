@@ -29,20 +29,16 @@ from ..serializers import (
 )
 from ..permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
 from ..phone_otp_policy import (
-    PHONE_OTP_CHANNEL_CACHE_KEY,
-    PHONE_OTP_REQUIRED_CACHE_KEY,
     VALID_CHANNELS,
     channel_is_configured,
     effective_phone_otp_channel,
     effective_phone_otp_required,
 )
 from ..email_registration_policy import (
-    EMAIL_VERIFICATION_REQUIRED_CACHE_KEY,
     effective_registration_email_verification_required,
 )
-from companies.models import Company
+from settings.models import SystemSettings
 from django.conf import settings
-from django.core.cache import cache
 from django.utils import timezone
 from datetime import timedelta
 import secrets
@@ -195,8 +191,16 @@ def phone_otp_requirement_settings(request):
     normalized_req = bool(normalized_req)
 
     if not normalized_req:
-        cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, False, timeout=None)
-        cache.delete(PHONE_OTP_CHANNEL_CACHE_KEY)
+        system_settings = SystemSettings.get_settings()
+        system_settings.registration_phone_otp_required = False
+        system_settings.registration_phone_otp_channel = ""
+        system_settings.save(
+            update_fields=[
+                "registration_phone_otp_required",
+                "registration_phone_otp_channel",
+                "updated_at",
+            ]
+        )
         return success_response(
             data={"phone_otp_required": False, "phone_otp_channel": None}
         )
@@ -220,8 +224,16 @@ def phone_otp_requirement_settings(request):
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, True, timeout=None)
-    cache.set(PHONE_OTP_CHANNEL_CACHE_KEY, ch, timeout=None)
+    system_settings = SystemSettings.get_settings()
+    system_settings.registration_phone_otp_required = True
+    system_settings.registration_phone_otp_channel = ch
+    system_settings.save(
+        update_fields=[
+            "registration_phone_otp_required",
+            "registration_phone_otp_channel",
+            "updated_at",
+        ]
+    )
     return success_response(
         data={"phone_otp_required": True, "phone_otp_channel": ch}
     )
@@ -252,7 +264,11 @@ def registration_email_requirement_settings(request):
         normalized_req = value.strip().lower() in ("1", "true", "yes", "on")
     normalized_req = bool(normalized_req)
 
-    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, normalized_req, timeout=None)
+    system_settings = SystemSettings.get_settings()
+    system_settings.registration_email_verification_required = normalized_req
+    system_settings.save(
+        update_fields=["registration_email_verification_required", "updated_at"]
+    )
     return success_response(
         data={"email_verification_required": normalized_req}
     )

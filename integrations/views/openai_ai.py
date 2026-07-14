@@ -2,7 +2,6 @@
 OpenAI integration settings and AI lead insights (v1: /api/v1/integrations/...).
 """
 from django.core.cache import cache
-from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -171,18 +170,14 @@ def ai_insights_dashboard_view(request):
     if blocked is not None:
         return blocked
     qs = _insights_queryset(request.user)
-    pending = qs.filter(status=AIInsightStatus.PENDING).order_by("-ai_score")[:10]
     priority = (
-        qs.filter(
-            Q(status=AIInsightStatus.APPROVED) | Q(status=AIInsightStatus.PENDING, ai_score__gte=70)
-        )
-        .exclude(status=AIInsightStatus.DISMISSED)
+        qs.exclude(status=AIInsightStatus.DISMISSED)
         .order_by("-ai_score")[:6]
     )
     ctx = _insight_serializer_context(request)
     return success_response(
         data={
-            "pending": ClientAIInsightSerializer(pending, many=True, context=ctx).data,
+            "pending": [],
             "priority": ClientAIInsightSerializer(priority, many=True, context=ctx).data,
             "ai_enabled": OpenAISettings.objects.filter(
                 company=request.user.company, is_enabled=True

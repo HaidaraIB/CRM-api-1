@@ -17,6 +17,13 @@ def is_company_owner(user) -> bool:
     return bool(company and getattr(company, "owner_id", None) == getattr(user, "id", None))
 
 
+def owner_login_two_factor_required(user) -> bool:
+    """True when this company owner has opted in to email 2FA at login."""
+    if not is_company_owner(user):
+        return False
+    return bool(getattr(user, "login_two_factor_enabled", True))
+
+
 def hash_user_agent(user_agent: str) -> str:
     normalized = (user_agent or "").strip().lower()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()

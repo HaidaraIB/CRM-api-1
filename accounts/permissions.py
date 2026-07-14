@@ -434,6 +434,22 @@ class CanViewReports(LimitedAdminPermission):
     required_permission = "can_view_reports"
 
 
+class CanViewCompanyReports(permissions.BasePermission):
+    """Tenant CRM reports: company admin/owner or supervisor with view_reports."""
+
+    message = "You do not have permission to view reports."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_admin():
+            return True
+        if user.is_supervisor() and user.supervisor_has_permission("view_reports"):
+            return True
+        return False
+
+
 class CanManageCommunication(LimitedAdminPermission):
     message = "You do not have permission to manage communication."
     required_permission = "can_manage_communication"

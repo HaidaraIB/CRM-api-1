@@ -12,6 +12,9 @@ from .translations import get_notification_text, normalize_notification_language
 from .fcm_android_channels import (
     android_notification_channel_id,
     android_notification_raw_sound_basename,
+    ios_notification_sound_filename,
+    tenant_chat_apns_collapse_id,
+    tenant_chat_ios_sound_filename,
 )
 
 if TYPE_CHECKING:
@@ -198,25 +201,50 @@ class NotificationService:
             if image_url:
                 message_data['image_url'] = image_url
 
-            # Team chat: data-only so the mobile app can merge multiple messages into one
-            # local notification (last 5 lines). A visible FCM "notification" payload would
-            # always create a separate tray entry per message on Android.
+            # Team chat: Android data-only so Flutter merges lines in one tray item.
+            # iOS uses APNs alert + custom sound (Point pattern) — background data-only
+            # pushes are unreliable on iOS and never play custom sounds from local handlers.
             tenant_chat_data_only = (data or {}).get("kind") == "tenant_chat"
             
             success_count = 0
             for token in user_tokens:
                 try:
                     if tenant_chat_data_only:
+                        conversation_id = (data or {}).get("conversation_id")
+                        collapse_id = tenant_chat_apns_collapse_id(conversation_id)
+                        apns_headers: Dict[str, str] = {
+                            "apns-push-type": "alert",
+                            "apns-priority": "10",
+                        }
+                        if collapse_id:
+                            apns_headers["apns-collapse-id"] = collapse_id
+                        apns_aps_kwargs: Dict[str, Any] = {
+                            "alert": messaging.ApsAlert(title=title, body=body),
+                            "sound": tenant_chat_ios_sound_filename(),
+                        }
+                        thread_id = (
+                            str(conversation_id).strip()
+                            if conversation_id is not None
+                            and str(conversation_id).strip()
+                            else None
+                        )
+                        if thread_id:
+                            apns_aps_kwargs["thread_id"] = thread_id
                         message = messaging.Message(
                             data=message_data,
                             token=token,
                             android=messaging.AndroidConfig(priority="high"),
                             apns=messaging.APNSConfig(
-                                headers={"apns-priority": "10"},
+                                headers=apns_headers,
                                 payload=messaging.APNSPayload(
-                                    aps=messaging.Aps(content_available=True),
+                                    aps=messaging.Aps(**apns_aps_kwargs),
                                 ),
                             ),
+                        )
+                        logger.info(
+                            "FCM tenant_chat android=data-only ios_sound=%s collapse=%s",
+                            tenant_chat_ios_sound_filename(),
+                            collapse_id or "(none)",
                         )
                     else:
                         # Android 8+: system-displayed FCM uses the *channel* sound, not the
@@ -226,11 +254,15 @@ class NotificationService:
                         # may drop the notification — user must open the app once after install.
                         channel_id = android_notification_channel_id(notification_type)
                         sound_base = android_notification_raw_sound_basename(notification_type)
+                        ios_sound = ios_notification_sound_filename(notification_type)
                         android_notif_kwargs: Dict[str, Any] = {
                             "channel_id": channel_id,
                         }
                         if sound_base:
                             android_notif_kwargs["sound"] = sound_base
+                        apns_aps_kwargs: Dict[str, Any] = {}
+                        if ios_sound:
+                            apns_aps_kwargs["sound"] = ios_sound
                         message = messaging.Message(
                             notification=notification_payload,
                             data=message_data,
@@ -241,11 +273,18 @@ class NotificationService:
                                     **android_notif_kwargs,
                                 ),
                             ),
+                            apns=messaging.APNSConfig(
+                                headers={"apns-push-type": "alert", "apns-priority": "10"},
+                                payload=messaging.APNSPayload(
+                                    aps=messaging.Aps(**apns_aps_kwargs),
+                                ),
+                            ),
                         )
                         logger.info(
-                            "FCM android channel_id=%s sound=%s type=%s",
+                            "FCM android channel_id=%s android_sound=%s ios_sound=%s type=%s",
                             channel_id,
                             sound_base or "(default)",
+                            ios_sound or "(default)",
                             notification_type,
                         )
                     response = messaging.send(message)

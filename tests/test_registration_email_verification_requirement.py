@@ -4,16 +4,19 @@ from django.core.cache import cache
 from django.urls import reverse
 from rest_framework import status
 
-from accounts.email_registration_policy import EMAIL_VERIFICATION_REQUIRED_CACHE_KEY
 from accounts.email_registration_utils import sign_email_registration_token
+from settings.models import SystemSettings
+from tests.platform_auth_settings_helpers import (
+    reset_platform_auth_settings,
+    set_registration_email_verification_required,
+)
 
 User = get_user_model()
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache():
-    cache.clear()
-    yield
+def _reset_auth_settings():
+    reset_platform_auth_settings()
     cache.clear()
 
 
@@ -30,7 +33,7 @@ def test_registration_email_requirement_settings_roundtrip(api_client):
     r1 = api_client.post(url, {"email_verification_required": True}, format="json")
     assert r1.status_code == status.HTTP_200_OK
     assert r1.data["data"]["email_verification_required"] is True
-    assert cache.get(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY) is True
+    assert SystemSettings.get_settings().registration_email_verification_required is True
 
     r2 = api_client.get(url)
     assert r2.status_code == status.HTTP_200_OK
@@ -39,7 +42,7 @@ def test_registration_email_requirement_settings_roundtrip(api_client):
 
 @pytest.mark.django_db
 def test_register_company_rejects_when_email_verification_required_and_token_missing(api_client):
-    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, True, timeout=None)
+    set_registration_email_verification_required(True)
     url = reverse("register_company")
     payload = {
         "company": {
@@ -65,7 +68,7 @@ def test_register_company_rejects_when_email_verification_required_and_token_mis
 
 @pytest.mark.django_db
 def test_register_company_accepts_when_email_verification_token_is_valid(api_client):
-    cache.set(EMAIL_VERIFICATION_REQUIRED_CACHE_KEY, True, timeout=None)
+    set_registration_email_verification_required(True)
     email = "owner@verified-reg.com"
     token = sign_email_registration_token(email)
     url = reverse("register_company")

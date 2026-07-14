@@ -9,18 +9,17 @@ from django.urls import reverse
 from rest_framework import status
 from unittest.mock import patch
 
-from accounts.phone_otp_policy import (
-    PHONE_OTP_CHANNEL_CACHE_KEY,
-    PHONE_OTP_REQUIRED_CACHE_KEY,
+from tests.platform_auth_settings_helpers import (
+    reset_platform_auth_settings,
+    set_registration_phone_otp_required,
 )
 
 User = get_user_model()
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache():
-    cache.clear()
-    yield
+def _reset_auth_settings():
+    reset_platform_auth_settings()
     cache.clear()
 
 
@@ -72,8 +71,7 @@ def test_phone_otp_requirement_post_rejects_twilio_when_not_ready(api_client):
 
 @pytest.mark.django_db
 def test_register_phone_send_otp_uses_twilio_sms_branch(api_client):
-    cache.set(PHONE_OTP_REQUIRED_CACHE_KEY, True, timeout=None)
-    cache.set(PHONE_OTP_CHANNEL_CACHE_KEY, "twilio_sms", timeout=None)
+    set_registration_phone_otp_required(True, channel="twilio_sms")
 
     sent = []
 

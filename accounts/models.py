@@ -58,6 +58,10 @@ class User(AbstractUser):
         blank=True,
         help_text="Weekly day off: 0=Monday .. 6=Sunday. Null means no recurring weekly off.",
     )
+    login_two_factor_enabled = models.BooleanField(
+        default=True,
+        help_text="When enabled, company owner must complete email 2FA at login (unless trusted device).",
+    )
 
     def __str__(self):
         return self.username

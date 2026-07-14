@@ -63,6 +63,7 @@ from accounts.views import (
     fcm_diagnostics_full,
 )
 from companies.views import CompanyViewSet
+from crm.report_views import EmployeeReportView, TeamsReportView, MarketingReportView, CallReportView
 from crm.views import (
     ClientViewSet,
     DealViewSet,
@@ -281,6 +282,10 @@ v1_patterns = [
     path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     path("integrations/", include(integrations_urls)),
     path("crm/feature-policies/", feature_policy_view, name="feature_policy"),
+    path("reports/employees/", EmployeeReportView.as_view(), name="reports_employees"),
+    path("reports/teams/", TeamsReportView.as_view(), name="reports_teams"),
+    path("reports/marketing/", MarketingReportView.as_view(), name="reports_marketing"),
+    path("reports/calls/", CallReportView.as_view(), name="reports_calls"),
     path("", include("notifications.urls")),
 ]
 
