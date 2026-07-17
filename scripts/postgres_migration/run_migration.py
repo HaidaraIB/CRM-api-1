@@ -382,6 +382,71 @@ def _mute_model_signals():
     return _ctx()
 
 
+def _widen_postgres_varchars_for_fixture(fixture_path: Path) -> None:
+    """SQLite ignores CharField max_length; Postgres does not.
+
+    Scan the fixture for string values longer than the model max_length and
+    ALTER the postgres columns so loaddata cannot fail with
+    StringDataRightTruncation.
+    """
+    from django.apps import apps
+    from django.db import connections
+
+    print("[load] scanning fixture for varchar overflows (sqlite -> postgres) ...")
+    with fixture_path.open(encoding="utf-8") as fh:
+        objects = json.load(fh)
+
+    # (db_table, column) -> required length
+    needed: dict[tuple[str, str], int] = {}
+    samples: dict[tuple[str, str], str] = {}
+
+    for obj in objects:
+        model_label = obj.get("model")
+        if not model_label:
+            continue
+        try:
+            model = apps.get_model(model_label)
+        except LookupError:
+            continue
+        fields_by_name = {
+            f.name: f
+            for f in model._meta.fields
+            if getattr(f, "max_length", None)
+        }
+        for name, value in (obj.get("fields") or {}).items():
+            if not isinstance(value, str):
+                continue
+            field = fields_by_name.get(name)
+            if field is None:
+                continue
+            length = len(value)
+            if length <= field.max_length:
+                continue
+            key = (model._meta.db_table, field.column)
+            if length > needed.get(key, 0):
+                needed[key] = length
+                samples[key] = value[:80]
+
+    if not needed:
+        print("[load] no varchar overflows found")
+        return
+
+    # Pad a bit so near-limit values still fit later.
+    with connections["postgres"].cursor() as cur:
+        for (table, column), length in sorted(needed.items()):
+            new_len = max(int(length) + 8, 64)
+            print(
+                f"[load] widening {table}.{column} -> varchar({new_len}) "
+                f"(fixture had len={length}, e.g. {samples[(table, column)]!r})"
+            )
+            # Type length cannot be a bind param in PostgreSQL.
+            cur.execute(
+                f'ALTER TABLE "{table}" ALTER COLUMN "{column}" '
+                f"TYPE varchar({new_len})"
+            )
+    print(f"[load] widened {len(needed)} column(s) on postgres")
+
+
 def step_load(fixture_path: Path, *, dry_run: bool, wipe: bool) -> None:
     from django.core.management import call_command
     from django.db import connections
@@ -401,6 +466,22 @@ def step_load(fixture_path: Path, *, dry_run: bool, wipe: bool) -> None:
                 interactive=False,
                 verbosity=1,
             )
+
+        # Apply any pending schema fixes (e.g. widened phone fields), then
+        # auto-widen any remaining overflows found in this fixture.
+        print("[load] ensuring postgres migrations are up to date ...")
+        from django.conf import settings
+        import copy
+
+        settings.DATABASES["default"] = copy.deepcopy(settings.DATABASES["postgres"])
+        _reload_db_connections()
+        try:
+            call_command("migrate", database="postgres", interactive=False, verbosity=1)
+        finally:
+            settings.DATABASES["default"] = copy.deepcopy(settings.DATABASES["sqlite"])
+            _reload_db_connections()
+
+        _widen_postgres_varchars_for_fixture(fixture_path)
 
         print(f"[load] loading {fixture_path} into postgres ...")
         print("[load] model signals muted (avoid re-seed / notifications on restore)")

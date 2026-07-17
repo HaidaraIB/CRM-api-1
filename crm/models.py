@@ -99,8 +99,8 @@ class Client(models.Model):
         help_text="Optional upper bound when budget is a range; null means single value (budget only).",
     )
     phone_number = models.CharField(
-        max_length=20, blank=True, null=True
-    )  # Keep for backward compatibility
+        max_length=64, blank=True, null=True
+    )  # Keep for backward compatibility (SQLite never enforced 20)
 
     lead_company_name = models.CharField(
         max_length=255, blank=True, null=True,
@@ -229,7 +229,7 @@ class Client(models.Model):
         help_text="حساب التكامل المرتبط بهذا العميل"
     )
     meta_leadgen_id = models.CharField(
-        max_length=20,
+        max_length=64,
         null=True,
         blank=True,
         help_text="Meta leadgen_id from Lead Ads webhook (15-17 digits) for Conversion Leads CAPI",
@@ -410,7 +410,7 @@ class ClientPhoneNumber(models.Model):
         help_text="The client this phone number belongs to",
     )
     phone_number = models.CharField(
-        max_length=20,
+        max_length=64,
         help_text="The phone number",
     )
     phone_type = models.CharField(
