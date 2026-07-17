@@ -548,22 +548,37 @@ def step_verify(*, dry_run: bool) -> bool:
     return ok
 
 
-def step_repair(*, dry_run: bool) -> None:
-    """Copy any rows present in SQLite but missing in Postgres (by PK).
+# Models that commonly drift if sqlite kept receiving writes after dumpdata.
+REPAIR_MODEL_LABELS = [
+    "settings.LeadStatus",
+    "settings.Channel",
+    "settings.LeadStage",
+    "settings.CallMethod",
+    "settings.VisitType",
+    "settings.SMTPSettings",
+    "settings.SystemSettings",
+    "settings.BillingSettings",
+]
 
-    Fixes small gaps after loaddata (e.g. settings seeded on sqlite after dump).
+
+def step_repair(*, dry_run: bool, repair_all: bool = False) -> None:
+    """Copy rows present in SQLite but missing in Postgres (by PK).
+
+    Default: only settings models that showed verify mismatches.
+    Use --repair-all to scan every managed model (skips unique conflicts).
     """
     from django.apps import apps
     from django.core import serializers
+    from django.db import IntegrityError
 
     print("[repair] copying missing rows sqlite -> postgres ...")
     if dry_run:
         print("[repair] dry-run: skipped")
         return
 
-    exclude_set = {e.lower() for e in DEFAULT_EXCLUDE}
-    copied = 0
-    with _mute_model_signals():
+    if repair_all:
+        exclude_set = {e.lower() for e in DEFAULT_EXCLUDE}
+        models = []
         for model in apps.get_models():
             label = f"{model._meta.app_label}.{model._meta.model_name}"
             full = f"{model._meta.app_label}.{model.__name__}".lower()
@@ -575,6 +590,20 @@ def step_repair(*, dry_run: bool) -> None:
                 or model._meta.proxy
             ):
                 continue
+            models.append(model)
+    else:
+        models = []
+        for label in REPAIR_MODEL_LABELS:
+            try:
+                models.append(apps.get_model(label))
+            except LookupError:
+                print(f"[repair] skip unknown model {label}")
+
+    copied = 0
+    skipped = 0
+    with _mute_model_signals():
+        for model in models:
+            label = f"{model._meta.app_label}.{model._meta.model_name}"
             try:
                 sqlite_pks = set(
                     model.objects.using("sqlite").values_list("pk", flat=True)
@@ -582,7 +611,8 @@ def step_repair(*, dry_run: bool) -> None:
                 pg_pks = set(
                     model.objects.using("postgres").values_list("pk", flat=True)
                 )
-            except Exception:
+            except Exception as exc:
+                print(f"[repair] skip {label}: {exc}")
                 continue
             missing = sqlite_pks - pg_pks
             if not missing:
@@ -596,12 +626,19 @@ def step_repair(*, dry_run: bool) -> None:
             )
             count = 0
             for obj in serializers.deserialize("json", payload):
-                obj.save(using="postgres")
-                count += 1
-            print(f"[repair] {label}: copied {count} missing row(s)")
+                try:
+                    obj.save(using="postgres")
+                    count += 1
+                except IntegrityError as exc:
+                    skipped += 1
+                    print(
+                        f"[repair] skip {label} pk={getattr(obj.object, 'pk', '?')}: {exc}"
+                    )
+            if count:
+                print(f"[repair] {label}: copied {count} missing row(s)")
             copied += count
 
-    print(f"[repair] ok - copied {copied} row(s) total")
+    print(f"[repair] ok - copied {copied} row(s), skipped {skipped} conflict(s)")
 
 
 def step_update_env(pg: dict, env_path: Path, *, dry_run: bool) -> None:
@@ -665,6 +702,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--wipe-postgres",
         action="store_true",
         help="Flush postgres before loaddata (safe re-run). Required if load fails mid-way.",
+    )
+    p.add_argument(
+        "--repair-all",
+        action="store_true",
+        help="With repair: copy missing rows for all models (skips unique conflicts). Default repairs settings only.",
     )
     return p
 
@@ -745,7 +787,7 @@ def main(argv: list[str] | None = None) -> int:
         elif step == "load":
             step_load(fixture, dry_run=args.dry_run, wipe=args.wipe_postgres)
         elif step == "repair":
-            step_repair(dry_run=args.dry_run)
+            step_repair(dry_run=args.dry_run, repair_all=args.repair_all)
         elif step == "verify":
             verify_ok = step_verify(dry_run=args.dry_run)
             if not verify_ok:
