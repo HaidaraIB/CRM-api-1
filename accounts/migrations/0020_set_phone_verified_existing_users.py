@@ -4,12 +4,14 @@ from django.db.models import Q
 
 def forwards(apps, schema_editor):
     User = apps.get_model("accounts", "User")
-    User.objects.filter(~Q(phone__isnull=True) & ~Q(phone="")).update(phone_verified=True)
+    db_alias = schema_editor.connection.alias
+    User.objects.using(db_alias).filter(~Q(phone__isnull=True) & ~Q(phone="")).update(phone_verified=True)
 
 
 def backwards(apps, schema_editor):
     User = apps.get_model("accounts", "User")
-    User.objects.all().update(phone_verified=False)
+    db_alias = schema_editor.connection.alias
+    User.objects.using(db_alias).all().update(phone_verified=False)
 
 
 class Migration(migrations.Migration):

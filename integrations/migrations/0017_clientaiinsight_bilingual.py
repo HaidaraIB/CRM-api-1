@@ -3,7 +3,8 @@ from django.db import migrations, models
 
 def copy_legacy_text_to_bilingual(apps, schema_editor):
     ClientAIInsight = apps.get_model("integrations", "ClientAIInsight")
-    for insight in ClientAIInsight.objects.all().iterator():
+    db_alias = schema_editor.connection.alias
+    for insight in ClientAIInsight.objects.using(db_alias).all().iterator():
         updates = {}
         if insight.summary and not insight.summary_en:
             updates["summary_en"] = insight.summary
@@ -18,7 +19,7 @@ def copy_legacy_text_to_bilingual(apps, schema_editor):
         if insight.suggested_task_notes and not insight.suggested_task_notes_ar:
             updates["suggested_task_notes_ar"] = insight.suggested_task_notes
         if updates:
-            ClientAIInsight.objects.filter(pk=insight.pk).update(**updates)
+            ClientAIInsight.objects.using(db_alias).filter(pk=insight.pk).update(**updates)
 
 
 class Migration(migrations.Migration):

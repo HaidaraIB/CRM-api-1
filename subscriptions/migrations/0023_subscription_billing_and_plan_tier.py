@@ -7,11 +7,12 @@ from django.db import migrations, models
 def backfill_plan_tier_and_subscriptions(apps, schema_editor):
     Plan = apps.get_model("subscriptions", "Plan")
     Subscription = apps.get_model("subscriptions", "Subscription")
-    for plan in Plan.objects.all():
+    db_alias = schema_editor.connection.alias
+    for plan in Plan.objects.using(db_alias).all():
         if plan.tier == 0:
             plan.tier = plan.pk
             plan.save(update_fields=["tier"])
-    for sub in Subscription.objects.all():
+    for sub in Subscription.objects.using(db_alias).all():
         if sub.current_period_start is None and sub.start_date:
             sub.current_period_start = sub.start_date
             sub.save(update_fields=["current_period_start"])
@@ -21,7 +22,7 @@ def backfill_plan_tier_and_subscriptions(apps, schema_editor):
         else:
             sub.billing_cycle = "monthly"
         # Trial vs active: free price + trial_days
-        plan = Plan.objects.filter(pk=sub.plan_id).first()
+        plan = Plan.objects.using(db_alias).filter(pk=sub.plan_id).first()
         if plan and float(plan.price_monthly or 0) <= 0 and float(plan.price_yearly or 0) <= 0:
             td = int(getattr(plan, "trial_days", 0) or 0)
             sub.subscription_status = "trialing" if td > 0 else "active"

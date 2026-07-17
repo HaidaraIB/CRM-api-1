@@ -8,19 +8,20 @@ def backfill_free_trial_consumed(apps, schema_editor):
     Company = apps.get_model("companies", "Company")
     Subscription = apps.get_model("subscriptions", "Subscription")
     Payment = apps.get_model("subscriptions", "Payment")
+    db_alias = schema_editor.connection.alias
     now = timezone.now()
-    for c in Company.objects.all().iterator():
-        if Payment.objects.filter(
+    for c in Company.objects.using(db_alias).all().iterator():
+        if Payment.objects.using(db_alias).filter(
             subscription__company_id=c.pk, payment_status="completed"
         ).exists():
-            Company.objects.filter(pk=c.pk).update(free_trial_consumed=True)
+            Company.objects.using(db_alias).filter(pk=c.pk).update(free_trial_consumed=True)
             continue
-        if Subscription.objects.filter(
+        if Subscription.objects.using(db_alias).filter(
             company_id=c.pk,
             subscription_status="trialing",
             end_date__lte=now,
         ).exists():
-            Company.objects.filter(pk=c.pk).update(free_trial_consumed=True)
+            Company.objects.using(db_alias).filter(pk=c.pk).update(free_trial_consumed=True)
 
 
 def noop_reverse(apps, schema_editor):

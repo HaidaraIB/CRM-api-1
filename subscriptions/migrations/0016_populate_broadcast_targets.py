@@ -5,7 +5,8 @@ from django.db import migrations
 
 def populate_targets(apps, schema_editor):
     Broadcast = apps.get_model("subscriptions", "Broadcast")
-    for b in Broadcast.objects.all():
+    db_alias = schema_editor.connection.alias
+    for b in Broadcast.objects.using(db_alias).all():
         if not getattr(b, "targets", None) or len(b.targets) == 0:
             b.targets = [b.target] if b.target else ["all"]
             b.save(update_fields=["targets"])

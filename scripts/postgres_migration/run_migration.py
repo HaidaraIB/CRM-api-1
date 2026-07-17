@@ -157,13 +157,30 @@ def step_check(pg: dict, sqlite_path: Path) -> None:
 
 
 def step_schema(*, dry_run: bool) -> None:
+    from django.conf import settings
     from django.core.management import call_command
+    from django.db import connections
 
     print("[schema] applying Django migrations on postgres ...")
     if dry_run:
         print("[schema] dry-run: would run migrate --database=postgres")
         return
-    call_command("migrate", database="postgres", interactive=False, verbosity=1)
+
+    # Historical RunPython migrations often use Model.objects.all() without
+    # .using(alias), so they hit `default`. Point default at postgres for
+    # the duration of migrate, then restore sqlite as default for dump/load.
+    def _reload_connections() -> None:
+        connections.close_all()
+        connections.__dict__.pop("settings", None)
+        connections._settings = None
+
+    settings.DATABASES["default"] = settings.DATABASES["postgres"]
+    _reload_connections()
+    try:
+        call_command("migrate", database="default", interactive=False, verbosity=1)
+    finally:
+        settings.DATABASES["default"] = settings.DATABASES["sqlite"]
+        _reload_connections()
     print("[schema] ok")
 
 

@@ -7,15 +7,16 @@ def backfill_patient_file_numbers(apps, schema_editor):
     Client = apps.get_model("crm", "Client")
     Company = apps.get_model("companies", "Company")
     CompanyPatientCounter = apps.get_model("companies", "CompanyPatientCounter")
+    db_alias = schema_editor.connection.alias
 
-    for company in Company.objects.all().iterator():
-        clients = list(Client.objects.filter(company=company).order_by("id"))
+    for company in Company.objects.using(db_alias).all().iterator():
+        clients = list(Client.objects.using(db_alias).filter(company=company).order_by("id"))
         for i, client in enumerate(clients, start=1):
             client.patient_file_number = i
         if clients:
-            Client.objects.bulk_update(clients, ["patient_file_number"])
+            Client.objects.using(db_alias).bulk_update(clients, ["patient_file_number"])
         next_n = len(clients) + 1
-        CompanyPatientCounter.objects.update_or_create(
+        CompanyPatientCounter.objects.using(db_alias).update_or_create(
             company=company,
             defaults={"next_number": next_n},
         )

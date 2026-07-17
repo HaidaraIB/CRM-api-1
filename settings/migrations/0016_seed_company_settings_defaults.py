@@ -8,8 +8,9 @@ def forwards(apps, schema_editor):
     from settings.company_defaults import seed_company_settings
 
     Channel = apps.get_model("settings", "Channel")
-    for company in Company.objects.iterator():
-        if not Channel.objects.filter(company_id=company.pk).exists():
+    db_alias = schema_editor.connection.alias
+    for company in Company.objects.using(db_alias).iterator():
+        if not Channel.objects.using(db_alias).filter(company_id=company.pk).exists():
             seed_company_settings(company)
 
 

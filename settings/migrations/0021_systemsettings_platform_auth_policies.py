@@ -3,7 +3,8 @@ from django.db import migrations, models
 
 def migrate_cache_auth_policies_to_db(apps, schema_editor):
     SystemSettings = apps.get_model("settings", "SystemSettings")
-    settings, _ = SystemSettings.objects.get_or_create(pk=1)
+    db_alias = schema_editor.connection.alias
+    settings, _ = SystemSettings.objects.using(db_alias).get_or_create(pk=1)
 
     try:
         from django.core.cache import cache

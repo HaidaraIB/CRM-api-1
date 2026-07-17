@@ -8,15 +8,16 @@ def set_currency_for_iqd_payments(apps, schema_editor):
     """Set currency=IQD for existing payments from IQD gateways (PayTabs, Zain Cash) where amount looks like IQD."""
     Payment = apps.get_model("subscriptions", "Payment")
     PaymentGateway = apps.get_model("subscriptions", "PaymentGateway")
+    db_alias = schema_editor.connection.alias
     iqd_gateway_ids = list(
-        PaymentGateway.objects.filter(
+        PaymentGateway.objects.using(db_alias).filter(
             Q(name__icontains="paytabs") | Q(name__icontains="zaincash") | Q(name__icontains="zain cash")
         ).values_list("id", flat=True)
     )
     if not iqd_gateway_ids:
         return
     # Payments from these gateways with amount > 1000 are likely IQD (plan prices in USD are typically < 1000)
-    updated = Payment.objects.filter(
+    updated = Payment.objects.using(db_alias).filter(
         payment_method_id__in=iqd_gateway_ids,
         amount__gt=1000,
     ).update(currency="IQD")

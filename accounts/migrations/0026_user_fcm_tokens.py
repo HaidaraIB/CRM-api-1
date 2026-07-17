@@ -3,7 +3,8 @@ from django.db import migrations, models
 
 def populate_fcm_tokens(apps, schema_editor):
     User = apps.get_model("accounts", "User")
-    for user in User.objects.all().only("id", "fcm_token", "fcm_tokens"):
+    db_alias = schema_editor.connection.alias
+    for user in User.objects.using(db_alias).all().only("id", "fcm_token", "fcm_tokens"):
         fcm_tokens = user.fcm_tokens if isinstance(user.fcm_tokens, list) else []
         seen = set()
         normalized = []

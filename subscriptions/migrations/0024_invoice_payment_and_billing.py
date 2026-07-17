@@ -7,13 +7,14 @@ from django.db import migrations, models
 def forwards_copy_status_and_snapshots(apps, schema_editor):
     Invoice = apps.get_model("subscriptions", "Invoice")
     Subscription = apps.get_model("subscriptions", "Subscription")
+    db_alias = schema_editor.connection.alias
     status_map = {
         "draft": "pending",
         "issued": "pending",
         "paid": "completed",
         "canceled": "canceled",
     }
-    for inv in Invoice.objects.iterator():
+    for inv in Invoice.objects.using(db_alias).iterator():
         old_status = getattr(inv, "status", None) or ""
         legacy = status_map.get(old_status, "completed")
         company_name = (inv.company_name or "").strip()
@@ -22,7 +23,7 @@ def forwards_copy_status_and_snapshots(apps, schema_editor):
         billing = (inv.billing_cycle or "").strip()
         if inv.subscription_id:
             try:
-                sub = Subscription.objects.select_related("company", "plan").get(pk=inv.subscription_id)
+                sub = Subscription.objects.using(db_alias).select_related("company", "plan").get(pk=inv.subscription_id)
             except Subscription.DoesNotExist:
                 sub = None
             if sub:
@@ -34,7 +35,7 @@ def forwards_copy_status_and_snapshots(apps, schema_editor):
                     billing = (getattr(sub, "billing_cycle", None) or "")[:10]
                 if not line_desc and plan_name:
                     line_desc = f"{plan_name} — {billing}".strip(" —")[:512]
-        Invoice.objects.filter(pk=inv.pk).update(
+        Invoice.objects.using(db_alias).filter(pk=inv.pk).update(
             legacy_payment_status=legacy,
             company_name=company_name or "Unknown",
             plan_name=plan_name or "Unknown",
@@ -53,17 +54,18 @@ def backfill_invoices_for_existing_payments(apps, schema_editor):
     Invoice = apps.get_model("subscriptions", "Invoice")
     InvoiceSequence = apps.get_model("subscriptions", "InvoiceSequence")
     Plan = apps.get_model("subscriptions", "Plan")
+    db_alias = schema_editor.connection.alias
 
     from django.utils import timezone
 
     def next_number(year):
-        seq, _ = InvoiceSequence.objects.get_or_create(year=year, defaults={"last_number": 0})
+        seq, _ = InvoiceSequence.objects.using(db_alias).get_or_create(year=year, defaults={"last_number": 0})
         seq.last_number += 1
         seq.save(update_fields=["last_number", "updated_at"])
         return f"INV-{year}-{seq.last_number:05d}"
 
-    for pay in Payment.objects.select_related("subscription", "subscription__company", "subscription__plan").iterator():
-        if Invoice.objects.filter(payment_id=pay.pk).exists():
+    for pay in Payment.objects.using(db_alias).select_related("subscription", "subscription__company", "subscription__plan").iterator():
+        if Invoice.objects.using(db_alias).filter(payment_id=pay.pk).exists():
             continue
         sub = pay.subscription
         if not sub:
@@ -72,7 +74,7 @@ def backfill_invoices_for_existing_payments(apps, schema_editor):
         plan = None
         if pay.target_plan_id:
             try:
-                plan = Plan.objects.get(pk=pay.target_plan_id)
+                plan = Plan.objects.using(db_alias).get(pk=pay.target_plan_id)
             except Plan.DoesNotExist:
                 plan = None
         if not plan:
@@ -84,7 +86,7 @@ def backfill_invoices_for_existing_payments(apps, schema_editor):
             line_desc = f"{pname} — {cycle}"[:512]
         else:
             line_desc = pname[:512]
-        Invoice.objects.create(
+        Invoice.objects.using(db_alias).create(
             payment_id=pay.pk,
             subscription_id=sub.pk,
             invoice_number=next_number(year),

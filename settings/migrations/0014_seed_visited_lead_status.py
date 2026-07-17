@@ -9,16 +9,18 @@ VISITED_KEY = "visited"
 def seed_visited_lead_statuses(apps, schema_editor):
     Company = apps.get_model("companies", "Company")
     LeadStatus = apps.get_model("settings", "LeadStatus")
+    db_alias = schema_editor.connection.alias
 
-    for company in Company.objects.filter(
+    for company in Company.objects.using(db_alias).filter(
         specialization__in=("real_estate", "services")
     ):
-        if LeadStatus.objects.filter(
+        if LeadStatus.objects.using(db_alias).filter(
             company=company, automation_key=VISITED_KEY
         ).exists():
             continue
         loose = (
-            LeadStatus.objects.filter(company=company, automation_key__isnull=True)
+            LeadStatus.objects.using(db_alias)
+            .filter(company=company, automation_key__isnull=True)
             .filter(models.Q(name__iexact="Visited"))
             .first()
         )
@@ -26,7 +28,7 @@ def seed_visited_lead_statuses(apps, schema_editor):
             loose.automation_key = VISITED_KEY
             loose.save(update_fields=["automation_key"])
             continue
-        LeadStatus.objects.create(
+        LeadStatus.objects.using(db_alias).create(
             company=company,
             name="Visited",
             category="active",

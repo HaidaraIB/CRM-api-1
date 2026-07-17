@@ -3,7 +3,8 @@ from django.db import migrations, models
 
 def backfill_linkedid(apps, schema_editor):
     PbxCallRecord = apps.get_model("integrations", "PbxCallRecord")
-    for rec in PbxCallRecord.objects.filter(linkedid="").iterator(chunk_size=500):
+    db_alias = schema_editor.connection.alias
+    for rec in PbxCallRecord.objects.using(db_alias).filter(linkedid="").iterator(chunk_size=500):
         payload = rec.raw_payload or {}
         lid = (
             payload.get("Linkedid")
@@ -12,7 +13,7 @@ def backfill_linkedid(apps, schema_editor):
             or rec.uniqueid
         )
         if lid:
-            PbxCallRecord.objects.filter(pk=rec.pk).update(
+            PbxCallRecord.objects.using(db_alias).filter(pk=rec.pk).update(
                 linkedid=str(lid)[:128],
             )
 

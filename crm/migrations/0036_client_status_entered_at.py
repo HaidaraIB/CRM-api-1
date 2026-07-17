@@ -5,15 +5,17 @@ from django.db import migrations, models
 def backfill_status_entered_at(apps, schema_editor):
     Client = apps.get_model("crm", "Client")
     ClientEvent = apps.get_model("crm", "ClientEvent")
-    for client in Client.objects.all().iterator(chunk_size=500):
+    db_alias = schema_editor.connection.alias
+    for client in Client.objects.using(db_alias).all().iterator(chunk_size=500):
         evt_time = (
-            ClientEvent.objects.filter(client_id=client.pk, event_type="status_change")
+            ClientEvent.objects.using(db_alias)
+            .filter(client_id=client.pk, event_type="status_change")
             .order_by("-created_at")
             .values_list("created_at", flat=True)
             .first()
         )
         entered = evt_time or client.created_at
-        Client.objects.filter(pk=client.pk).update(status_entered_at=entered)
+        Client.objects.using(db_alias).filter(pk=client.pk).update(status_entered_at=entered)
 
 
 class Migration(migrations.Migration):

@@ -6,14 +6,15 @@ from django.db import migrations, models
 
 def backfill_exchange_rate_and_amount_usd(apps, schema_editor):
     Payment = apps.get_model("subscriptions", "Payment")
+    db_alias = schema_editor.connection.alias
     try:
         SystemSettings = apps.get_model("settings", "SystemSettings")
-        settings_obj = SystemSettings.objects.filter().first()
+        settings_obj = SystemSettings.objects.using(db_alias).filter().first()
         usd_to_iqd = float(settings_obj.usd_to_iqd_rate) if settings_obj and settings_obj.usd_to_iqd_rate else 1300.0
     except Exception:
         usd_to_iqd = 1300.0
 
-    for p in Payment.objects.filter(amount_usd__isnull=True):
+    for p in Payment.objects.using(db_alias).filter(amount_usd__isnull=True):
         if (p.currency or "USD").upper() == "IQD" and p.exchange_rate is None:
             rate = Decimal(str(usd_to_iqd))
             p.exchange_rate = rate

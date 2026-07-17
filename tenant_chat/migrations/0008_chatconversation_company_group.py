@@ -9,8 +9,9 @@ from django.db.models import F, Q
 def backfill_company_groups(apps, schema_editor):
     Company = apps.get_model("companies", "Company")
     ChatConversation = apps.get_model("tenant_chat", "ChatConversation")
-    for c in Company.objects.all().iterator():
-        ChatConversation.objects.get_or_create(
+    db_alias = schema_editor.connection.alias
+    for c in Company.objects.using(db_alias).all().iterator():
+        ChatConversation.objects.using(db_alias).get_or_create(
             company_id=c.pk,
             kind="company_group",
             defaults={
@@ -22,7 +23,8 @@ def backfill_company_groups(apps, schema_editor):
 
 def reverse_company_groups(apps, schema_editor):
     ChatConversation = apps.get_model("tenant_chat", "ChatConversation")
-    ChatConversation.objects.filter(kind="company_group").delete()
+    db_alias = schema_editor.connection.alias
+    ChatConversation.objects.using(db_alias).filter(kind="company_group").delete()
 
 
 class Migration(migrations.Migration):
