@@ -23,6 +23,7 @@ Steps (also runnable individually):
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -65,15 +66,58 @@ def setup_django(pg: dict, sqlite_path: Path) -> None:
 
     django.setup()
 
-    settings.DATABASES["sqlite"] = sqlite_settings(sqlite_path)
-    settings.DATABASES["postgres"] = pg
-    # Keep `default` pointing at sqlite during the migration process.
-    settings.DATABASES["default"] = settings.DATABASES["sqlite"]
+    # Deep copies so default/sqlite/postgres never share the same dict object.
+    settings.DATABASES["sqlite"] = copy.deepcopy(sqlite_settings(sqlite_path))
+    settings.DATABASES["postgres"] = copy.deepcopy(pg)
+    settings.DATABASES["default"] = copy.deepcopy(settings.DATABASES["sqlite"])
 
-    # Django caches DATABASES on ConnectionHandler via cached_property - force reload.
+    _reload_db_connections()
+
+
+def _reload_db_connections() -> None:
+    from django.db import connections
+
     connections.close_all()
     connections.__dict__.pop("settings", None)
-    connections._settings = None
+    if hasattr(connections, "_settings"):
+        connections._settings = None
+
+
+def _assert_alias_is_postgres(alias: str = "postgres") -> None:
+    from django.db import connections
+
+    engine = connections[alias].settings_dict.get("ENGINE", "")
+    vendor = connections[alias].vendor
+    if "postgresql" not in engine and vendor != "postgresql":
+        raise RuntimeError(
+            f"Expected alias '{alias}' to be PostgreSQL, got ENGINE={engine!r} vendor={vendor!r}"
+        )
+
+
+def _postgres_column_exists(table: str, column: str) -> bool:
+    from django.db import connections
+
+    with connections["postgres"].cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = %s
+              AND column_name = %s
+            """,
+            [table, column],
+        )
+        return cur.fetchone() is not None
+
+
+def _count_unapplied_migrations(alias: str) -> int:
+    from django.db import connections
+    from django.db.migrations.executor import MigrationExecutor
+
+    executor = MigrationExecutor(connections[alias])
+    plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
+    return len(plan)
 
 
 def step_backup(sqlite_path: Path, *, dry_run: bool) -> Path:
@@ -156,32 +200,79 @@ def step_check(pg: dict, sqlite_path: Path) -> None:
     print(f"[check] sqlite ok - {sqlite_path}")
 
 
+def step_reset_schema(pg: dict, *, dry_run: bool) -> None:
+    """Drop and recreate public schema so migrate can run cleanly on Postgres."""
+    import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+    print(
+        f"[reset-schema] DROP SCHEMA public CASCADE on {pg['HOST']}/{pg['NAME']}"
+    )
+    if dry_run:
+        print("[reset-schema] dry-run: skipped")
+        return
+
+    conn = psycopg2.connect(
+        dbname=pg["NAME"],
+        user=pg["USER"],
+        password=pg["PASSWORD"],
+        host=pg["HOST"],
+        port=pg["PORT"],
+        connect_timeout=10,
+    )
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    with conn.cursor() as cur:
+        cur.execute("DROP SCHEMA public CASCADE;")
+        cur.execute("CREATE SCHEMA public;")
+        cur.execute("GRANT ALL ON SCHEMA public TO PUBLIC;")
+        cur.execute("GRANT ALL ON SCHEMA public TO CURRENT_USER;")
+        # Also grant to app role explicitly when connected as that role / owner.
+        cur.execute(f'GRANT ALL ON SCHEMA public TO "{pg["USER"]}";')
+    conn.close()
+    print("[reset-schema] ok - empty public schema ready")
+
+
 def step_schema(*, dry_run: bool) -> None:
     from django.conf import settings
     from django.core.management import call_command
-    from django.db import connections
 
     print("[schema] applying Django migrations on postgres ...")
     if dry_run:
         print("[schema] dry-run: would run migrate --database=postgres")
         return
 
-    # Historical RunPython migrations often use Model.objects.all() without
-    # .using(alias), so they hit `default`. Point default at postgres for
-    # the duration of migrate, then restore sqlite as default for dump/load.
-    def _reload_connections() -> None:
-        connections.close_all()
-        connections.__dict__.pop("settings", None)
-        connections._settings = None
+    _assert_alias_is_postgres("postgres")
+    before = _count_unapplied_migrations("postgres")
+    print(f"[schema] unapplied migrations on postgres before: {before}")
+    print(f"[schema] postgres ENGINE={settings.DATABASES['postgres']['ENGINE']}")
 
-    settings.DATABASES["default"] = settings.DATABASES["postgres"]
-    _reload_connections()
+    # Historical RunPython migrations often use Model.objects without .using().
+    # Point default at a *copy* of postgres settings for the duration of migrate.
+    settings.DATABASES["default"] = copy.deepcopy(settings.DATABASES["postgres"])
+    _reload_db_connections()
     try:
-        call_command("migrate", database="default", interactive=False, verbosity=1)
+        _assert_alias_is_postgres("default")
+        _assert_alias_is_postgres("postgres")
+        call_command("migrate", database="postgres", interactive=False, verbosity=1)
     finally:
-        settings.DATABASES["default"] = settings.DATABASES["sqlite"]
-        _reload_connections()
-    print("[schema] ok")
+        settings.DATABASES["default"] = copy.deepcopy(settings.DATABASES["sqlite"])
+        _reload_db_connections()
+
+    after = _count_unapplied_migrations("postgres")
+    print(f"[schema] unapplied migrations on postgres after: {after}")
+    if after:
+        raise SystemExit(
+            f"[schema] ERROR: {after} migrations still unapplied on postgres"
+        )
+
+    # Sanity check: column that broke loaddata must exist.
+    if not _postgres_column_exists("companies", "last_data_entry_assigned_employee_id"):
+        raise SystemExit(
+            "[schema] ERROR: companies.last_data_entry_assigned_employee_id missing "
+            "on postgres after migrate. django_migrations is out of sync with the "
+            "schema. Re-run with: reset-schema schema dump load verify --update-env"
+        )
+    print("[schema] ok - postgres schema matches migrations")
 
 
 def step_dump(fixture_path: Path, excludes: list[str], *, dry_run: bool) -> Path:
@@ -350,7 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
         "steps",
         nargs="*",
         default=[],
-        help="Steps: backup check schema dump load verify update-env (or use --all)",
+        help="Steps: backup check reset-schema schema dump load verify update-env (or use --all)",
     )
     p.add_argument("--all", action="store_true", help="Run backup->check->schema->dump->load->verify")
     p.add_argument("--dry-run", action="store_true", help="Print actions / counts; no writes")
@@ -401,7 +492,8 @@ def main(argv: list[str] | None = None) -> int:
     if not pg["PASSWORD"] and not args.dry_run:
         # Allow dry-run without password; real steps need it.
         if args.all or any(
-            s in (args.steps or []) for s in ("check", "schema", "load", "verify")
+            s in (args.steps or [])
+            for s in ("check", "reset-schema", "schema", "load", "verify")
         ):
             print(
                 "ERROR: DB_PASSWORD is empty. Set it in .env or pass --db-password.",
@@ -425,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
             "\nExamples:\n"
             "  python scripts/postgres_migration/run_migration.py --dry-run --all\n"
             "  python scripts/postgres_migration/run_migration.py --all --update-env\n"
+            "  python scripts/postgres_migration/run_migration.py reset-schema schema load verify --update-env --fixture PATH --wipe-postgres\n"
             "  python scripts/postgres_migration/run_migration.py backup check\n"
         )
         return 1
@@ -440,16 +533,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  steps    = {' -> '.join(steps)}")
     print()
 
-    needs_django = any(s in steps for s in ("schema", "dump", "load", "verify"))
+    needs_django = any(
+        s in steps for s in ("schema", "dump", "load", "verify")
+    )
     if needs_django:
         setup_django(pg, args.sqlite)
 
-    # For dump-only dry-run without postgres password, still allow backup.
     for step in steps:
         if step == "backup":
             step_backup(args.sqlite, dry_run=args.dry_run)
         elif step == "check":
             step_check(pg, args.sqlite)
+        elif step == "reset-schema":
+            step_reset_schema(pg, dry_run=args.dry_run)
         elif step == "schema":
             step_schema(dry_run=args.dry_run)
         elif step == "dump":
