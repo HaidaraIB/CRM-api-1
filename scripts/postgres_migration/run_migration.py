@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""
+One-time migration: CRM-api-1 SQLite -> PostgreSQL (no data loss).
+
+Same idea as subscription_crm_bot's migrate script: dry-run first, then copy,
+then verify. Uses Django dumpdata/loaddata with dual DB aliases so .env is
+not flipped until you opt in with --update-env.
+
+Run from the API repo root with the project venv:
+
+  # Windows
+  .\\.venv\\Scripts\\python.exe scripts/postgres_migration/run_migration.py --dry-run
+  .\\.venv\\Scripts\\python.exe scripts/postgres_migration/run_migration.py --all
+
+  # Linux VPS
+  ./venv/bin/python scripts/postgres_migration/run_migration.py --dry-run
+  ./venv/bin/python scripts/postgres_migration/run_migration.py --all --update-env
+
+Steps (also runnable individually):
+  backup | check | schema | dump | load | verify | update-env | all
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config import (  # noqa: E402
+    BACKUP_DIR,
+    DEFAULT_EXCLUDE,
+    ENV_PATH,
+    FIXTURE_DIR,
+    ROOT as PROJECT_ROOT,
+    SQLITE_PATH,
+    VERIFY_LABELS,
+    load_dotenv_file,
+    postgres_settings_from_env,
+    sqlite_settings,
+    update_env_for_postgres,
+)
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def setup_django(pg: dict, sqlite_path: Path) -> None:
+    """Boot Django with dual aliases: `sqlite` (source) and `postgres` (target)."""
+    # Force sqlite while importing settings so default is valid before we patch.
+    os.environ["DB_ENGINE"] = "sqlite3"
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "crm_saas_api.settings")
+
+    import django
+    from django.conf import settings
+    from django.db import connections
+
+    django.setup()
+
+    settings.DATABASES["sqlite"] = sqlite_settings(sqlite_path)
+    settings.DATABASES["postgres"] = pg
+    # Keep `default` pointing at sqlite during the migration process.
+    settings.DATABASES["default"] = settings.DATABASES["sqlite"]
+
+    # Django caches DATABASES on ConnectionHandler via cached_property - force reload.
+    connections.close_all()
+    connections.__dict__.pop("settings", None)
+    connections._settings = None
+
+
+def step_backup(sqlite_path: Path, *, dry_run: bool) -> Path:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    if not sqlite_path.exists():
+        raise FileNotFoundError(f"SQLite DB not found: {sqlite_path}")
+
+    dest = BACKUP_DIR / f"db.sqlite3.pre-pg-{_stamp()}"
+    size_mb = sqlite_path.stat().st_size / (1024 * 1024)
+    print(f"[backup] source={sqlite_path} ({size_mb:.2f} MB)")
+    print(f"[backup] dest={dest}")
+    if dry_run:
+        print("[backup] dry-run: skipped copy")
+        return dest
+    shutil.copy2(sqlite_path, dest)
+    # Also keep a stable "latest" pointer for convenience.
+    latest = BACKUP_DIR / "db.sqlite3.pre-pg-latest"
+    shutil.copy2(sqlite_path, latest)
+    print("[backup] ok")
+    return dest
+
+
+def step_check(pg: dict, sqlite_path: Path) -> None:
+    import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+    if not sqlite_path.exists():
+        raise FileNotFoundError(f"SQLite DB not found: {sqlite_path}")
+
+    print(
+        f"[check] postgres {pg['USER']}@{pg['HOST']}:{pg['PORT']}/{pg['NAME']}"
+    )
+    try:
+        conn = psycopg2.connect(
+            dbname=pg["NAME"],
+            user=pg["USER"],
+            password=pg["PASSWORD"],
+            host=pg["HOST"],
+            port=pg["PORT"],
+            connect_timeout=10,
+        )
+    except psycopg2.OperationalError as exc:
+        # Try connecting to maintenance DB to see if server is up / DB missing.
+        try:
+            admin = psycopg2.connect(
+                dbname="postgres",
+                user=pg["USER"],
+                password=pg["PASSWORD"],
+                host=pg["HOST"],
+                port=pg["PORT"],
+                connect_timeout=10,
+            )
+            admin.close()
+            raise SystemExit(
+                f"[check] PostgreSQL is reachable but database "
+                f"'{pg['NAME']}' is missing or not accessible.\n"
+                f"Create it first (see vps_setup_postgres.sh), then retry.\n"
+                f"Original error: {exc}"
+            ) from exc
+        except psycopg2.OperationalError as admin_exc:
+            raise SystemExit(
+                f"[check] Cannot connect to PostgreSQL.\n"
+                f"  host={pg['HOST']} port={pg['PORT']} user={pg['USER']}\n"
+                f"  error={admin_exc}\n"
+                f"Run scripts/postgres_migration/vps_setup_postgres.sh on the VPS first."
+            ) from admin_exc
+
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    with conn.cursor() as cur:
+        cur.execute("SELECT version();")
+        version = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema='public';"
+        )
+        table_count = cur.fetchone()[0]
+    conn.close()
+    print(f"[check] ok - {version.split(',')[0]}")
+    print(f"[check] public tables currently: {table_count}")
+    print(f"[check] sqlite ok - {sqlite_path}")
+
+
+def step_schema(*, dry_run: bool) -> None:
+    from django.core.management import call_command
+
+    print("[schema] applying Django migrations on postgres ...")
+    if dry_run:
+        print("[schema] dry-run: would run migrate --database=postgres")
+        return
+    call_command("migrate", database="postgres", interactive=False, verbosity=1)
+    print("[schema] ok")
+
+
+def step_dump(fixture_path: Path, excludes: list[str], *, dry_run: bool) -> Path:
+    from django.apps import apps
+    from django.core.management import call_command
+    from django.db import connections
+
+    FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[dump] writing fixture -> {fixture_path}")
+    print(f"[dump] excludes: {', '.join(excludes) or '(none)'}")
+
+    counts: dict[str, int] = {}
+    for model in apps.get_models():
+        label = f"{model._meta.app_label}.{model._meta.model_name}"
+        skip = any(
+            label.lower() == ex.lower()
+            or label.lower().startswith(ex.lower().rstrip(".") + ".")
+            or model._meta.app_label == ex
+            or f"{model._meta.app_label}.{model.__name__}".lower() == ex.lower()
+            for ex in excludes
+        )
+        if skip:
+            continue
+        try:
+            counts[label] = model.objects.using("sqlite").count()
+        except Exception:
+            counts[label] = -1
+
+    non_empty = {k: v for k, v in counts.items() if v and v > 0}
+    print(f"[dump] sqlite models with rows: {len(non_empty)}")
+    for label, count in sorted(non_empty.items(), key=lambda x: (-x[1], x[0]))[:25]:
+        print(f"         {count:>7}  {label}")
+    if len(non_empty) > 25:
+        print(f"         ... and {len(non_empty) - 25} more")
+
+    if dry_run:
+        meta = fixture_path.with_suffix(".dry-run-counts.json")
+        meta.write_text(json.dumps(counts, indent=2), encoding="utf-8")
+        print(f"[dump] dry-run: counts saved to {meta}")
+        return fixture_path
+
+    call_command(
+        "dumpdata",
+        database="sqlite",
+        natural_foreign=True,
+        natural_primary=True,
+        indent=2,
+        output=str(fixture_path),
+        exclude=excludes,
+        verbosity=1,
+    )
+    size_mb = fixture_path.stat().st_size / (1024 * 1024)
+    print(f"[dump] ok - {size_mb:.2f} MB")
+    connections["sqlite"].close()
+    return fixture_path
+
+
+def step_load(fixture_path: Path, *, dry_run: bool, wipe: bool) -> None:
+    from django.core.management import call_command
+    from django.db import connections
+
+    if dry_run:
+        print(f"[load] dry-run: would loaddata {fixture_path} into postgres")
+        return
+    if not fixture_path.exists():
+        raise FileNotFoundError(f"Fixture not found: {fixture_path}")
+
+    if wipe:
+        print("[load] flushing postgres business data before load ...")
+        call_command(
+            "flush",
+            database="postgres",
+            interactive=False,
+            verbosity=1,
+        )
+
+    print(f"[load] loading {fixture_path} into postgres ...")
+    call_command(
+        "loaddata",
+        str(fixture_path),
+        database="postgres",
+        verbosity=1,
+    )
+    connections["postgres"].close()
+    print("[load] ok")
+
+
+def step_verify(*, dry_run: bool) -> bool:
+    from django.apps import apps
+
+    print("[verify] comparing row counts (sqlite vs postgres) ...")
+    if dry_run:
+        print("[verify] dry-run: skipped")
+        return True
+
+    ok = True
+    rows = []
+    for label in VERIFY_LABELS:
+        try:
+            model = apps.get_model(label)
+        except LookupError:
+            print(f"  SKIP  {label} (model not found)")
+            continue
+        sqlite_n = model.objects.using("sqlite").count()
+        pg_n = model.objects.using("postgres").count()
+        match = sqlite_n == pg_n
+        if not match:
+            ok = False
+        status = "OK" if match else "MISMATCH"
+        rows.append((status, label, sqlite_n, pg_n))
+        print(f"  {status:8} {label:40} sqlite={sqlite_n:<6} postgres={pg_n}")
+
+    # Also compare total rows across all concrete models (minus excludes).
+    exclude_set = {e.lower() for e in DEFAULT_EXCLUDE}
+    total_s = total_p = 0
+    for model in apps.get_models():
+        label = f"{model._meta.app_label}.{model._meta.model_name}"
+        full = f"{model._meta.app_label}.{model.__name__}".lower()
+        if (
+            label.lower() in exclude_set
+            or full in exclude_set
+            or model._meta.app_label in exclude_set
+        ):
+            continue
+        try:
+            total_s += model.objects.using("sqlite").count()
+            total_p += model.objects.using("postgres").count()
+        except Exception:
+            continue
+    print(f"  TOTAL    (non-excluded models)              sqlite={total_s:<6} postgres={total_p}")
+    if total_s != total_p:
+        ok = False
+        print("[verify] FAIL - totals differ")
+    elif ok:
+        print("[verify] ok - checked models match")
+    else:
+        print("[verify] FAIL - see mismatches above")
+    return ok
+
+
+def step_update_env(pg: dict, env_path: Path, *, dry_run: bool) -> None:
+    print(f"[update-env] writing PostgreSQL settings to {env_path}")
+    if dry_run:
+        print(
+            "[update-env] dry-run: would set "
+            f"DB_ENGINE=postgresql DB_NAME={pg['NAME']} DB_USER={pg['USER']} "
+            f"DB_HOST={pg['HOST']} DB_PORT={pg['PORT']}"
+        )
+        return
+    update_env_for_postgres(
+        env_path,
+        name=pg["NAME"],
+        user=pg["USER"],
+        password=pg["PASSWORD"],
+        host=pg["HOST"],
+        port=str(pg["PORT"]),
+    )
+    print("[update-env] ok - restart gunicorn/systemd after this")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Migrate CRM-api-1 from SQLite to PostgreSQL without data loss."
+    )
+    p.add_argument(
+        "steps",
+        nargs="*",
+        default=[],
+        help="Steps: backup check schema dump load verify update-env (or use --all)",
+    )
+    p.add_argument("--all", action="store_true", help="Run backup->check->schema->dump->load->verify")
+    p.add_argument("--dry-run", action="store_true", help="Print actions / counts; no writes")
+    p.add_argument("--update-env", action="store_true", help="Also flip .env to PostgreSQL")
+    p.add_argument("--sqlite", type=Path, default=SQLITE_PATH, help="Path to db.sqlite3")
+    p.add_argument("--env-file", type=Path, default=ENV_PATH, help="Path to .env with DB_*")
+    p.add_argument("--db-name", default=None)
+    p.add_argument("--db-user", default=None)
+    p.add_argument("--db-password", default=None)
+    p.add_argument("--db-host", default=None)
+    p.add_argument("--db-port", default=None)
+    p.add_argument(
+        "--fixture",
+        type=Path,
+        default=None,
+        help="Fixture JSON path (default under media/backups/postgres_migration/fixtures/)",
+    )
+    p.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Extra dumpdata exclude label (repeatable). Defaults already exclude sessions/tokens/q history.",
+    )
+    p.add_argument(
+        "--include-ephemeral",
+        action="store_true",
+        help="Do NOT exclude sessions/token_blacklist/django_q history/admin log",
+    )
+    p.add_argument(
+        "--wipe-postgres",
+        action="store_true",
+        help="Flush postgres before loaddata (safe re-run). Required if load fails mid-way.",
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    env = load_dotenv_file(args.env_file)
+    pg = postgres_settings_from_env(
+        env,
+        name=args.db_name,
+        user=args.db_user,
+        password=args.db_password,
+        host=args.db_host,
+        port=args.db_port,
+    )
+    if not pg["PASSWORD"] and not args.dry_run:
+        # Allow dry-run without password; real steps need it.
+        if args.all or any(
+            s in (args.steps or []) for s in ("check", "schema", "load", "verify")
+        ):
+            print(
+                "ERROR: DB_PASSWORD is empty. Set it in .env or pass --db-password.",
+                file=sys.stderr,
+            )
+            return 2
+
+    excludes = [] if args.include_ephemeral else list(DEFAULT_EXCLUDE)
+    excludes.extend(args.exclude)
+
+    fixture = args.fixture or (FIXTURE_DIR / f"sqlite_dump_{_stamp()}.json")
+
+    if args.all:
+        steps = ["backup", "check", "schema", "dump", "load", "verify"]
+    else:
+        steps = [s.lower().replace("_", "-") for s in args.steps]
+
+    if not steps:
+        build_parser().print_help()
+        print(
+            "\nExamples:\n"
+            "  python scripts/postgres_migration/run_migration.py --dry-run --all\n"
+            "  python scripts/postgres_migration/run_migration.py --all --update-env\n"
+            "  python scripts/postgres_migration/run_migration.py backup check\n"
+        )
+        return 1
+
+    if args.update_env and "update-env" not in steps:
+        steps.append("update-env")
+
+    print("CRM-api-1 SQLite -> PostgreSQL migration")
+    print(f"  root     = {PROJECT_ROOT}")
+    print(f"  sqlite   = {args.sqlite}")
+    print(f"  postgres = {pg['USER']}@{pg['HOST']}:{pg['PORT']}/{pg['NAME']}")
+    print(f"  dry-run  = {args.dry_run}")
+    print(f"  steps    = {' -> '.join(steps)}")
+    print()
+
+    needs_django = any(s in steps for s in ("schema", "dump", "load", "verify"))
+    if needs_django:
+        setup_django(pg, args.sqlite)
+
+    # For dump-only dry-run without postgres password, still allow backup.
+    for step in steps:
+        if step == "backup":
+            step_backup(args.sqlite, dry_run=args.dry_run)
+        elif step == "check":
+            step_check(pg, args.sqlite)
+        elif step == "schema":
+            step_schema(dry_run=args.dry_run)
+        elif step == "dump":
+            step_dump(fixture, excludes, dry_run=args.dry_run)
+        elif step == "load":
+            step_load(fixture, dry_run=args.dry_run, wipe=args.wipe_postgres)
+        elif step == "verify":
+            if not step_verify(dry_run=args.dry_run):
+                return 3
+        elif step == "update-env":
+            step_update_env(pg, args.env_file, dry_run=args.dry_run)
+        else:
+            print(f"Unknown step: {step}", file=sys.stderr)
+            return 2
+        print()
+
+    print("Done.")
+    if not args.dry_run and "load" in steps:
+        print(
+            "Next:\n"
+            "  1) Confirm verify passed\n"
+            "  2) Ensure .env has DB_ENGINE=postgresql (use --update-env if needed)\n"
+            "  3) sudo systemctl restart crm-api   # or your gunicorn unit\n"
+            "  4) Smoke-test login + a few CRM pages\n"
+            "  5) Keep the sqlite backup until you are confident\n"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
