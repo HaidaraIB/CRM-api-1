@@ -75,9 +75,23 @@ def setup_django(pg: dict, sqlite_path: Path) -> None:
 
 
 def _reload_db_connections() -> None:
+    """Close and discard DB wrappers so aliases are rebuilt from settings.DATABASES.
+
+    Django's connections.close_all() only closes sockets; it keeps the old
+    DatabaseWrapper objects (with the old ENGINE) in the thread-local cache.
+    """
+    from django.conf import settings as dj_settings
     from django.db import connections
 
-    connections.close_all()
+    aliases = list(dj_settings.DATABASES.keys())
+    for alias in aliases:
+        try:
+            if hasattr(connections._connections, alias):
+                getattr(connections._connections, alias).close()
+                delattr(connections._connections, alias)
+        except Exception:
+            pass
+
     connections.__dict__.pop("settings", None)
     if hasattr(connections, "_settings"):
         connections._settings = None
@@ -253,6 +267,12 @@ def step_schema(*, dry_run: bool) -> None:
     try:
         _assert_alias_is_postgres("default")
         _assert_alias_is_postgres("postgres")
+        from django.db import connections as _conns
+
+        print(
+            "[schema] default vendor="
+            f"{_conns['default'].vendor}, postgres vendor={_conns['postgres'].vendor}"
+        )
         call_command("migrate", database="postgres", interactive=False, verbosity=1)
     finally:
         settings.DATABASES["default"] = copy.deepcopy(settings.DATABASES["sqlite"])
