@@ -10,6 +10,8 @@ from .models import ChatConversation, ChatMessage, ensure_company_group_conversa
 @receiver(post_save, sender=ChatMessage)
 def bump_conversation_timestamp(sender, instance, **kwargs):
     """Keep conversation ordering aligned with latest activity."""
+    if kwargs.get("raw"):
+        return
     ChatConversation.objects.filter(pk=instance.conversation_id).update(
         updated_at=timezone.now()
     )
@@ -17,4 +19,6 @@ def bump_conversation_timestamp(sender, instance, **kwargs):
 
 @receiver(post_save, sender=Company)
 def ensure_company_group_chat_thread(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
     ensure_company_group_conversation(instance)

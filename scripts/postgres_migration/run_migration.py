@@ -350,6 +350,38 @@ def step_dump(fixture_path: Path, excludes: list[str], *, dry_run: bool) -> Path
     return fixture_path
 
 
+def _mute_model_signals():
+    """Temporarily clear model signals so loaddata does not re-seed / notify."""
+    from contextlib import contextmanager
+
+    from django.db.models import signals as model_signals
+
+    @contextmanager
+    def _ctx():
+        targets = (
+            model_signals.pre_save,
+            model_signals.post_save,
+            model_signals.pre_delete,
+            model_signals.post_delete,
+            model_signals.m2m_changed,
+        )
+        stashed = []
+        for sig in targets:
+            stashed.append((sig, list(sig.receivers)))
+            sig.receivers = []
+            if hasattr(sig, "sender_receivers_cache"):
+                sig.sender_receivers_cache.clear()
+        try:
+            yield
+        finally:
+            for sig, receivers in stashed:
+                sig.receivers = receivers
+                if hasattr(sig, "sender_receivers_cache"):
+                    sig.sender_receivers_cache.clear()
+
+    return _ctx()
+
+
 def step_load(fixture_path: Path, *, dry_run: bool, wipe: bool) -> None:
     from django.core.management import call_command
     from django.db import connections
@@ -360,22 +392,24 @@ def step_load(fixture_path: Path, *, dry_run: bool, wipe: bool) -> None:
     if not fixture_path.exists():
         raise FileNotFoundError(f"Fixture not found: {fixture_path}")
 
-    if wipe:
-        print("[load] flushing postgres business data before load ...")
+    with _mute_model_signals():
+        if wipe:
+            print("[load] flushing postgres business data before load ...")
+            call_command(
+                "flush",
+                database="postgres",
+                interactive=False,
+                verbosity=1,
+            )
+
+        print(f"[load] loading {fixture_path} into postgres ...")
+        print("[load] model signals muted (avoid re-seed / notifications on restore)")
         call_command(
-            "flush",
+            "loaddata",
+            str(fixture_path),
             database="postgres",
-            interactive=False,
             verbosity=1,
         )
-
-    print(f"[load] loading {fixture_path} into postgres ...")
-    call_command(
-        "loaddata",
-        str(fixture_path),
-        database="postgres",
-        verbosity=1,
-    )
     connections["postgres"].close()
     print("[load] ok")
 
