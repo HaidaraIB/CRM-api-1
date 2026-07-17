@@ -548,6 +548,62 @@ def step_verify(*, dry_run: bool) -> bool:
     return ok
 
 
+def step_repair(*, dry_run: bool) -> None:
+    """Copy any rows present in SQLite but missing in Postgres (by PK).
+
+    Fixes small gaps after loaddata (e.g. settings seeded on sqlite after dump).
+    """
+    from django.apps import apps
+    from django.core import serializers
+
+    print("[repair] copying missing rows sqlite -> postgres ...")
+    if dry_run:
+        print("[repair] dry-run: skipped")
+        return
+
+    exclude_set = {e.lower() for e in DEFAULT_EXCLUDE}
+    copied = 0
+    with _mute_model_signals():
+        for model in apps.get_models():
+            label = f"{model._meta.app_label}.{model._meta.model_name}"
+            full = f"{model._meta.app_label}.{model.__name__}".lower()
+            if (
+                label.lower() in exclude_set
+                or full in exclude_set
+                or model._meta.app_label in exclude_set
+                or not model._meta.managed
+                or model._meta.proxy
+            ):
+                continue
+            try:
+                sqlite_pks = set(
+                    model.objects.using("sqlite").values_list("pk", flat=True)
+                )
+                pg_pks = set(
+                    model.objects.using("postgres").values_list("pk", flat=True)
+                )
+            except Exception:
+                continue
+            missing = sqlite_pks - pg_pks
+            if not missing:
+                continue
+            qs = model.objects.using("sqlite").filter(pk__in=missing).order_by("pk")
+            payload = serializers.serialize(
+                "json",
+                qs,
+                use_natural_foreign_keys=False,
+                use_natural_primary_keys=False,
+            )
+            count = 0
+            for obj in serializers.deserialize("json", payload):
+                obj.save(using="postgres")
+                count += 1
+            print(f"[repair] {label}: copied {count} missing row(s)")
+            copied += count
+
+    print(f"[repair] ok - copied {copied} row(s) total")
+
+
 def step_update_env(pg: dict, env_path: Path, *, dry_run: bool) -> None:
     print(f"[update-env] writing PostgreSQL settings to {env_path}")
     if dry_run:
@@ -576,7 +632,7 @@ def build_parser() -> argparse.ArgumentParser:
         "steps",
         nargs="*",
         default=[],
-        help="Steps: backup check reset-schema schema dump load verify update-env (or use --all)",
+        help="Steps: backup check reset-schema schema dump load repair verify update-env (or use --all)",
     )
     p.add_argument("--all", action="store_true", help="Run backup->check->schema->dump->load->verify")
     p.add_argument("--dry-run", action="store_true", help="Print actions / counts; no writes")
@@ -669,11 +725,12 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     needs_django = any(
-        s in steps for s in ("schema", "dump", "load", "verify")
+        s in steps for s in ("schema", "dump", "load", "verify", "repair")
     )
     if needs_django:
         setup_django(pg, args.sqlite)
 
+    verify_ok = True
     for step in steps:
         if step == "backup":
             step_backup(args.sqlite, dry_run=args.dry_run)
@@ -687,9 +744,15 @@ def main(argv: list[str] | None = None) -> int:
             step_dump(fixture, excludes, dry_run=args.dry_run)
         elif step == "load":
             step_load(fixture, dry_run=args.dry_run, wipe=args.wipe_postgres)
+        elif step == "repair":
+            step_repair(dry_run=args.dry_run)
         elif step == "verify":
-            if not step_verify(dry_run=args.dry_run):
-                return 3
+            verify_ok = step_verify(dry_run=args.dry_run)
+            if not verify_ok:
+                print(
+                    "[verify] continuing with remaining steps "
+                    "(fix with: repair verify)"
+                )
         elif step == "update-env":
             step_update_env(pg, args.env_file, dry_run=args.dry_run)
         else:
@@ -701,13 +764,13 @@ def main(argv: list[str] | None = None) -> int:
     if not args.dry_run and "load" in steps:
         print(
             "Next:\n"
-            "  1) Confirm verify passed\n"
+            "  1) Confirm verify passed (run repair verify if needed)\n"
             "  2) Ensure .env has DB_ENGINE=postgresql (use --update-env if needed)\n"
             "  3) sudo systemctl restart crm-api   # or your gunicorn unit\n"
             "  4) Smoke-test login + a few CRM pages\n"
             "  5) Keep the sqlite backup until you are confident\n"
         )
-    return 0
+    return 0 if verify_ok else 3
 
 
 if __name__ == "__main__":

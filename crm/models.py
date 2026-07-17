@@ -365,17 +365,15 @@ class ClientEvent(models.Model):
         max_length=50,
         help_text="Type of event (status_change, assignment, edit, etc.)"
     )
-    old_value = models.CharField(
-        max_length=255,
+    old_value = models.TextField(
         null=True,
         blank=True,
-        help_text="Old value before the change"
+        help_text="Old value before the change",
     )
-    new_value = models.CharField(
-        max_length=255,
+    new_value = models.TextField(
         null=True,
         blank=True,
-        help_text="New value after the change"
+        help_text="New value after the change",
     )
     notes = models.TextField(
         blank=True,
