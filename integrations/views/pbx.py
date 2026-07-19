@@ -117,6 +117,17 @@ def _ensure_pbx_settings(company) -> PbxSettings:
     return settings
 
 
+def _pbx_unavailable_settings_payload() -> dict:
+    """Feature-detection stub when plan/policy blocks PBX (avoid HTTP 403 log spam)."""
+    return {
+        "is_enabled": False,
+        "softphone_enabled": False,
+        "screen_pop_enabled": False,
+        "auto_log_calls": False,
+        "integration_available": False,
+    }
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 @rate_limit_webhook(max_requests=200, window=60)
@@ -168,6 +179,9 @@ def pbx_settings_view(request):
     company = request.user.company
     gate = _integration_gate(company, "pbx")
     if gate:
+        # Clients probe this on every session; return disabled stub on GET instead of 403.
+        if request.method == "GET":
+            return success_response(_pbx_unavailable_settings_payload())
         return gate
 
     settings = _ensure_pbx_settings(company)
@@ -206,6 +220,8 @@ def pbx_extensions_view(request):
     company = request.user.company
     gate = _integration_gate(company, "pbx")
     if gate:
+        if request.method == "GET":
+            return success_response([])
         return gate
 
     if request.method == "GET":
@@ -737,7 +753,11 @@ def pbx_softphone_config_view(request):
     company = request.user.company
     gate = _integration_gate(company, "pbx")
     if gate:
-        return gate
+        return error_response(
+            "Softphone is not configured for your user.",
+            code="softphone_not_configured",
+            status_code=400,
+        )
 
     settings = _ensure_pbx_settings(company)
     mapping = _get_user_pbx_extension(request.user)
