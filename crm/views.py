@@ -74,6 +74,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset().select_related(
             "company", "assigned_to", "created_by", "communication_way", "status", "campaign",
             "integration_account",
+            "interested_developer", "interested_project", "interested_unit",
         ).prefetch_related(
             "phone_numbers",
             "client_tasks__stage",

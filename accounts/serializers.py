@@ -212,17 +212,20 @@ class UserSerializer(serializers.ModelSerializer):
             return None
         
         company = obj.company
-        # Get the active subscription first, if not found get the latest subscription (active or inactive)
-        subscription = Subscription.objects.filter(
-            company=company,
-            is_active=True
-        ).order_by('-created_at').first()
-        
-        # If no active subscription, get the latest subscription (even if inactive) for payment link
+        # Active subscription first; else latest (for payment link). One query each path, with plans.
+        subscription = (
+            Subscription.objects.filter(company=company, is_active=True)
+            .select_related("plan", "pending_plan")
+            .order_by("-created_at")
+            .first()
+        )
         if not subscription:
-            subscription = Subscription.objects.filter(
-                company=company
-            ).order_by('-created_at').first()
+            subscription = (
+                Subscription.objects.filter(company=company)
+                .select_related("plan", "pending_plan")
+                .order_by("-created_at")
+                .first()
+            )
         
         company_data = {
             "id": company.id,
@@ -256,7 +259,7 @@ class UserSerializer(serializers.ModelSerializer):
                 company_id=company.id,
                 feature_key=FIELD_VISIT_FEATURE,
             )
-            visit_access = get_field_visit_access(company)
+            visit_access = get_field_visit_access(company, settings_obj=settings_obj)
             company_data["field_visit_admin_allowed"] = admin_policy.get("enabled", True)
             company_data["field_visit_admin_message"] = admin_policy.get("message", "")
             company_data["field_visit_allowed"] = visit_access.get("enabled", False)
@@ -305,7 +308,11 @@ class UserSerializer(serializers.ModelSerializer):
                     get_monthly_usage_snapshot,
                 )
 
-                ent = build_company_entitlements(company)
+                # Reuse the subscription we already loaded (avoid a second DB hit).
+                ent_sub = subscription
+                if not (subscription.is_active and subscription.end_date and subscription.end_date > now):
+                    ent_sub = None
+                ent = build_company_entitlements(company, subscription=ent_sub)
                 company_data["subscription"]["entitlements"] = {
                     "plan_id": ent.plan_id,
                     "plan_name": ent.plan_name,
@@ -329,48 +336,57 @@ class UserSerializer(serializers.ModelSerializer):
     def get_limited_admin(self, obj):
         """Return limited admin permissions if user is a limited admin"""
         try:
-            limited_admin = LimitedAdmin.objects.select_related('user').get(user=obj)
-            return {
-                "id": limited_admin.id,
-                "is_active": limited_admin.is_active,
-                "permissions": {
-                    "can_view_dashboard": limited_admin.can_view_dashboard,
-                    "can_manage_tenants": limited_admin.can_manage_tenants,
-                    "can_manage_subscriptions": limited_admin.can_manage_subscriptions,
-                    "can_manage_payment_gateways": limited_admin.can_manage_payment_gateways,
-                    "can_view_reports": limited_admin.can_view_reports,
-                    "can_manage_communication": limited_admin.can_manage_communication,
-                    "can_manage_settings": limited_admin.can_manage_settings,
-                    "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
-                }
-            }
+            limited_admin = obj.limited_admin_profile
         except LimitedAdmin.DoesNotExist:
             return None
+        except AttributeError:
+            try:
+                limited_admin = LimitedAdmin.objects.select_related("user").get(user=obj)
+            except LimitedAdmin.DoesNotExist:
+                return None
+        return {
+            "id": limited_admin.id,
+            "is_active": limited_admin.is_active,
+            "permissions": {
+                "can_view_dashboard": limited_admin.can_view_dashboard,
+                "can_manage_tenants": limited_admin.can_manage_tenants,
+                "can_manage_subscriptions": limited_admin.can_manage_subscriptions,
+                "can_manage_payment_gateways": limited_admin.can_manage_payment_gateways,
+                "can_view_reports": limited_admin.can_view_reports,
+                "can_manage_communication": limited_admin.can_manage_communication,
+                "can_manage_settings": limited_admin.can_manage_settings,
+                "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
+            }
+        }
 
     def get_supervisor_permissions(self, obj):
         """Return supervisor permissions if user is a supervisor"""
         if obj.role != Role.SUPERVISOR.value:
             return None
         try:
-            sp = SupervisorPermission.objects.get(user=obj)
-            return {
-                "id": sp.id,
-                "is_active": sp.is_active,
-                "permissions": {
-                    "can_manage_leads": sp.can_manage_leads,
-                    "can_manage_deals": sp.can_manage_deals,
-                    "can_manage_tasks": sp.can_manage_tasks,
-                    "can_view_reports": sp.can_view_reports,
-                    "can_manage_users": sp.can_manage_users,
-                    "can_manage_products": sp.can_manage_products,
-                    "can_manage_services": sp.can_manage_services,
-                    "can_manage_real_estate": sp.can_manage_real_estate,
-                    "can_manage_settings": sp.can_manage_settings,
-                },
-            }
+            sp = obj.supervisor_permissions
         except SupervisorPermission.DoesNotExist:
             return None
-
+        except AttributeError:
+            try:
+                sp = SupervisorPermission.objects.get(user=obj)
+            except SupervisorPermission.DoesNotExist:
+                return None
+        return {
+            "id": sp.id,
+            "is_active": sp.is_active,
+            "permissions": {
+                "can_manage_leads": sp.can_manage_leads,
+                "can_manage_deals": sp.can_manage_deals,
+                "can_manage_tasks": sp.can_manage_tasks,
+                "can_view_reports": sp.can_view_reports,
+                "can_manage_users": sp.can_manage_users,
+                "can_manage_products": sp.can_manage_products,
+                "can_manage_services": sp.can_manage_services,
+                "can_manage_real_estate": sp.can_manage_real_estate,
+                "can_manage_settings": sp.can_manage_settings,
+            },
+        }
     @extend_schema_field(serializers.BooleanField())
     def get_is_online(self, obj):
         if not obj.last_seen_at:

@@ -96,6 +96,10 @@ def _strip_fcm_token_from_all_users(normalized_token: str) -> int:
 
 
 def _revoke_token_from_other_users(current_user, token):
+    """
+    Remove token from every user except current_user.
+    PostgreSQL: filter with JSON contains. SQLite: only scan non-empty fcm_tokens lists.
+    """
     normalized_token = (token or "").strip()
     if not normalized_token:
         return
@@ -104,14 +108,32 @@ def _revoke_token_from_other_users(current_user, token):
         fcm_token=None
     )
 
-    for other_user in User.objects.exclude(pk=current_user.pk).only(
-        "id", "fcm_tokens"
-    ):
-        other_tokens = other_user.fcm_tokens if isinstance(other_user.fcm_tokens, list) else []
+    def _strip_from_list(user) -> None:
+        other_tokens = user.fcm_tokens if isinstance(user.fcm_tokens, list) else []
         if normalized_token not in other_tokens:
-            continue
-        other_user.fcm_tokens = [t for t in other_tokens if t != normalized_token]
-        other_user.save(update_fields=["fcm_tokens"])
+            return
+        user.fcm_tokens = [t for t in other_tokens if t != normalized_token]
+        user.save(update_fields=["fcm_tokens"])
+
+    if connection.vendor == "postgresql":
+        qs = (
+            User.objects.exclude(pk=current_user.pk)
+            .filter(fcm_tokens__contains=[normalized_token])
+            .only("id", "fcm_tokens")
+        )
+        for other_user in qs.iterator(chunk_size=200):
+            _strip_from_list(other_user)
+        return
+
+    # SQLite / others: no JSONField __contains — scan non-empty lists only
+    non_empty = (
+        User.objects.exclude(pk=current_user.pk)
+        .exclude(fcm_tokens__isnull=True)
+        .exclude(fcm_tokens=[])
+        .only("id", "fcm_tokens")
+    )
+    for other_user in non_empty.iterator(chunk_size=200):
+        _strip_from_list(other_user)
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])

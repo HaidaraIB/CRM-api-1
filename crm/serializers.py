@@ -84,28 +84,39 @@ class ClientActivitySummaryMixin:
     last_feedback_at = serializers.SerializerMethodField()
 
     @staticmethod
-    def _get_latest_activity(client):
-        latest_task = client.client_tasks.order_by("-created_at").first()
-        latest_call = client.client_calls.order_by("-created_at").first()
-        latest_visit = client.client_visits.order_by("-created_at").first()
-        latest_field_visit = client.client_field_visits.order_by("-created_at").first()
+    def _latest_from_prefetched(related_manager):
+        """Pick newest by created_at from prefetch cache; avoid order_by().first() (busts prefetch)."""
+        items = list(related_manager.all())
+        if not items:
+            return None
+        return max(items, key=lambda obj: obj.created_at)
+
+    @classmethod
+    def _get_latest_activity(cls, client):
+        cached = getattr(client, "_latest_activity_cache", None)
+        if cached is not None:
+            return cached
 
         candidates = []
-        if latest_task:
-            candidates.append(("task", latest_task, latest_task.created_at))
-        if latest_call:
-            candidates.append(("call", latest_call, latest_call.created_at))
-        if latest_visit:
-            candidates.append(("visit", latest_visit, latest_visit.created_at))
-        if latest_field_visit:
-            candidates.append(
-                ("field_visit", latest_field_visit, latest_field_visit.created_at)
-            )
+        for kind, manager in (
+            ("task", client.client_tasks),
+            ("call", client.client_calls),
+            ("visit", client.client_visits),
+            ("field_visit", client.client_field_visits),
+        ):
+            latest = cls._latest_from_prefetched(manager)
+            if latest is not None:
+                candidates.append((kind, latest, latest.created_at))
+
         if not candidates:
-            return (None, None)
-        candidates.sort(key=lambda x: x[2], reverse=True)
-        kind, obj, _ = candidates[0]
-        return (kind, obj)
+            result = (None, None)
+        else:
+            candidates.sort(key=lambda x: x[2], reverse=True)
+            kind, obj, _ = candidates[0]
+            result = (kind, obj)
+
+        client._latest_activity_cache = result
+        return result
 
     def get_last_feedback(self, obj):
         activity_type, activity = self._get_latest_activity(obj)

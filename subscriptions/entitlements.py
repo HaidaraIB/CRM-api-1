@@ -83,8 +83,16 @@ def get_active_subscription(company) -> Optional[Subscription]:
     )
 
 
-def build_company_entitlements(company) -> CompanyEntitlements:
-    sub = get_active_subscription(company)
+_MISSING_SUBSCRIPTION = object()
+
+
+def build_company_entitlements(
+    company, subscription: Any = _MISSING_SUBSCRIPTION
+) -> CompanyEntitlements:
+    if subscription is _MISSING_SUBSCRIPTION:
+        sub = get_active_subscription(company)
+    else:
+        sub = subscription
     if not sub or not sub.plan:
         return CompanyEntitlements(
             plan_id=None,

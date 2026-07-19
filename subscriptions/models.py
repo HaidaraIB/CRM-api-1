@@ -161,6 +161,16 @@ class Subscription(models.Model):
 
     class Meta:
         db_table = "subscriptions"
+        indexes = [
+            models.Index(
+                fields=["company", "is_active", "-created_at"],
+                name="sub_company_active_created_idx",
+            ),
+            models.Index(
+                fields=["company", "is_active", "end_date"],
+                name="sub_company_active_end_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.company.name} - {self.plan.name}"

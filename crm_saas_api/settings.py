@@ -257,6 +257,8 @@ WSGI_APPLICATION = "crm_saas_api.wsgi.application"
 # ============================================================================
 # Database Configuration
 # ============================================================================
+# Postgres: keep DB_HOST on the same machine as Gunicorn (or use a pooler).
+# Remote managed Postgres without PgBouncer multiplies every ORM round-trip.
 
 _db_engine = os.getenv("DB_ENGINE", "sqlite3")
 
@@ -270,6 +272,7 @@ if _db_engine == "postgresql":
             "HOST": os.getenv("DB_HOST", "localhost"),
             "PORT": os.getenv("DB_PORT", "5432"),
             "CONN_MAX_AGE": 600,
+            "CONN_HEALTH_CHECKS": True,
         }
     }
 else:
@@ -344,6 +347,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ============================================================================
 # Cache (for OAuth state etc. - survives redirects from external sites)
+# ============================================================================
+# Cache: set REDIS_URL in production so subscription/maintenance caches are shared
+# across Gunicorn workers. Without it, LocMemCache is per-process and re-hits Postgres.
 # ============================================================================
 _redis_url = os.getenv("REDIS_URL", "")
 if _redis_url:

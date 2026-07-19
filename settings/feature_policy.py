@@ -88,8 +88,9 @@ def get_effective_feature_policy(
     return {"enabled": True, "message": "", "scope": "enabled"}
 
 
-def get_field_visit_access(company) -> dict[str, Any]:
-    settings_obj = SystemSettings.get_settings()
+def get_field_visit_access(company, settings_obj=None) -> dict[str, Any]:
+    if settings_obj is None:
+        settings_obj = SystemSettings.get_settings()
     admin_policy = get_effective_feature_policy(
         settings_obj.feature_policies or {},
         company_id=company.id,

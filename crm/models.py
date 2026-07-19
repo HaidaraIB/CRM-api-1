@@ -603,6 +603,9 @@ class ClientTask(models.Model):
     class Meta:
         db_table = "crm_client_task"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["client", "-created_at"], name="ctask_client_created_idx"),
+        ]
 
     def __str__(self):
         stage_name = self.stage.name if self.stage else "No Stage"
@@ -657,6 +660,9 @@ class ClientCall(models.Model):
     class Meta:
         db_table = "crm_client_call"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["client", "-created_at"], name="ccall_client_created_idx"),
+        ]
 
     def __str__(self):
         call_method_name = self.call_method.name if self.call_method else "No Method"
@@ -702,6 +708,9 @@ class ClientVisit(models.Model):
     class Meta:
         db_table = "crm_client_visit"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["client", "-created_at"], name="cvisit_client_created_idx"),
+        ]
 
     def __str__(self):
         vt = self.visit_type.name if self.visit_type else "No type"
@@ -755,6 +764,9 @@ class ClientFieldVisit(models.Model):
     class Meta:
         db_table = "crm_client_field_visit"
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["client", "-created_at"], name="cfvisit_client_created_idx"),
+        ]
 
     def __str__(self):
         return f"{self.client.name} - field visit"

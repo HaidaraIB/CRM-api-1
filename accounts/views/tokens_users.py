@@ -217,7 +217,18 @@ class UserViewSet(viewsets.ModelViewSet):
         detail=False, methods=["get"], permission_classes=[IsAuthenticated]
     )  # me endpoint doesn't require active subscription
     def me(self, request):
-        serializer = UserSerializer(request.user, context=self.get_serializer_context())
+        user = (
+            User.objects.select_related(
+                "company",
+                "limited_admin_profile",
+                "supervisor_permissions",
+            )
+            .filter(pk=request.user.pk)
+            .first()
+        )
+        if user is None:
+            user = request.user
+        serializer = UserSerializer(user, context=self.get_serializer_context())
         return success_response(data=serializer.data)
 
     @action(detail=False, methods=["post"], permission_classes=[IsAuthenticated])
