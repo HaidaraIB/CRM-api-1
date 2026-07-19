@@ -25,6 +25,8 @@ def assign_unassigned_clients(company, employee, triggered_by):
     if not unassigned:
         return 0, None
 
+    from crm.signals import notify_lead_assignment_change
+
     now = timezone.now()
     name = employee.get_full_name() or employee.username
     events = []
@@ -45,6 +47,12 @@ def assign_unassigned_clients(company, employee, triggered_by):
 
     Client.objects.bulk_update(unassigned, ["assigned_to", "assigned_at"])
     ClientEvent.objects.bulk_create(events)
+    for client in unassigned:
+        notify_lead_assignment_change(
+            client=client,
+            old_assignee=None,
+            new_assignee=employee,
+        )
     return len(unassigned), name
 
 
@@ -60,7 +68,11 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
                 "error_key": "employee_weekly_day_off",
             }
         )
-    clients = list(Client.objects.filter(id__in=client_ids, company=company))
+    clients = list(
+        Client.objects.filter(id__in=client_ids, company=company).select_related(
+            "assigned_to"
+        )
+    )
     now = timezone.now()
     new_name = (
         (target_user.get_full_name() or target_user.username)
@@ -68,19 +80,24 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
         else "Unassigned"
     )
 
+    from crm.signals import notify_lead_assignment_change
+
     changed = []
     events = []
+    notification_changes = []
 
     for client in clients:
         if client.assigned_to == target_user:
             continue
+        old_assignee = client.assigned_to
         old_name = (
-            client.assigned_to.get_full_name() or client.assigned_to.username
-        ) if client.assigned_to else "Unassigned"
+            old_assignee.get_full_name() or old_assignee.username
+        ) if old_assignee else "Unassigned"
 
         client.assigned_to = target_user
         client.assigned_at = now if target_user else None
         changed.append(client)
+        notification_changes.append((client, old_assignee))
 
         notes = (
             f"Bulk assigned to {new_name} (was {old_name})"
@@ -101,6 +118,12 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
     if changed:
         Client.objects.bulk_update(changed, ["assigned_to", "assigned_at"])
         ClientEvent.objects.bulk_create(events)
+        for client, old_assignee in notification_changes:
+            notify_lead_assignment_change(
+                client=client,
+                old_assignee=old_assignee,
+                new_assignee=target_user,
+            )
 
     return len(changed)
 

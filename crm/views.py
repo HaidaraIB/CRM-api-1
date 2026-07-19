@@ -361,23 +361,28 @@ class ClientViewSet(viewsets.ModelViewSet):
                 )
 
         clients_to_update = list(
-            Client.objects.filter(id__in=client_ids, company=request.user.company)
+            Client.objects.filter(
+                id__in=client_ids, company=request.user.company
+            ).select_related("assigned_to")
         )
 
         now = timezone.now()
         changed_clients = []
         events_to_create = []
+        notification_changes = []
 
         for client in clients_to_update:
             if client.assigned_to == target_user:
                 continue
+            old_assignee = client.assigned_to
             old_assigned_name = (
-                client.assigned_to.get_full_name() or client.assigned_to.username
-            ) if client.assigned_to else "Unassigned"
+                old_assignee.get_full_name() or old_assignee.username
+            ) if old_assignee else "Unassigned"
 
             client.assigned_to = target_user
             client.assigned_at = now if target_user else None
             changed_clients.append(client)
+            notification_changes.append((client, old_assignee))
 
             notes = (
                 f"Bulk assigned to {new_assigned_name} (was {old_assigned_name})"
@@ -396,8 +401,16 @@ class ClientViewSet(viewsets.ModelViewSet):
             )
 
         if changed_clients:
+            from crm.signals import notify_lead_assignment_change
+
             Client.objects.bulk_update(changed_clients, ["assigned_to", "assigned_at"])
             ClientEvent.objects.bulk_create(events_to_create)
+            for client, old_assignee in notification_changes:
+                notify_lead_assignment_change(
+                    client=client,
+                    old_assignee=old_assignee,
+                    new_assignee=target_user,
+                )
 
         action_text = "assigned" if target_user else "unassigned"
         return success_response(

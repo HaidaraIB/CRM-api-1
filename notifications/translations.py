@@ -68,11 +68,11 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     'lead_transferred': {
         'ar': {
             'title': 'نقل عميل محتمل',
-            'body': 'تم نقل العميل {lead_name} منك إلى {to_employee}'
+            'body': 'تم نقل العميل {lead_name} منك'
         },
         'en': {
             'title': 'Lead Transferred',
-            'body': 'Lead {lead_name} has been transferred from you to {to_employee}'
+            'body': 'Lead {lead_name} has been transferred from you'
         }
     },
     'lead_updated': {

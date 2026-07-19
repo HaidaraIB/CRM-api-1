@@ -299,39 +299,49 @@ def handle_client_pre_save(sender, instance, **kwargs):
                 logger.error(f"Error sending status change notification: {e}")
 
     # --- Check for assignment changes ---
-    old_assigned_id = old_instance.assigned_to.id if old_instance.assigned_to else None
-    new_assigned_id = instance.assigned_to.id if instance.assigned_to else None
-    
-    if old_assigned_id != new_assigned_id:
-        # Assigned to different employee
-        if instance.assigned_to:
-            try:
-                NotificationService.send_notification(
-                    user=instance.assigned_to,
-                    notification_type=NotificationType.LEAD_ASSIGNED,
-                    data={
-                        'lead_id': instance.id,
-                        'lead_name': instance.name,
-                    }
-                )
-            except Exception as e:
-                logger.error(f"Error sending assignment notification: {e}")
-        
-        # Notify old employee if exists
-        if old_instance.assigned_to and old_instance.assigned_to != instance.assigned_to:
-            try:
-                NotificationService.send_notification(
-                    user=old_instance.assigned_to,
-                    notification_type=NotificationType.LEAD_TRANSFERRED,
-                    data={
-                        'lead_id': instance.id,
-                        'lead_name': instance.name,
-                        'from_employee': old_instance.assigned_to.username,
-                        'to_employee': instance.assigned_to.username if instance.assigned_to else '',
-                    }
-                )
-            except Exception as e:
-                logger.error(f"Error sending transfer notification: {e}")
+    notify_lead_assignment_change(
+        client=instance,
+        old_assignee=old_instance.assigned_to,
+        new_assignee=instance.assigned_to,
+    )
+
+
+def notify_lead_assignment_change(*, client, old_assignee, new_assignee):
+    """
+    Notify the new assignee (lead_assigned) and the previous assignee
+    (lead_transferred, without naming who received the lead).
+    Safe to call from save signals or bulk_update paths.
+    """
+    old_assigned_id = old_assignee.id if old_assignee else None
+    new_assigned_id = new_assignee.id if new_assignee else None
+    if old_assigned_id == new_assigned_id:
+        return
+
+    if new_assignee:
+        try:
+            NotificationService.send_notification(
+                user=new_assignee,
+                notification_type=NotificationType.LEAD_ASSIGNED,
+                data={
+                    'lead_id': client.id,
+                    'lead_name': client.name,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error sending assignment notification: {e}")
+
+    if old_assignee and old_assignee != new_assignee:
+        try:
+            NotificationService.send_notification(
+                user=old_assignee,
+                notification_type=NotificationType.LEAD_TRANSFERRED,
+                data={
+                    'lead_id': client.id,
+                    'lead_name': client.name,
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error sending transfer notification: {e}")
 
 
 @receiver(post_save, sender=Client)

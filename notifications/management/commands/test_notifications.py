@@ -312,8 +312,8 @@ class Command(BaseCommand):
             ),
             'lead_transferred': (
                 'نقل عميل محتمل',
-                'تم نقل العميل المحتمل إلى موظف آخر',
-                {'lead_id': 123, 'lead_name': 'أحمد محمد', 'from_employee': 'موظف 1', 'to_employee': 'موظف 2'}
+                'تم نقل العميل المحتمل منك',
+                {'lead_id': 123, 'lead_name': 'أحمد محمد'}
             ),
             'lead_updated': (
                 'تحديث عميل',
