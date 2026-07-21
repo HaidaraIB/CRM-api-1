@@ -62,6 +62,10 @@ class User(AbstractUser):
         default=True,
         help_text="When enabled, company owner must complete email 2FA at login (unless trusted device).",
     )
+    can_delete_clients = models.BooleanField(
+        default=False,
+        help_text="When True, employee/supervisor may delete clients (customers).",
+    )
 
     def __str__(self):
         return self.username

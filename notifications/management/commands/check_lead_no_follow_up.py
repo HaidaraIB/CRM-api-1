@@ -6,6 +6,9 @@ the last_contacted_at field is updated and the lead will no longer receive this 
 At most 3 "no follow-up" notifications are sent in a row per client; after that, no further
 notification is sent until the lead is contacted again (last_contacted_at is updated).
 
+Assignee receives `lead_no_follow_up`. Company owner also receives `team_activity`
+(`no_follow_up`) so they can monitor overdue work company-wide.
+
 Usage:
     python manage.py check_lead_no_follow_up
     python manage.py check_lead_no_follow_up --hours 6
@@ -19,6 +22,7 @@ from datetime import timedelta
 from crm.models import Client
 from notifications.services import NotificationService
 from notifications.models import NotificationType, Notification
+from notifications.team_activity import notify_owner_team_activity
 import logging
 
 # Maximum number of "no follow-up" notifications sent in a row per client before we stop until next contact
@@ -57,7 +61,7 @@ class Command(BaseCommand):
         ).filter(
             # Either never contacted or last contact was before threshold
             models.Q(last_contacted_at__lt=threshold) | models.Q(last_contacted_at__isnull=True)
-        ).select_related('assigned_to', 'company')
+        ).select_related('assigned_to', 'company', 'company__owner')
 
         if not leads.exists():
             self.stdout.write(
@@ -69,7 +73,7 @@ class Command(BaseCommand):
         skipped_count = 0
 
         for lead in leads:
-            if not lead.assigned_to or not lead.assigned_to.has_any_fcm_token():
+            if not lead.assigned_to:
                 skipped_count += 1
                 continue
 
@@ -109,33 +113,45 @@ class Command(BaseCommand):
                 self.stdout.write(
                     self.style.SUCCESS(
                         f'[DRY RUN] Would send notification to {lead.assigned_to.username} '
-                        f'for lead {lead.id} ({lead.name}) - No follow-up for {hours_display} hours'
+                        f'(and owner team activity) for lead {lead.id} ({lead.name}) - '
+                        f'No follow-up for {hours_display} hours'
                     )
                 )
-            else:
-                try:
-                    NotificationService.send_notification(
-                        user=lead.assigned_to,
-                        notification_type=NotificationType.LEAD_NO_FOLLOW_UP,
-                        data={
-                            'lead_id': lead.id,
-                            'lead_name': lead.name,
-                            'hours': hours_display,
-                        },
-                        lead_source=getattr(lead, 'source', None),
+                sent_count += 1
+                continue
+
+            try:
+                # Always persist assignee notification (FCM optional) so the in-row cap works
+                NotificationService.send_notification(
+                    user=lead.assigned_to,
+                    notification_type=NotificationType.LEAD_NO_FOLLOW_UP,
+                    data={
+                        'lead_id': lead.id,
+                        'lead_name': lead.name,
+                        'hours': hours_display,
+                    },
+                    lead_source=getattr(lead, 'source', None),
+                )
+                notify_owner_team_activity(
+                    lead.assigned_to,
+                    lead.company,
+                    action="no_follow_up",
+                    lead_id=lead.id,
+                    lead_name=lead.name,
+                    hours=hours_display,
+                )
+                sent_count += 1
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f'Sent notification to {lead.assigned_to.username} for lead {lead.id} ({lead.name}) - {hours_display} hours without follow-up'
                     )
-                    sent_count += 1
-                    self.stdout.write(
-                        self.style.SUCCESS(
-                            f'Sent notification to {lead.assigned_to.username} for lead {lead.id} ({lead.name}) - {hours_display} hours without follow-up'
-                        )
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending notification for lead {lead.id}: {e}")
-                    self.stdout.write(
-                        self.style.ERROR(f'Error sending notification for lead {lead.id}: {e}')
-                    )
-                    skipped_count += 1
+                )
+            except Exception as e:
+                logger.error(f"Error sending notification for lead {lead.id}: {e}")
+                self.stdout.write(
+                    self.style.ERROR(f'Error sending notification for lead {lead.id}: {e}')
+                )
+                skipped_count += 1
 
         if dry_run:
             self.stdout.write(

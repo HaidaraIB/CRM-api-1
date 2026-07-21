@@ -95,6 +95,7 @@ class UserSerializer(serializers.ModelSerializer):
             "last_seen_source",
             "is_online",
             "weekly_day_off",
+            "can_delete_clients",
         ]
         read_only_fields = [
             "id",
@@ -159,9 +160,9 @@ class UserSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         request = self.context.get("request")
         inst = getattr(self, "instance", None)
+        user = getattr(request, "user", None) if request else None
 
         if "login_two_factor_enabled" in attrs:
-            user = getattr(request, "user", None) if request else None
             can_set = bool(
                 user
                 and user.is_authenticated
@@ -172,11 +173,19 @@ class UserSerializer(serializers.ModelSerializer):
             if not can_set:
                 attrs.pop("login_two_factor_enabled", None)
 
+        # Only company admins may grant/revoke delete-customer permission.
+        if "can_delete_clients" in attrs:
+            can_set_delete = bool(
+                user
+                and user.is_authenticated
+                and user.is_admin()
+                and (inst is None or inst.company_id == user.company_id)
+            )
+            if not can_set_delete:
+                attrs.pop("can_delete_clients", None)
+
         if "weekly_day_off" not in attrs:
             return attrs
-        request = self.context.get("request")
-        user = getattr(request, "user", None) if request else None
-        inst = getattr(self, "instance", None)
         can_set = bool(user and user.is_authenticated and user.is_super_admin())
         if not can_set and user and user.is_authenticated and user.is_admin():
             if inst is None or inst.company_id == user.company_id:
@@ -419,6 +428,7 @@ class UserListSerializer(serializers.ModelSerializer):
             "company_specialization",
             "company_timezone",
             "weekly_day_off",
+            "can_delete_clients",
             "is_active",
             "email_verified",
             "date_joined",
@@ -595,6 +605,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             "phone_verified": getattr(self.user, "phone_verified", False),
             "is_superuser": self.user.is_superuser,
             "language": getattr(self.user, "language", None) or "ar",
+            "can_delete_clients": bool(getattr(self.user, "can_delete_clients", False)),
         }
         
         # Add limited admin permissions if user is a limited admin
@@ -673,6 +684,7 @@ def build_user_auth_payload(user, request=None):
         "is_superuser": user.is_superuser,
         "is_company_owner": is_company_owner(user),
         "login_two_factor_enabled": bool(getattr(user, "login_two_factor_enabled", True)),
+        "can_delete_clients": bool(getattr(user, "can_delete_clients", False)),
         "language": getattr(user, "language", None) or "ar",
     }
     try:
@@ -1442,6 +1454,7 @@ class SupervisorSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
+    can_delete_clients = serializers.SerializerMethodField()
 
     class Meta:
         model = SupervisorPermission
@@ -1461,6 +1474,7 @@ class SupervisorSerializer(serializers.ModelSerializer):
             'can_manage_services',
             'can_manage_real_estate',
             'can_manage_settings',
+            'can_delete_clients',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -1475,7 +1489,11 @@ class SupervisorSerializer(serializers.ModelSerializer):
             'last_name': obj.user.last_name,
             'phone': obj.user.phone or '',
             'is_active': obj.user.is_active,
+            'can_delete_clients': bool(getattr(obj.user, 'can_delete_clients', False)),
         }
+
+    def get_can_delete_clients(self, obj):
+        return bool(getattr(obj.user, 'can_delete_clients', False) if obj.user else False)
 
     def update(self, instance, validated_data):
         company = getattr(instance.user, 'company', None)
@@ -1484,7 +1502,20 @@ class SupervisorSerializer(serializers.ModelSerializer):
             filter_inventory_permissions_for_company(perms, company)
             for k in INVENTORY_PERM_KEYS:
                 validated_data[k] = perms[k]
-        return super().update(instance, validated_data)
+        instance = super().update(instance, validated_data)
+        if 'can_delete_clients' in self.initial_data and instance.user:
+            request = self.context.get('request')
+            actor = getattr(request, 'user', None) if request else None
+            if actor and actor.is_authenticated and actor.is_admin():
+                raw = self.initial_data.get('can_delete_clients')
+                if isinstance(raw, str):
+                    can_delete_clients = raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+                else:
+                    can_delete_clients = bool(raw)
+                if instance.user.can_delete_clients != can_delete_clients:
+                    instance.user.can_delete_clients = can_delete_clients
+                    instance.user.save(update_fields=['can_delete_clients'])
+        return instance
 
 
 class CreateSupervisorSerializer(serializers.Serializer):
@@ -1505,6 +1536,7 @@ class CreateSupervisorSerializer(serializers.Serializer):
     can_manage_services = serializers.BooleanField(default=False)
     can_manage_real_estate = serializers.BooleanField(default=False)
     can_manage_settings = serializers.BooleanField(default=False)
+    can_delete_clients = serializers.BooleanField(default=False)
 
     def validate_username(self, value):
         if User.objects.filter(username__iexact=value).exists():
@@ -1539,6 +1571,7 @@ class CreateSupervisorSerializer(serializers.Serializer):
         company = validated_data.pop('company')
         password = validated_data.pop('password')
         is_active = validated_data.pop('is_active', True)
+        can_delete_clients = validated_data.pop('can_delete_clients', False)
         perms = {
             'can_manage_leads': validated_data.pop('can_manage_leads', False),
             'can_manage_deals': validated_data.pop('can_manage_deals', False),
@@ -1551,10 +1584,16 @@ class CreateSupervisorSerializer(serializers.Serializer):
             'can_manage_settings': validated_data.pop('can_manage_settings', False),
         }
         filter_inventory_permissions_for_company(perms, company)
+        # Only company admins may grant delete permission (Create is admin-only via CanManageSupervisors).
+        request = self.context.get('request')
+        actor = getattr(request, 'user', None) if request else None
+        if not (actor and actor.is_authenticated and actor.is_admin()):
+            can_delete_clients = False
         user = User.objects.create_user(
             password=password,
             role=Role.SUPERVISOR.value,
             company=company,
+            can_delete_clients=can_delete_clients,
             **validated_data
         )
         sp = SupervisorPermission.objects.create(

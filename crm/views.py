@@ -25,7 +25,6 @@ from .models import (
 from accounts.models import User, Role
 from notifications.models import NotificationType
 from notifications.services import NotificationService
-from notifications.team_activity import notify_owner_team_activity
 from settings.models import LeadStatus
 from .client_list_filters import apply_client_list_filters
 from .serializers import (
@@ -111,6 +110,20 @@ class ClientViewSet(viewsets.ModelViewSet):
             return ClientListSerializer
         return ClientSerializer
 
+    def destroy(self, request, *args, **kwargs):
+        """
+        Delete a client (customer). Non-admins require can_delete_clients;
+        CanAccessClient still enforces assignment / supervisor scope.
+        """
+        user = request.user
+        if not user.is_admin() and not getattr(user, "can_delete_clients", False):
+            return error_response(
+                "You do not have permission to delete customers.",
+                code="cannot_delete_clients",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        return super().destroy(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         """Enforce plan quota for clients (leads) before creating."""
         user = self.request.user
@@ -144,27 +157,24 @@ class ClientViewSet(viewsets.ModelViewSet):
         if not company or not client:
             return
 
-        if client.campaign and user != company.owner:
-            campaign_name = client.campaign.name
+        # Owner always gets NEW_LEAD for company-wide new clients (any source).
+        # Skip when the owner creates the lead themselves.
+        owner = getattr(company, "owner", None)
+        if owner is not None and user.pk != owner.pk:
+            campaign_name = client.campaign.name if client.campaign_id else ""
+            added_by = (user.get_full_name() or user.username or "").strip()
+
             NotificationService.send_notification(
-                user=company.owner,
+                user=owner,
                 notification_type=NotificationType.NEW_LEAD,
                 data={
                     "lead_id": client.id,
                     "lead_name": client.name,
                     "campaign_name": campaign_name,
+                    "added_by": added_by,
                 },
                 sender_role=getattr(user, "role", None),
             )
-            return
-
-        notify_owner_team_activity(
-            user,
-            company,
-            action="lead_created",
-            lead_id=client.id,
-            lead_name=client.name,
-        )
 
     @action(detail=False, methods=["get"], url_path="status-counts")
     def status_counts(self, request):

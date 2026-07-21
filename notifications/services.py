@@ -252,9 +252,18 @@ class NotificationService:
                         # So we must send channel_id matching flutter_local_notifications channels
                         # (created on first app open). If those channels do not exist yet, Android
                         # may drop the notification — user must open the app once after install.
-                        channel_id = android_notification_channel_id(notification_type)
-                        sound_base = android_notification_raw_sound_basename(notification_type)
-                        ios_sound = ios_notification_sound_filename(notification_type)
+                        # team_activity reuses category channels/sounds based on data.action.
+                        action = (data or {}).get("action")
+                        action_str = str(action) if action is not None else None
+                        channel_id = android_notification_channel_id(
+                            notification_type, action=action_str
+                        )
+                        sound_base = android_notification_raw_sound_basename(
+                            notification_type, action=action_str
+                        )
+                        ios_sound = ios_notification_sound_filename(
+                            notification_type, action=action_str
+                        )
                         android_notif_kwargs: Dict[str, Any] = {
                             "channel_id": channel_id,
                         }
@@ -281,11 +290,12 @@ class NotificationService:
                             ),
                         )
                         logger.info(
-                            "FCM android channel_id=%s android_sound=%s ios_sound=%s type=%s",
+                            "FCM android channel_id=%s android_sound=%s ios_sound=%s type=%s action=%s",
                             channel_id,
                             sound_base or "(default)",
                             ios_sound or "(default)",
                             notification_type,
+                            action_str or "(none)",
                         )
                     response = messaging.send(message)
                     logger.info(

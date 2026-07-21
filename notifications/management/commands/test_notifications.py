@@ -282,8 +282,13 @@ class Command(BaseCommand):
         test_data = {
             'new_lead': (
                 'عميل محتمل جديد',
-                'تم إضافة عميل محتمل جديد من حملة فيسبوك',
-                {'lead_id': 123, 'lead_name': 'أحمد محمد', 'campaign_name': 'حملة فيسبوك'}
+                'أضاف أحمد العميل المحتمل سارة من حملة فيسبوك',
+                {
+                    'lead_id': 123,
+                    'lead_name': 'أحمد محمد',
+                    'campaign_name': 'حملة فيسبوك',
+                    'added_by': 'أحمد',
+                }
             ),
             'lead_no_follow_up': (
                 'بدون متابعة',

@@ -659,12 +659,23 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         ]
         for field in other_fields:
             if field in validated_data and getattr(instance, field) != validated_data[field]:
-                field_name = field.replace('_', ' ').capitalize()
+                old_val = getattr(instance, field)
+                new_val = validated_data[field]
+                # Prefer human-readable related names for FKs when available
+                if hasattr(old_val, "name"):
+                    old_display = old_val.name
+                else:
+                    old_display = "" if old_val is None else str(old_val)
+                if hasattr(new_val, "name"):
+                    new_display = new_val.name
+                else:
+                    new_display = "" if new_val is None else str(new_val)
                 changes.append({
                     'event_type': 'edit',
-                    'old_value': str(getattr(instance, field)),
-                    'new_value': str(validated_data[field]),
-                    'notes': f"{field_name} updated"
+                    'old_value': old_display,
+                    'new_value': new_display,
+                    # Machine key — localized when building owner team-activity push
+                    'notes': f"field_updated:{field}",
                 })
 
         # Update client fields

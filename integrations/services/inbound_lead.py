@@ -94,6 +94,16 @@ def _notify_owner_new_lead(company, client) -> None:
         from notifications.models import NotificationType
         from notifications.services import NotificationService
 
+        account = getattr(client, "integration_account", None)
+        if account is not None:
+            added_by = (
+                account.get_platform_display()
+                if hasattr(account, "get_platform_display")
+                else (getattr(account, "name", None) or "API")
+            )
+        else:
+            added_by = (getattr(client, "source", None) or "API").strip() or "API"
+
         NotificationService.send_notification(
             user=owner,
             notification_type=NotificationType.NEW_LEAD,
@@ -101,6 +111,7 @@ def _notify_owner_new_lead(company, client) -> None:
                 "lead_id": client.id,
                 "lead_name": client.name,
                 "campaign_name": client.campaign.name if client.campaign_id else "",
+                "added_by": added_by,
             },
             sender_role=None,
         )

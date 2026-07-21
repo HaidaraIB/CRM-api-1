@@ -8,11 +8,13 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     'new_lead': {
         'ar': {
             'title': 'عميل محتمل جديد',
-            'body': 'تم إضافة عميل محتمل جديد من حملة {campaign_name}'
+            'body': 'أضاف {added_by} العميل المحتمل {lead_name}',
+            'body_with_campaign': 'أضاف {added_by} العميل المحتمل {lead_name} من حملة {campaign_name}',
         },
         'en': {
             'title': 'New Lead',
-            'body': 'A new lead has been added from campaign {campaign_name}'
+            'body': '{added_by} added lead {lead_name}',
+            'body_with_campaign': '{added_by} added lead {lead_name} from campaign {campaign_name}',
         }
     },
     'lead_no_follow_up': {
@@ -429,6 +431,65 @@ _TEAM_ACTIVITY_TITLES = {
     "en": "Team activity",
 }
 
+# Lead field labels used inside team-activity edit details (owner language).
+_TEAM_ACTIVITY_FIELD_LABELS: Dict[str, Dict[str, str]] = {
+    "name": {"ar": "الاسم", "en": "Name"},
+    "priority": {"ar": "الأولوية", "en": "Priority"},
+    "type": {"ar": "النوع", "en": "Type"},
+    "budget": {"ar": "الميزانية", "en": "Budget"},
+    "budget_max": {"ar": "الحد الأقصى للميزانية", "en": "Maximum budget"},
+    "communication_way": {"ar": "طريقة التواصل", "en": "Communication way"},
+    "lead_company_name": {"ar": "اسم شركة العميل", "en": "Lead company name"},
+    "profession": {"ar": "المهنة", "en": "Profession"},
+    "residence": {"ar": "مكان السكن", "en": "Residence"},
+    "notes": {"ar": "الملاحظات", "en": "Notes"},
+    "interested_developer": {"ar": "المطور المهتم", "en": "Interested developer"},
+    "interested_project": {"ar": "المشروع المهتم", "en": "Interested project"},
+    "interested_unit": {"ar": "الوحدة المهتمة", "en": "Interested unit"},
+}
+
+_TEAM_ACTIVITY_FIELD_UPDATED: Dict[str, str] = {
+    "ar": "تم تحديث {field}",
+    "en": "{field} updated",
+}
+
+# Legacy English notes written before field_updated:{field} keys existed.
+_LEGACY_ENGLISH_FIELD_UPDATED: Dict[str, str] = {
+    "name updated": "name",
+    "priority updated": "priority",
+    "type updated": "type",
+    "budget updated": "budget",
+    "budget max updated": "budget_max",
+    "communication way updated": "communication_way",
+    "lead company name updated": "lead_company_name",
+    "profession updated": "profession",
+    "residence updated": "residence",
+    "notes updated": "notes",
+    "interested developer updated": "interested_developer",
+    "interested project updated": "interested_project",
+    "interested unit updated": "interested_unit",
+}
+
+_TEAM_ACTIVITY_LOCATION_NOTES: Dict[str, Dict[str, str]] = {
+    "lead_location_cleared": {
+        "ar": "تم مسح موقع العميل",
+        "en": "Lead location cleared",
+    },
+    "lead_location_set": {
+        "ar": "تم تعيين موقع العميل",
+        "en": "Lead location set",
+    },
+    "lead_location_updated": {
+        "ar": "تم تحديث موقع العميل",
+        "en": "Lead location updated",
+    },
+}
+
+_UNASSIGNED_LABEL: Dict[str, str] = {
+    "ar": "غير معيّن",
+    "en": "Unassigned",
+}
+
 _TEAM_ACTIVITY_BODIES: Dict[str, Dict[str, str]] = {
     "status_change": {
         "ar": "قام الموظف {employee} بتغيير حالة العميل المحتمل {lead} من {old_status} إلى {new_status}",
@@ -466,11 +527,53 @@ _TEAM_ACTIVITY_BODIES: Dict[str, Dict[str, str]] = {
         "ar": "قام الموظف {employee} بإغلاق صفقة ناجحة للعميل المحتمل {lead} ({deal_title}) بقيمة {value}",
         "en": "Employee {employee} won a deal for lead {lead} ({deal_title}) with value {value}",
     },
+    "no_follow_up": {
+        "ar": "تأخر الموظف {employee} في متابعة العميل المحتمل {lead} لمدة {hours} ساعة",
+        "en": "Employee {employee} is overdue following up on lead {lead} for {hours} hours",
+    },
     "unknown": {
         "ar": "قام الموظف {employee} بإجراء على العميل المحتمل {lead}: {detail}",
         "en": "Employee {employee} performed an action on lead {lead}: {detail}",
     },
 }
+
+
+def _localize_assignee_label(language: str, value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    if text.lower() in {"unassigned", "none", ""}:
+        return _UNASSIGNED_LABEL.get(language, _UNASSIGNED_LABEL["ar"])
+    return text
+
+
+def localize_team_activity_detail(language: str, detail: Any) -> str:
+    """
+    Turn stored edit/location notes into owner-language detail text.
+    Accepts field_updated:{field} keys and legacy English "X updated" notes.
+    """
+    lang = normalize_notification_language(language)
+    text = "" if detail is None else str(detail).strip()
+    if not text:
+        return ""
+
+    if text in _TEAM_ACTIVITY_LOCATION_NOTES:
+        return _TEAM_ACTIVITY_LOCATION_NOTES[text].get(lang, _TEAM_ACTIVITY_LOCATION_NOTES[text]["ar"])
+
+    field_key = None
+    if text.startswith("field_updated:"):
+        field_key = text.split(":", 1)[1].strip()
+    else:
+        field_key = _LEGACY_ENGLISH_FIELD_UPDATED.get(text.lower())
+
+    if field_key:
+        labels = _TEAM_ACTIVITY_FIELD_LABELS.get(field_key) or {
+            "ar": field_key,
+            "en": field_key.replace("_", " "),
+        }
+        field_label = labels.get(lang, labels.get("en", field_key))
+        tpl = _TEAM_ACTIVITY_FIELD_UPDATED.get(lang, _TEAM_ACTIVITY_FIELD_UPDATED["en"])
+        return _format_template(tpl, field=field_label)
+
+    return text
 
 
 def get_team_activity_text(language: str, action: str, **kwargs: Any) -> Dict[str, str]:
@@ -481,7 +584,8 @@ def get_team_activity_text(language: str, action: str, **kwargs: Any) -> Dict[st
     lang = normalize_notification_language(language)
     employee = kwargs.get("employee") or kwargs.get("employee_name") or kwargs.get("actor_name") or ""
     lead = kwargs.get("lead") or kwargs.get("lead_name") or ""
-    detail = kwargs.get("detail") or kwargs.get("details") or kwargs.get("summary") or ""
+    raw_detail = kwargs.get("detail") or kwargs.get("details") or kwargs.get("summary") or ""
+    detail = localize_team_activity_detail(lang, raw_detail)
 
     bodies = _TEAM_ACTIVITY_BODIES.get(action) or _TEAM_ACTIVITY_BODIES["unknown"]
     body_tpl = bodies.get(lang, bodies["ar"])
@@ -493,11 +597,12 @@ def get_team_activity_text(language: str, action: str, **kwargs: Any) -> Dict[st
         lead=lead,
         old_status=kwargs.get("old_status", ""),
         new_status=kwargs.get("new_status", ""),
-        old_assignee=kwargs.get("old_assignee", ""),
-        new_assignee=kwargs.get("new_assignee", ""),
+        old_assignee=_localize_assignee_label(lang, kwargs.get("old_assignee", "")),
+        new_assignee=_localize_assignee_label(lang, kwargs.get("new_assignee", "")),
         detail=detail,
         deal_title=kwargs.get("deal_title", ""),
         value=kwargs.get("value", ""),
+        hours=kwargs.get("hours", ""),
     )
     return {"title": title, "body": body}
 
@@ -532,13 +637,15 @@ def get_notification_text(notification_type: str, language: str = 'ar', **kwargs
     # Format the message with provided kwargs
     title = lang_translations.get('title', 'Notification')
     body = lang_translations.get('body', 'You have a new notification')
-    
-    try:
-        title = title.format(**kwargs)
-        body = body.format(**kwargs)
-    except KeyError:
-        # If formatting fails (missing keys), return as is
-        pass
+
+    # New lead: prefer campaign variant when a campaign name is present
+    if notification_type == "new_lead":
+        campaign = str(kwargs.get("campaign_name") or "").strip()
+        if campaign and lang_translations.get("body_with_campaign"):
+            body = lang_translations["body_with_campaign"]
+
+    title = _format_template(title, **kwargs)
+    body = _format_template(body, **kwargs)
     
     return {
         'title': title,
