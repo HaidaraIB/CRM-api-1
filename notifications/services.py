@@ -94,39 +94,51 @@ class NotificationService:
         skip_database_insert: bool = False,
     ) -> bool:
         """
-        Send a push notification to a user
-        
+        Persist an in-app notification and best-effort FCM push.
+
+        Hard rule: the Notification inbox row is written whenever this method is
+        asked to insert (skip_database_insert=False), independent of push.
+        Quiet hours, missing FCM tokens, Firebase init failure, and FCM send
+        errors must never block persistence.
+
+        Per-type / master mute (is_notification_enabled) can skip both insert
+        and push when the user opted out of that type. Quiet hours and delivery
+        failures only affect push.
+
         Args:
-            user: User to send notification to
+            user: User to notify
             notification_type: Type of notification (from NotificationType)
             title: Notification title (optional, will use translation if not provided)
             body: Notification body (optional, will use translation if not provided)
             data: Additional data payload (used for formatting translated messages)
             image_url: Optional image URL
             language: Language code ('ar' or 'en'). If not provided, uses user.language or 'ar'
-            lead_source: Optional lead source (for source filtering)
-            sender_role: Optional sender role (for role filtering)
-            skip_settings_check: Skip notification settings check (for admin/system notifications)
+            lead_source: Optional lead source (for source filtering on push)
+            sender_role: Optional sender role (for role filtering on push)
+            skip_settings_check: Skip mute/quiet-hour checks for push (admin/system);
+                does not skip inbox insert when skip_database_insert is False
             skip_database_insert: If True, do not write Notification rows (caller already persisted)
+
+        Returns:
+            True if at least one FCM push succeeded; False otherwise (inbox may
+            still have been written).
         """
-        # Check user notification settings (unless explicitly skipped)
+        settings_obj = None
         if not skip_settings_check:
             try:
                 settings_obj = NotificationSettings.get_or_create_for_user(user)
-                
-                if not settings_obj.should_send_notification(
-                    notification_type=notification_type,
-                    lead_source=lead_source,
-                    sender_role=sender_role
-                ):
+                # Explicit mute: skip both inbox and push.
+                if not settings_obj.is_notification_enabled(notification_type):
                     logger.info(
-                        f"Notification {notification_type} skipped for user {user.username} "
-                        f"due to notification settings"
+                        f"Notification {notification_type} muted for user {user.username}; "
+                        f"skipping inbox and push"
                     )
                     return False
             except Exception as e:
-                logger.warning(f"Error checking notification settings for user {user.username}: {e}")
-                # Continue with sending if settings check fails (fail open)
+                logger.warning(
+                    f"Error checking notification settings for user {user.username}: {e}"
+                )
+                settings_obj = None  # fail open for mute + push
 
         # Recipient language from DB (avoids stale request-scoped user instances)
         try:
@@ -138,7 +150,7 @@ class NotificationService:
             user_language = normalize_notification_language(
                 language or getattr(user, "language", None)
             )
-        
+
         # Get translated text if title/body not provided
         if title is None or body is None:
             translated = get_notification_text(
@@ -148,11 +160,10 @@ class NotificationService:
             )
             title = title or translated['title']
             body = body or translated['body']
-        
-        if not cls.initialize():
-            logger.warning("Firebase not initialized. Saving notification to database only.")
-            # Still save to database even if Firebase is not available
-            if not skip_database_insert:
+
+        # Inbox first — never gated on push eligibility or delivery.
+        if not skip_database_insert:
+            try:
                 Notification.objects.create(
                     user=user,
                     type=notification_type,
@@ -161,23 +172,49 @@ class NotificationService:
                     data=data or {},
                     image_url=image_url,
                 )
+            except Exception as e:
+                logger.error(
+                    f"Error saving notification for user {user.username}: {e}"
+                )
+                return False
+
+        # Push is best-effort after persist.
+        allow_push = True
+        if not skip_settings_check and settings_obj is not None:
+            try:
+                allow_push = settings_obj.should_send_notification(
+                    notification_type=notification_type,
+                    lead_source=lead_source,
+                    sender_role=sender_role,
+                )
+                if not allow_push:
+                    logger.info(
+                        f"Push for {notification_type} skipped for user {user.username} "
+                        f"(quiet hours / source / role prefs); inbox row kept"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Error checking push settings for user {user.username}: {e}"
+                )
+                allow_push = True  # fail open for push
+
+        if not allow_push:
             return False
-        
+
+        if not cls.initialize():
+            logger.warning(
+                "Firebase not initialized. Inbox saved; push not sent for %s.",
+                user.username,
+            )
+            return False
+
         user_tokens = user.iter_fcm_tokens_for_push()
         if not user_tokens:
-            logger.warning(f"User {user.username} has no FCM token. Notification not sent.")
-            # Still save to database
-            if not skip_database_insert:
-                Notification.objects.create(
-                    user=user,
-                    type=notification_type,
-                    title=title,
-                    body=body,
-                    data=data or {},
-                    image_url=image_url,
-                )
+            logger.warning(
+                f"User {user.username} has no FCM token. Inbox saved; push not sent."
+            )
             return False
-        
+
         try:
             # Prepare notification payload
             notification_payload = messaging.Notification(
@@ -185,19 +222,19 @@ class NotificationService:
                 body=body,
                 image=image_url,
             )
-            
+
             # Prepare data payload
             message_data = {
                 'type': notification_type,
                 'title': title,
                 'body': body,
             }
-            
+
             if data:
                 # Add data fields (convert to strings for FCM)
                 for key, value in data.items():
                     message_data[key] = str(value)
-            
+
             if image_url:
                 message_data['image_url'] = image_url
 
@@ -205,7 +242,7 @@ class NotificationService:
             # iOS uses APNs alert + custom sound (Point pattern) — background data-only
             # pushes are unreliable on iOS and never play custom sounds from local handlers.
             tenant_chat_data_only = (data or {}).get("kind") == "tenant_chat"
-            
+
             success_count = 0
             for token in user_tokens:
                 try:
@@ -308,32 +345,12 @@ class NotificationService:
                     )
                     user.remove_fcm_token(token)
                     user.save(update_fields=["fcm_token", "fcm_tokens"])
-            
-            # Save to database
-            if not skip_database_insert:
-                Notification.objects.create(
-                    user=user,
-                    type=notification_type,
-                    title=title,
-                    body=body,
-                    data=data or {},
-                    image_url=image_url,
-                )
-            
+
             return success_count > 0
-            
+
         except Exception as e:
             logger.error(f"Error sending notification to {user.username}: {e}")
-            # Still save to database
-            if not skip_database_insert:
-                Notification.objects.create(
-                    user=user,
-                    type=notification_type,
-                    title=title,
-                    body=body,
-                    data=data or {},
-                    image_url=image_url,
-                )
+            # Inbox already saved; push failure must not undo that.
             return False
     
     @classmethod

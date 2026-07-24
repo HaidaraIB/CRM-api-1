@@ -19,8 +19,17 @@ logger = logging.getLogger(__name__)
 
 
 def exclude_tenant_chat_push_notifications(queryset):
-    """Tenant DM pushes use FCM only; legacy rows may still have data.kind=tenant_chat."""
-    return queryset.exclude(data__kind="tenant_chat")
+    """
+    Tenant DM pushes use FCM only; legacy rows may still have data.kind=tenant_chat.
+
+    Postgres and SQLite both treat missing JSON keys as SQL NULL. A bare
+    ``exclude(data__kind=\"tenant_chat\")`` therefore drops *every* row without
+    that key (WHERE NOT (kind = 'tenant_chat') is unknown for NULL).
+
+    Only exclude rows that explicitly set kind=tenant_chat — works on both
+    PostgreSQL (prod) and SQLite (local/tests).
+    """
+    return queryset.exclude(data__has_key="kind", data__kind="tenant_chat")
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
@@ -59,6 +68,15 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         notification = self.get_object()
         notification.mark_as_read()
         return success_response(message="Notification marked as read")
+
+    @action(detail=True, methods=['delete'], url_path='delete')
+    def soft_delete(self, request, pk=None):
+        """Soft-delete a single notification for the current user."""
+        notification = self.get_object()
+        if notification.deleted_at is None:
+            notification.deleted_at = timezone.now()
+            notification.save(update_fields=['deleted_at'])
+        return success_response(message="Notification deleted")
 
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):

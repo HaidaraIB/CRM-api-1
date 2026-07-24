@@ -82,18 +82,39 @@ def test_team_activity_no_follow_up_templates():
 
 
 @pytest.mark.django_db
-def test_team_activity_edit_detail_localized_for_arabic():
-    body = get_team_activity_text(
-        "ar",
-        "edit",
-        employee="زينب",
-        lead="تحسين",
-        detail="field_updated:communication_way",
-    )["body"]
-    assert "زينب" in body and "تحسين" in body
-    assert "طريقة التواصل" in body
-    assert "Communication way" not in body
-    assert "updated" not in body.lower()
+def test_owner_not_notified_on_generic_field_edit(
+    authenticated_employee,
+    company,
+    employee_user,
+):
+    lead = Client.objects.create(
+        name="Edit Me",
+        company=company,
+        priority="high",
+        type="fresh",
+        assigned_to=employee_user,
+    )
+
+    with patch(
+        "crm.signals.notify_owner_team_activity",
+        return_value=True,
+    ) as owner_mock:
+        response = authenticated_employee.patch(
+            f"/api/v1/clients/{lead.id}/",
+            {"name": "Edited Name", "notes": "just a note"},
+            format="json",
+        )
+        assert response.status_code == 200, getattr(response, "data", response.content)
+        assert owner_mock.call_count == 0
+
+
+@pytest.mark.django_db
+def test_team_activity_settings_key_mapping():
+    from notifications.team_activity import team_activity_settings_key
+
+    assert team_activity_settings_key("status_change") == "team_activity_status"
+    assert team_activity_settings_key("call_logged") == "team_activity_action"
+    assert team_activity_settings_key("no_follow_up") == "team_activity_overdue"
 
 
 @pytest.mark.django_db

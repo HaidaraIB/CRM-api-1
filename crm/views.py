@@ -152,6 +152,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             if assignee:
                 client.assigned_to = assignee
                 client.assigned_at = dj_tz.now()
+                client._notification_actor = user
                 client.save(update_fields=["assigned_to", "assigned_at"])
 
         if not company or not client:
@@ -420,6 +421,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                     client=client,
                     old_assignee=old_assignee,
                     new_assignee=target_user,
+                    actor=request.user,
                 )
 
         action_text = "assigned" if target_user else "unassigned"

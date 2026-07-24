@@ -120,6 +120,8 @@ def auto_assign_client(sender, instance, created, **kwargs):
 
     instance.assigned_to = employee
     instance.assigned_at = timezone.now()
+    if instance.created_by_id:
+        instance._notification_actor = instance.created_by
     instance.save(update_fields=["assigned_to", "assigned_at"])
 
     if from_integration:
@@ -243,10 +245,11 @@ def notify_new_lead(sender, instance, created, **kwargs):
         return
     
     try:
-        # Send notification to assigned employee if exists
-        if instance.assigned_to:
+        # Send notification to assigned employee if exists (skip self-assign)
+        assignee = instance.assigned_to
+        if assignee and assignee.pk != getattr(instance, "created_by_id", None):
             NotificationService.send_notification(
-                user=instance.assigned_to,
+                user=assignee,
                 notification_type=NotificationType.LEAD_ASSIGNED,
                 data={
                     'lead_id': instance.id,
@@ -283,11 +286,13 @@ def handle_client_pre_save(sender, instance, **kwargs):
         # Status changed - update last_contacted_at
         instance.last_contacted_at = timezone.now()
 
-        # Send notification
-        if instance.assigned_to:
+        # Send notification (skip when the assignee is the one changing status)
+        actor = getattr(instance, "_notification_actor", None)
+        assignee = instance.assigned_to
+        if assignee and (actor is None or assignee.pk != actor.pk):
             try:
                 NotificationService.send_notification(
-                    user=instance.assigned_to,
+                    user=assignee,
                     notification_type=NotificationType.LEAD_STATUS_CHANGED,
                     data={
                         'lead_id': instance.id,
@@ -303,13 +308,15 @@ def handle_client_pre_save(sender, instance, **kwargs):
         client=instance,
         old_assignee=old_instance.assigned_to,
         new_assignee=instance.assigned_to,
+        actor=getattr(instance, "_notification_actor", None),
     )
 
 
-def notify_lead_assignment_change(*, client, old_assignee, new_assignee):
+def notify_lead_assignment_change(*, client, old_assignee, new_assignee, actor=None):
     """
     Notify the new assignee (lead_assigned) and the previous assignee
     (lead_transferred, without naming who received the lead).
+    Skips the acting user so they are not notified of their own action.
     Safe to call from save signals or bulk_update paths.
     """
     old_assigned_id = old_assignee.id if old_assignee else None
@@ -317,7 +324,9 @@ def notify_lead_assignment_change(*, client, old_assignee, new_assignee):
     if old_assigned_id == new_assigned_id:
         return
 
-    if new_assignee:
+    actor_id = actor.pk if actor is not None else None
+
+    if new_assignee and new_assignee.pk != actor_id:
         try:
             NotificationService.send_notification(
                 user=new_assignee,
@@ -330,7 +339,7 @@ def notify_lead_assignment_change(*, client, old_assignee, new_assignee):
         except Exception as e:
             logger.error(f"Error sending assignment notification: {e}")
 
-    if old_assignee and old_assignee != new_assignee:
+    if old_assignee and old_assignee != new_assignee and old_assignee.pk != actor_id:
         try:
             NotificationService.send_notification(
                 user=old_assignee,
@@ -384,26 +393,28 @@ def notify_deal_created(sender, instance, created, **kwargs):
         return
     
     try:
-        # Notify the employee who created the deal
+        actor = getattr(instance, "_notification_actor", None) or instance.started_by
+        actor_id = actor.pk if actor is not None else None
+        deal_title = f'{instance.client.name} - {instance.value or 0}'
+        payload = {
+            'deal_id': instance.id,
+            'deal_title': deal_title,
+        }
+
+        recipients = []
         if instance.employee:
+            recipients.append(instance.employee)
+        owner = getattr(instance.company, "owner", None) if instance.company else None
+        if owner and (not instance.employee or owner.pk != instance.employee.pk):
+            recipients.append(owner)
+
+        for recipient in recipients:
+            if actor_id is not None and recipient.pk == actor_id:
+                continue
             NotificationService.send_notification(
-                user=instance.employee,
+                user=recipient,
                 notification_type=NotificationType.DEAL_CREATED,
-                data={
-                    'deal_id': instance.id,
-                    'deal_title': f'{instance.client.name} - {instance.value or 0}',
-                }
-            )
-        
-        # Notify company owner (only if different from employee)
-        if instance.company and instance.company.owner and instance.company.owner != instance.employee:
-            NotificationService.send_notification(
-                user=instance.company.owner,
-                notification_type=NotificationType.DEAL_CREATED,
-                data={
-                    'deal_id': instance.id,
-                    'deal_title': f'{instance.client.name} - {instance.value or 0}',
-                }
+                data=payload,
             )
     except Exception as e:
         logger.error(f"Error sending deal created notification: {e}")
@@ -416,8 +427,13 @@ def notify_deal_closed(sender, instance, **kwargs):
         try:
             old_instance = Deal.objects.get(pk=instance.pk)
             if old_instance.stage != instance.stage and instance.stage == 'won':
-                # Deal closed/won
-                if instance.employee:
+                actor = (
+                    getattr(instance, "_notification_actor", None)
+                    or instance.closed_by
+                )
+                actor_id = actor.pk if actor is not None else None
+                # Deal closed/won — skip the acting user
+                if instance.employee and instance.employee.pk != actor_id:
                     try:
                         NotificationService.send_notification(
                             user=instance.employee,
@@ -430,8 +446,10 @@ def notify_deal_closed(sender, instance, **kwargs):
                         )
                     except Exception as e:
                         logger.error(f"Error sending deal closed notification: {e}")
+                # Prefer the acting user for owner team-activity; fall back to deal employee.
+                team_actor = actor or instance.employee
                 notify_owner_team_activity(
-                    instance.employee,
+                    team_actor,
                     instance.company,
                     action="deal_won",
                     deal_id=instance.id,
@@ -460,48 +478,21 @@ def schedule_welcome_sms_on_new_client(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=ClientEvent)
 def notify_owner_on_client_event(sender, instance, created, **kwargs):
-    """Notify owner on high-signal client events generated by user actions."""
+    """Notify owner on high-signal client events (status only — not field edits)."""
     if not created or not instance.created_by_id:
         return
 
-    if instance.event_type not in {"status_change", "assignment", "edit"}:
+    # Generic field edits (name/type/notes/etc.) flood owners; only status changes.
+    if instance.event_type != "status_change":
         return
 
-    lead_name = instance.client.name
-    lead_id = instance.client_id
-
-    if instance.event_type == "status_change":
-        notify_owner_team_activity(
-            instance.created_by,
-            instance.client.company,
-            action="status_change",
-            lead_id=lead_id,
-            lead_name=lead_name,
-            old_status=instance.old_value or "",
-            new_status=instance.new_value or "",
-        )
-    elif instance.event_type == "assignment":
-        notify_owner_team_activity(
-            instance.created_by,
-            instance.client.company,
-            action="assignment",
-            lead_id=lead_id,
-            lead_name=lead_name,
-            old_assignee=instance.old_value or "",
-            new_assignee=instance.new_value or "",
-        )
-    else:
-        detail = (instance.notes or "").strip()
-        if not detail and (instance.old_value or instance.new_value):
-            detail = " → ".join(
-                [p for p in (instance.old_value or "", instance.new_value or "") if p]
-            ).strip()
-        notify_owner_team_activity(
-            instance.created_by,
-            instance.client.company,
-            action="edit",
-            lead_id=lead_id,
-            lead_name=lead_name,
-            detail=detail or "",
-        )
+    notify_owner_team_activity(
+        instance.created_by,
+        instance.client.company,
+        action="status_change",
+        lead_id=instance.client_id,
+        lead_name=instance.client.name,
+        old_status=instance.old_value or "",
+        new_status=instance.new_value or "",
+    )
 

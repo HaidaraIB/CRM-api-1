@@ -52,6 +52,7 @@ def assign_unassigned_clients(company, employee, triggered_by):
             client=client,
             old_assignee=None,
             new_assignee=employee,
+            actor=triggered_by,
         )
     return len(unassigned), name
 
@@ -123,6 +124,7 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
                 client=client,
                 old_assignee=old_assignee,
                 new_assignee=target_user,
+                actor=triggered_by,
             )
 
     return len(changed)
@@ -165,6 +167,7 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
 
         client.assigned_to = employee
         client.assigned_at = now
+        client._notification_actor = triggered_by
         client.save(update_fields=["assigned_to", "assigned_at"])
 
         if event_notes is None:

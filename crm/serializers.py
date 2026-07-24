@@ -681,6 +681,9 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         # Update client fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+        # Stash actor for pre_save signals so the acting user is not self-notified.
+        if user is not None:
+            instance._notification_actor = user
         instance.save()
 
         # Create event logs
@@ -890,16 +893,30 @@ class DealSerializer(CamelToSnakeMixin, serializers.ModelSerializer):
     def create(self, validated_data):
         """Create deal and ensure started_by and closed_by are set"""
         # If started_by is not provided, set it to the current user
+        request = self.context.get("request")
+        user = request.user if request else None
         if (
             "started_by" not in validated_data
             or validated_data.get("started_by") is None
         ):
-            validated_data["started_by"] = self.context["request"].user
+            if user is not None:
+                validated_data["started_by"] = user
 
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        """Update deal"""
+        """Update deal; stash actor so signals can skip self-notifications."""
+        request = self.context.get("request")
+        user = request.user if request else None
+        if user is not None:
+            instance._notification_actor = user
+        if (
+            validated_data.get("stage") == "won"
+            and instance.stage != "won"
+            and not validated_data.get("closed_by")
+            and user is not None
+        ):
+            validated_data["closed_by"] = user
         return super().update(instance, validated_data)
 
 
