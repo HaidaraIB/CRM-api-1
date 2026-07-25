@@ -1023,6 +1023,9 @@ def tiktok_leadgen_webhook(request):
                 'payload_fingerprint': payload_fingerprint,
             },
         )
+        from integrations.services.inbound_lead import notify_owner_new_lead
+
+        notify_owner_new_lead(company, client)
         logger.info("TikTok Lead Gen: created client id=%s for company_id=%s", client.id, company_id)
     except Exception as e:
         logger.exception("TikTok Lead Gen webhook: failed to create client: %s", e)
@@ -1366,6 +1369,10 @@ def meta_webhook(request):
                                     client.id,
                                     capi_err,
                                 )
+
+                            from integrations.services.inbound_lead import notify_owner_new_lead
+
+                            notify_owner_new_lead(account.company, client)
                             
                             logger.info(f"Successfully created client from Meta lead: {client.id} - {client.name}")
                             

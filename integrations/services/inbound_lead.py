@@ -86,7 +86,8 @@ def _default_lead_status_id(company) -> int | None:
     return get_default_lead_status_id(company)
 
 
-def _notify_owner_new_lead(company, client) -> None:
+def notify_owner_new_lead(company, client) -> None:
+    """Notify company owner that a new lead arrived (Lead API / Meta / TikTok)."""
     owner = getattr(company, "owner", None)
     if not owner or not client:
         return
@@ -116,7 +117,7 @@ def _notify_owner_new_lead(company, client) -> None:
             sender_role=None,
         )
     except Exception:
-        logger.exception("Lead API: failed to notify owner for client_id=%s", client.id)
+        logger.exception("Failed to notify owner of new lead for client_id=%s", client.id)
 
 
 def create_inbound_lead(*, company, account: IntegrationAccount, payload: dict[str, Any]) -> tuple[dict, bool]:
@@ -240,7 +241,7 @@ def create_inbound_lead(*, company, account: IntegrationAccount, payload: dict[s
         },
     )
 
-    _notify_owner_new_lead(company, client)
+    notify_owner_new_lead(company, client)
 
     return (
         {

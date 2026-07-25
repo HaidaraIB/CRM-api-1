@@ -293,6 +293,7 @@ class ClientTaskAdmin(admin.ModelAdmin):
         "client",
         "stage",
         "reminder_date",
+        "reminder_completed_at",
         "created_by",
         "created_at",
         "updated_at",
@@ -310,7 +311,7 @@ class ClientTaskAdmin(admin.ModelAdmin):
         "created_by__username",
     ]
     ordering = ["-created_at"]
-    readonly_fields = ["created_at", "updated_at"]
+    readonly_fields = ["created_at", "updated_at", "reminder_completed_at"]
 
     fieldsets = (
         (
@@ -321,6 +322,7 @@ class ClientTaskAdmin(admin.ModelAdmin):
                     "stage",
                     "notes",
                     "reminder_date",
+                    "reminder_completed_at",
                     "created_by",
                 )
             },
@@ -359,13 +361,14 @@ class ClientCallAdmin(admin.ModelAdmin):
         "call_method",
         "call_datetime",
         "follow_up_date",
+        "follow_up_completed_at",
         "created_by",
         "created_at",
     ]
     list_filter = ["call_method", "created_at", "created_by"]
     search_fields = ["client__name", "notes"]
     ordering = ["-created_at"]
-    readonly_fields = ["created_at", "updated_at"]
+    readonly_fields = ["created_at", "updated_at", "follow_up_completed_at"]
     raw_id_fields = ["client", "call_method", "created_by"]
 
 

@@ -1086,12 +1086,13 @@ class ClientTaskSerializer(serializers.ModelSerializer):
             "stage_name",
             "notes",
             "reminder_date",
+            "reminder_completed_at",
             "created_by",
             "created_by_username",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "reminder_completed_at", "created_at", "updated_at"]
 
     def validate_stage(self, value):
         """Ensure stage belongs to the same company as the client"""
@@ -1136,6 +1137,7 @@ class ClientTaskListSerializer(serializers.ModelSerializer):
             "stage_name",
             "notes",
             "reminder_date",
+            "reminder_completed_at",
             "created_by",
             "created_by_username",
             "created_at",
@@ -1173,12 +1175,13 @@ class ClientCallSerializer(serializers.ModelSerializer):
             "notes",
             "call_datetime",
             "follow_up_date",
+            "follow_up_completed_at",
             "created_by",
             "created_by_username",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "follow_up_completed_at", "created_at", "updated_at"]
 
     def _pbx_record(self, obj):
         return getattr(obj, "pbx_call_record", None)
@@ -1544,6 +1547,7 @@ class ClientCallListSerializer(serializers.ModelSerializer):
             "notes",
             "call_datetime",
             "follow_up_date",
+            "follow_up_completed_at",
             "created_by",
             "created_by_username",
             "created_at",

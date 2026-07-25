@@ -589,6 +589,11 @@ class ClientTask(models.Model):
     )
     notes = models.TextField(blank=True, null=True)
     reminder_date = models.DateTimeField(blank=True, null=True)
+    reminder_completed_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When this reminder was marked done / superseded by a newer contact",
+    )
     created_by = models.ForeignKey(
         "accounts.User",
         on_delete=models.SET_NULL,
@@ -646,6 +651,11 @@ class ClientCall(models.Model):
     notes = models.TextField(blank=True, null=True)
     call_datetime = models.DateTimeField(blank=True, null=True, help_text="Date and time when the call happened")
     follow_up_date = models.DateTimeField(blank=True, null=True, help_text="Next call date or follow up date")
+    follow_up_completed_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When this follow-up was marked done / superseded by a newer call",
+    )
     created_by = models.ForeignKey(
         "accounts.User",
         on_delete=models.SET_NULL,
@@ -667,6 +677,35 @@ class ClientCall(models.Model):
     def __str__(self):
         call_method_name = self.call_method.name if self.call_method else "No Method"
         return f"{self.client.name} - {call_method_name}"
+
+
+def complete_open_contact_items_for_client(client_id, *, exclude_call_id=None, when=None):
+    """
+    Mark open follow-ups/reminders due today or overdue as completed for a client.
+
+    Used after logging a new call so calendar/Todos work queues hide contacted leads.
+    """
+    from django.utils import timezone
+
+    now = when or timezone.now()
+    today = timezone.localdate()
+
+    call_qs = ClientCall.objects.filter(
+        client_id=client_id,
+        follow_up_date__isnull=False,
+        follow_up_completed_at__isnull=True,
+        follow_up_date__date__lte=today,
+    )
+    if exclude_call_id is not None:
+        call_qs = call_qs.exclude(pk=exclude_call_id)
+    call_qs.update(follow_up_completed_at=now)
+
+    ClientTask.objects.filter(
+        client_id=client_id,
+        reminder_date__isnull=False,
+        reminder_completed_at__isnull=True,
+        reminder_date__date__lte=today,
+    ).update(reminder_completed_at=now)
 
 
 class ClientVisit(models.Model):

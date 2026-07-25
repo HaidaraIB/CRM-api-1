@@ -155,11 +155,18 @@ def update_last_contacted_from_task(sender, instance, created, **kwargs):
 @receiver(post_save, sender=ClientCall)
 def update_last_contacted_from_call(sender, instance, created, **kwargs):
     """
-    Update client's last_contacted_at when a new ClientCall is created
+    Update client's last_contacted_at when a new ClientCall is created.
+    Also complete open follow-ups/reminders due today or overdue so calendar queues update.
     """
     if created and instance.client:
         # Use update to avoid triggering signals again
         Client.objects.filter(pk=instance.client.pk).update(last_contacted_at=timezone.now())
+        from .models import complete_open_contact_items_for_client
+
+        complete_open_contact_items_for_client(
+            instance.client_id,
+            exclude_call_id=instance.pk,
+        )
         if instance.created_by_id:
             notify_owner_team_activity(
                 instance.created_by,

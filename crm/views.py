@@ -601,18 +601,38 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
         )
 
         if user.is_admin() or user.is_reception():
-            return queryset.filter(client__company=user.company)
+            queryset = queryset.filter(client__company=user.company)
+        elif user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
+            queryset = queryset.filter(client__company=user.company)
+        elif user.is_assigned_clinical_staff():
+            queryset = queryset.filter(client__assigned_to=user)
+        else:
+            queryset = queryset.none()
 
-        if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
-            return queryset.filter(client__company=user.company)
+        client_id = clean_int_query_param(self.request, "client")
+        if client_id is not None:
+            queryset = queryset.filter(client_id=client_id)
 
-        if user.is_assigned_clinical_staff():
-            return queryset.filter(client__assigned_to=user)
-
-        return queryset.none()
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="complete-reminder")
+    def complete_reminder(self, request, pk=None):
+        """Mark this client task reminder as done so it leaves calendar/Todos queues."""
+        task = self.get_object()
+        if not task.reminder_date:
+            return error_response(
+                "This task has no reminder to complete.",
+                code="no_reminder",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if task.reminder_completed_at is None:
+            task.reminder_completed_at = timezone.now()
+            task.save(update_fields=["reminder_completed_at", "updated_at"])
+        serializer = self.get_serializer(task)
+        return Response(serializer.data)
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -780,6 +800,22 @@ class ClientCallViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="complete-follow-up")
+    def complete_follow_up(self, request, pk=None):
+        """Mark this call follow-up as done so it leaves calendar/Todos queues."""
+        call = self.get_object()
+        if not call.follow_up_date:
+            return error_response(
+                "This call has no follow-up to complete.",
+                code="no_follow_up",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if call.follow_up_completed_at is None:
+            call.follow_up_completed_at = timezone.now()
+            call.save(update_fields=["follow_up_completed_at", "updated_at"])
+        serializer = self.get_serializer(call)
+        return Response(serializer.data)
 
     def get_serializer_class(self):
         if self.action == "list":
