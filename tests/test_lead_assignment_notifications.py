@@ -479,6 +479,48 @@ def test_soft_delete_single_notification(api_client, employee_user, subscription
 
 
 @pytest.mark.django_db
+def test_delete_all_notifications_and_by_type(api_client, employee_user, subscription):
+    lead_n = Notification.objects.create(
+        user=employee_user,
+        type=NotificationType.LEAD_ASSIGNED,
+        title="Lead",
+        body="x",
+        data={},
+    )
+    pbx_a = Notification.objects.create(
+        user=employee_user,
+        type=NotificationType.PBX_INCOMING_CALL,
+        title="Call",
+        body="Incoming call from 100",
+        data={"phone": "100"},
+    )
+    pbx_b = Notification.objects.create(
+        user=employee_user,
+        type=NotificationType.PBX_CALL_MISSED,
+        title="Missed",
+        body="Missed call from 100",
+        data={"phone": "100"},
+    )
+    api_client.force_authenticate(user=employee_user)
+
+    typed = api_client.delete(
+        "/api/v1/notifications/delete_all/?type=pbx_incoming_call,pbx_call_missed"
+    )
+    assert typed.status_code == 200, getattr(typed, "data", typed.content)
+    pbx_a.refresh_from_db()
+    pbx_b.refresh_from_db()
+    lead_n.refresh_from_db()
+    assert pbx_a.deleted_at is not None
+    assert pbx_b.deleted_at is not None
+    assert lead_n.deleted_at is None
+
+    wiped = api_client.delete("/api/v1/notifications/delete_all/")
+    assert wiped.status_code == 200, getattr(wiped, "data", wiped.content)
+    lead_n.refresh_from_db()
+    assert lead_n.deleted_at is not None
+
+
+@pytest.mark.django_db
 def test_list_api_returns_lead_notifications_not_hidden_by_tenant_chat_exclude(
     api_client, employee_user, subscription, company, lead_statuses,
 ):

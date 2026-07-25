@@ -23,7 +23,7 @@ from integrations.services.phone_match import find_client_by_phone
 from integrations.services.pbx_recording_service import apply_recording_path_from_cdr
 from integrations.services.zycoo_parser import parse_zycoo_payload
 from integrations.services.softphone_push import send_softphone_incoming_push
-from notifications.models import NotificationType
+from notifications.models import Notification, NotificationType
 from notifications.services import NotificationService
 from settings.models import CallMethod
 
@@ -136,12 +136,56 @@ def _screen_pop_users(client, agent):
     return users
 
 
+def _users_without_pbx_notification(
+    users,
+    notification_type: str,
+    record: PbxCallRecord,
+):
+    """Skip recipients who already got a screen-pop/missed notice for this call."""
+    if not users:
+        return []
+    user_ids = [u.id for u in users]
+    already = set(
+        Notification.objects.filter(
+            user_id__in=user_ids,
+            type=notification_type,
+            data__call_id=record.id,
+        ).values_list("user_id", flat=True)
+    )
+    if record.uniqueid:
+        already |= set(
+            Notification.objects.filter(
+                user_id__in=user_ids,
+                type=notification_type,
+                data__pbx_uniqueid=record.uniqueid,
+            ).values_list("user_id", flat=True)
+        )
+    return [u for u in users if u.id not in already]
+
+
+def _soft_delete_unread_pbx_incoming(users) -> int:
+    """Keep the inbox from filling with ringing spam — only the latest pop matters."""
+    if not users:
+        return 0
+    return Notification.objects.filter(
+        user_id__in=[u.id for u in users],
+        type=NotificationType.PBX_INCOMING_CALL,
+        read=False,
+        deleted_at__isnull=True,
+    ).update(deleted_at=timezone.now())
+
+
 def _send_screen_pop(settings: PbxSettings, client, phone: str, record: PbxCallRecord, agent):
     if not settings.screen_pop_enabled:
         return
-    users = _screen_pop_users(client, agent)
+    users = _users_without_pbx_notification(
+        _screen_pop_users(client, agent),
+        NotificationType.PBX_INCOMING_CALL,
+        record,
+    )
     if not users:
         return
+    _soft_delete_unread_pbx_incoming(users)
     data = {
         "lead_id": client.id if client else None,
         "client_id": client.id if client else None,
@@ -165,7 +209,11 @@ def _send_screen_pop(settings: PbxSettings, client, phone: str, record: PbxCallR
 
 
 def _send_missed_call(settings: PbxSettings, client, phone: str, record: PbxCallRecord, agent):
-    users = _screen_pop_users(client, agent)
+    users = _users_without_pbx_notification(
+        _screen_pop_users(client, agent),
+        NotificationType.PBX_CALL_MISSED,
+        record,
+    )
     if not users:
         return
     data = {
@@ -173,6 +221,7 @@ def _send_missed_call(settings: PbxSettings, client, phone: str, record: PbxCall
         "client_id": client.id if client else None,
         "phone": phone,
         "call_id": record.id,
+        "pbx_uniqueid": record.uniqueid,
     }
     NotificationService.send_notification_to_multiple(
         users,
@@ -358,12 +407,15 @@ def _apply_pbx_side_effects(
     client,
     agent,
     external_phone: str,
+    created: bool,
 ) -> Optional[ClientCall]:
     event_type = parsed["event_type"]
 
     if event_type == PbxEventType.RINGING and parsed["direction"] == PbxCallDirection.INBOUND:
-        _send_screen_pop(settings, client, external_phone, record, agent)
-        if settings.softphone_enabled and agent:
+        # Retries of the same RINGING row must not spam screen-pops / softphone pushes.
+        if created:
+            _send_screen_pop(settings, client, external_phone, record, agent)
+        if created and settings.softphone_enabled and agent:
             try:
                 mapping = UserPbxExtension.objects.get(company=settings.company, user=agent)
             except UserPbxExtension.DoesNotExist:
@@ -394,9 +446,12 @@ def _apply_pbx_side_effects(
                     agent.id,
                     push_ok,
                 )
-    elif event_type == PbxEventType.MISSED or (
-        event_type == PbxEventType.HANGUP
-        and record.disposition in (PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY)
+    elif created and (
+        event_type == PbxEventType.MISSED
+        or (
+            event_type == PbxEventType.HANGUP
+            and record.disposition in (PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY)
+        )
     ):
         _send_missed_call(settings, client, external_phone, record, agent)
 
@@ -455,6 +510,7 @@ def process_pbx_payload(
         client=client,
         agent=agent,
         external_phone=external_phone,
+        created=created,
     )
 
     if parsed.get("recording_path"):

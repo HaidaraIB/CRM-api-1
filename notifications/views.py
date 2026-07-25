@@ -124,6 +124,40 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             data={"count": count},
         )
 
+    @action(detail=False, methods=['delete'], url_path='delete_all')
+    def delete_all(self, request):
+        """
+        Soft-delete all notifications for the current user.
+
+        Optional query/body ``type`` limits deletion to that notification type
+        (e.g. ``pbx_incoming_call``). Comma-separated types are allowed.
+        """
+        qs = exclude_tenant_chat_push_notifications(
+            Notification.objects.filter(
+                user=request.user,
+                deleted_at__isnull=True,
+            )
+        )
+        raw_type = request.query_params.get('type')
+        if raw_type is None and isinstance(request.data, dict):
+            raw_type = request.data.get('type')
+        if raw_type:
+            types = [t.strip() for t in str(raw_type).split(',') if t.strip()]
+            valid = {choice[0] for choice in NotificationType.choices}
+            types = [t for t in types if t in valid]
+            if not types:
+                return error_response(
+                    "Invalid notification type",
+                    code="invalid_notification_type",
+                )
+            qs = qs.filter(type__in=types)
+
+        count = qs.update(deleted_at=timezone.now())
+        return success_response(
+            message=f"{count} notifications deleted",
+            data={"count": count},
+        )
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
