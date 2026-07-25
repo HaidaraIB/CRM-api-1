@@ -151,8 +151,10 @@ def _send_screen_pop(settings: PbxSettings, client, phone: str, record: PbxCallR
         "pbx_uniqueid": record.uniqueid,
         "open_lead": bool(client),
     }
-    title = client.name if client else phone
-    body = phone if client else f"Incoming call from {phone}"
+    # Known lead: show client name + phone. Unknown: let NotificationService
+    # translate title/body per recipient language (phone is in data).
+    title = client.name if client else None
+    body = phone if client else None
     NotificationService.send_notification_to_multiple(
         users,
         NotificationType.PBX_INCOMING_CALL,
