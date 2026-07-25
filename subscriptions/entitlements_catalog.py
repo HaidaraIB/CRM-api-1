@@ -17,6 +17,7 @@ FEATURE_KEYS = (
     "integration_otpiq",
     "integration_openai",
     "integration_api",
+    "integration_mujeb",
     "integration_pbx",
 )
 
@@ -46,6 +47,7 @@ DEFAULT_FEATURES = {
     "integration_otpiq": True,
     "integration_openai": True,
     "integration_api": True,
+    "integration_mujeb": True,
     "integration_pbx": True,
 }
 

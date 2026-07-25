@@ -208,6 +208,7 @@ class Client(models.Model):
             ('whatsapp', 'WhatsApp'),
             ('tiktok', 'TikTok'),
             ('api', 'API / Custom Form'),
+            ('mujeb', 'Mujeb'),
             ('manual', 'Manual'),
             ('other', 'Other'),
         ],

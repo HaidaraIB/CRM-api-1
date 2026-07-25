@@ -22,6 +22,14 @@ Keys are created in the CRM under **Integrations → Lead API**. The full secret
 
 Do not send the global `X-API-Key` (mobile/web/admin) on this endpoint.
 
+## Related: Mujeb mini apps
+
+For chat/AI flows on Mujeb, use the dedicated endpoint and branded source instead of this one:
+
+- Endpoint: `POST /api/v1/integrations/leads/mujeb/`
+- Docs: [MUJEB_INTEGRATION.md](./MUJEB_INTEGRATION.md)
+- Same `crm_lk_…` keys; leads appear with `source=mujeb`
+
 ## Request body
 
 | Field | Required | Description |

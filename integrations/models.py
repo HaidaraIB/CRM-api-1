@@ -12,9 +12,7 @@ class IntegrationPlatform(models.TextChoices):
     TIKTOK = 'tiktok', 'TikTok'
     WHATSAPP = 'whatsapp', 'WhatsApp Business'
     API = 'api', 'Lead API / Custom Form'
-    # يمكن إضافة المزيد لاحقاً
-    # GOOGLE_ADS = 'google_ads', 'Google Ads'
-    # LINKEDIN = 'linkedin', 'LinkedIn'
+    MUJEB = 'mujeb', 'Mujeb'
 
 
 class IntegrationAccount(models.Model):

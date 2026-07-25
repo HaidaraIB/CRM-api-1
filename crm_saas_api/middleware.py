@@ -34,6 +34,7 @@ MAINTENANCE_WHITELIST_PREFIXES = [
     "/api/integrations/webhooks/",
     "/api/integrations/pbx/connector/",
     "/api/integrations/leads/inbound/",
+    "/api/integrations/leads/mujeb/",
 ]
 
 
@@ -107,6 +108,7 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         "/api/integrations/webhooks/",
         "/api/integrations/pbx/connector/",
         "/api/integrations/leads/inbound/",
+        "/api/integrations/leads/mujeb/",
     ]
 
     def process_request(self, request):

@@ -1,5 +1,5 @@
 """
-Create CRM leads from external custom forms (Lead API).
+Create CRM leads from external custom forms (Lead API) and Mujeb mini apps.
 """
 from __future__ import annotations
 
@@ -18,10 +18,21 @@ from settings.models import SystemSettings
 logger = logging.getLogger(__name__)
 
 LEAD_API_PLATFORM = "api"
+MUJEB_PLATFORM = "mujeb"
+
+_SOURCE_LABELS = {
+    "api": "Custom Lead API",
+    "mujeb": "Mujeb",
+}
+
+_LOG_ACTIONS = {
+    "api": "api_lead_received",
+    "mujeb": "mujeb_lead_received",
+}
 
 
-def integration_gate(company) -> dict[str, Any]:
-    plan_gate = get_plan_integration_access(company, LEAD_API_PLATFORM)
+def integration_gate(company, platform: str = LEAD_API_PLATFORM) -> dict[str, Any]:
+    plan_gate = get_plan_integration_access(company, platform)
     if not plan_gate["enabled"]:
         return {
             "enabled": False,
@@ -31,17 +42,41 @@ def integration_gate(company) -> dict[str, Any]:
     return get_effective_integration_policy(
         SystemSettings.get_settings().integration_policies or {},
         company_id=company.id,
-        platform=LEAD_API_PLATFORM,
+        platform=platform,
     )
 
 
 def get_or_create_lead_api_account(company) -> IntegrationAccount:
-    account, _ = IntegrationAccount.objects.get_or_create(
+    return _get_or_create_inbound_account(
         company=company,
         platform=IntegrationPlatform.API,
         external_account_id=f"lead_api_{company.id}",
+        name="Custom Lead API",
+    )
+
+
+def get_or_create_mujeb_account(company) -> IntegrationAccount:
+    return _get_or_create_inbound_account(
+        company=company,
+        platform=IntegrationPlatform.MUJEB,
+        external_account_id=f"mujeb_{company.id}",
+        name="Mujeb",
+    )
+
+
+def _get_or_create_inbound_account(
+    *,
+    company,
+    platform: str,
+    external_account_id: str,
+    name: str,
+) -> IntegrationAccount:
+    account, _ = IntegrationAccount.objects.get_or_create(
+        company=company,
+        platform=platform,
+        external_account_id=external_account_id,
         defaults={
-            "name": "Custom Lead API",
+            "name": name,
             "status": "connected",
         },
     )
@@ -87,7 +122,7 @@ def _default_lead_status_id(company) -> int | None:
 
 
 def notify_owner_new_lead(company, client) -> None:
-    """Notify company owner that a new lead arrived (Lead API / Meta / TikTok)."""
+    """Notify company owner that a new lead arrived (Lead API / Meta / TikTok / Mujeb)."""
     owner = getattr(company, "owner", None)
     if not owner or not client:
         return
@@ -120,13 +155,24 @@ def notify_owner_new_lead(company, client) -> None:
         logger.exception("Failed to notify owner of new lead for client_id=%s", client.id)
 
 
-def create_inbound_lead(*, company, account: IntegrationAccount, payload: dict[str, Any]) -> tuple[dict, bool]:
+def create_inbound_lead(
+    *,
+    company,
+    account: IntegrationAccount,
+    payload: dict[str, Any],
+    source: str = "api",
+    platform_gate: str = LEAD_API_PLATFORM,
+) -> tuple[dict, bool]:
     """
     Create a Client from validated payload.
     Returns (response_data, created) where created is False for idempotent duplicate.
     """
     from crm.models import Client, ClientEvent, ClientPhoneNumber
     from subscriptions.entitlements import require_quota
+
+    source_label = _SOURCE_LABELS.get(source, "Custom Lead API")
+    log_action = _LOG_ACTIONS.get(source, "api_lead_received")
+    default_name = "Mujeb Lead" if source == "mujeb" else "API Lead"
 
     external_id = (payload.get("external_id") or "").strip() or None
     if external_id:
@@ -142,12 +188,12 @@ def create_inbound_lead(*, company, account: IntegrationAccount, payload: dict[s
                 False,
             )
 
-    gate = integration_gate(company)
+    gate = integration_gate(company, platform_gate)
     if not gate["enabled"]:
         raise DRFValidationError(
             detail={
                 "code": "integration_disabled",
-                "message": gate.get("message") or "Lead API is disabled for this company.",
+                "message": gate.get("message") or f"{source_label} is disabled for this company.",
             },
             code=403,
         )
@@ -165,7 +211,7 @@ def create_inbound_lead(*, company, account: IntegrationAccount, payload: dict[s
     except DRFValidationError:
         raise
 
-    name = (payload.get("name") or "").strip() or "API Lead"
+    name = (payload.get("name") or "").strip() or default_name
     phone = (payload.get("phone") or "").strip() or None
     priority = payload.get("priority") or "medium"
     lead_type = payload.get("type") or "fresh"
@@ -185,7 +231,7 @@ def create_inbound_lead(*, company, account: IntegrationAccount, payload: dict[s
             priority=priority,
             type=lead_type,
             company=company,
-            source="api",
+            source=source,
             integration_account=account,
             external_lead_id=external_id,
             phone_number=phone,
@@ -218,19 +264,19 @@ def create_inbound_lead(*, company, account: IntegrationAccount, payload: dict[s
             is_primary=True,
         )
 
-    event_notes = "Lead from Custom Lead API"
+    event_notes = f"Lead from {source_label}"
     if payload.get("email"):
         event_notes += f". Email: {payload['email']}"
     ClientEvent.objects.create(
         client=client,
         event_type="created",
-        new_value="Custom Lead API",
+        new_value=source_label,
         notes=event_notes,
     )
 
     IntegrationLog.objects.create(
         account=account,
-        action="api_lead_received",
+        action=log_action,
         status="success",
         message=f"Lead created: {name}",
         response_data={
