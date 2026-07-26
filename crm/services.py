@@ -5,7 +5,6 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from crm.availability import user_accepts_new_assignments
-from crm.assignment import get_auto_assign_employee
 from .models import Client, ClientEvent
 
 
@@ -132,11 +131,14 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
 
 def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_notes=None):
     """
-    Assign each client to the least-busy active employee, one pick per lead.
+    Assign each client via the company auto-assign algorithm (least-busy / RR).
 
-    After each assignment the lead is saved so the next pick sees updated workload.
-    Used for bulk unassigned assignment, deactivation redistribution, etc.
+    Bulk-safe: plans all picks in memory, then ``bulk_update`` + ``bulk_create``
+    events. Skips per-lead save signals / FCM (those time out at hundreds of leads).
+    Single-lead assignment paths are unchanged and still notify normally.
     """
+    from crm.assignment import plan_bulk_auto_assignments
+
     clients = list(clients)
     if not clients:
         return {
@@ -152,9 +154,11 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
     assignments = []
     assignee_names = set()
     events = []
+    changed = []
 
-    for client in clients:
-        employee = get_auto_assign_employee(company)
+    picks = plan_bulk_auto_assignments(company, clients)
+
+    for client, employee in zip(clients, picks):
         if not employee:
             skipped_count += 1
             continue
@@ -167,8 +171,7 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
 
         client.assigned_to = employee
         client.assigned_at = now
-        client._notification_actor = triggered_by
-        client.save(update_fields=["assigned_to", "assigned_at"])
+        changed.append(client)
 
         if event_notes is None:
             notes = f"Reassigned after employee deactivation to {new_name}"
@@ -192,6 +195,8 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
         )
         assigned_count += 1
 
+    if changed:
+        Client.objects.bulk_update(changed, ["assigned_to", "assigned_at"])
     if events:
         ClientEvent.objects.bulk_create(events)
 

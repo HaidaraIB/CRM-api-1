@@ -159,3 +159,95 @@ def get_least_busy_employee(company):
     min_score = min(employee.workload_score for employee in available)
     tied = [employee for employee in available if employee.workload_score == min_score]
     return _pick_round_robin_among_tied(company, tied)
+
+
+def _workload_weight_for_client(client) -> float:
+    """Match annotated workload: active/follow-up/null = 1, inactive = 0.5, closed = 0."""
+    status = getattr(client, "status", None)
+    if status is None:
+        return 1.0
+    category = getattr(status, "category", None)
+    if category in _ACTIVE_WORKLOAD_CATEGORIES:
+        return 1.0
+    if category == _INACTIVE_WORKLOAD_CATEGORY:
+        return _INACTIVE_WORKLOAD_WEIGHT
+    return 0.0
+
+
+def _next_among_tied(tied_employees, last_id):
+    """In-memory fair rotation among tied employees (same rules as DB pointer)."""
+    tied_employees = sorted(tied_employees, key=lambda employee: employee.id)
+    if len(tied_employees) == 1:
+        return tied_employees[0]
+    employee_ids = [employee.id for employee in tied_employees]
+    if last_id in employee_ids:
+        next_index = (employee_ids.index(last_id) + 1) % len(employee_ids)
+    else:
+        next_index = 0
+    return tied_employees[next_index]
+
+
+def plan_bulk_auto_assignments(company, clients):
+    """
+    Plan assignees for many leads without per-lead DB workload queries or FCM.
+
+    Loads eligible employees once, picks in memory (updating workload / RR pointer
+    locally), then writes ``Company.last_auto_assigned_employee`` once.
+
+    Returns a list of ``User | None`` aligned with *clients* (None = skipped).
+    Single-lead paths should keep using ``get_auto_assign_employee``.
+    """
+    clients = list(clients)
+    if not company or not clients:
+        return [None] * len(clients)
+
+    algorithm = (
+        getattr(company, "auto_assign_algorithm", None)
+        or Company.AutoAssignAlgorithm.LEAST_BUSY
+    )
+    use_least_busy = algorithm != Company.AutoAssignAlgorithm.ROUND_ROBIN
+
+    if use_least_busy:
+        pool = list(_employees_with_workload_queryset(company))
+        scores = {
+            employee.id: float(getattr(employee, "workload_score", 0) or 0)
+            for employee in pool
+        }
+    else:
+        pool = list(_eligible_assignees_queryset(company))
+        scores = {employee.id: 0.0 for employee in pool}
+
+    available = [
+        employee for employee in pool if user_accepts_new_assignments(employee)
+    ]
+    if not available:
+        return [None] * len(clients)
+
+    by_id = {employee.id: employee for employee in available}
+    last_id = company.last_auto_assigned_employee_id
+    picks = []
+
+    for client in clients:
+        if use_least_busy:
+            min_score = min(scores[employee.id] for employee in available)
+            tied = [
+                employee
+                for employee in available
+                if scores[employee.id] == min_score
+            ]
+        else:
+            tied = available
+
+        selected = _next_among_tied(tied, last_id)
+        last_id = selected.id
+        scores[selected.id] = scores[selected.id] + _workload_weight_for_client(client)
+        picks.append(by_id[selected.id])
+
+    if picks and any(picks):
+        with transaction.atomic():
+            locked_company = Company.objects.select_for_update().get(pk=company.pk)
+            locked_company.last_auto_assigned_employee_id = last_id
+            locked_company.save(update_fields=["last_auto_assigned_employee"])
+            company.last_auto_assigned_employee_id = last_id
+
+    return picks

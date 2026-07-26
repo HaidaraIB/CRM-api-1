@@ -266,7 +266,9 @@ class ClientViewSet(viewsets.ModelViewSet):
             )
 
         unassigned_clients = list(
-            Client.objects.filter(company=company, assigned_to__isnull=True)
+            Client.objects.filter(
+                company=company, assigned_to__isnull=True
+            ).select_related("status")
         )
 
         if not unassigned_clients:

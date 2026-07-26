@@ -140,7 +140,7 @@ def deactivate_employee(*, actor: User, target: User, reassign_leads: bool) -> d
 
     assigned_leads = list(
         Client.objects.filter(company=company, assigned_to_id=target.id).select_related(
-            "assigned_to"
+            "assigned_to", "status"
         )
     )
     assigned_lead_count = len(assigned_leads)

@@ -94,6 +94,64 @@ class TestEmployeeDeactivation:
         lead.refresh_from_db()
         assert lead.assigned_to_id == second_employee.id
 
+    def test_deactivate_bulk_reassign_skips_per_lead_notifications(
+        self,
+        authenticated_admin,
+        employee_user,
+        second_employee,
+        company,
+        monkeypatch,
+    ):
+        """Large redistributions must not call NotificationService per lead (timeout risk)."""
+        from crm.models import ClientEvent
+        from notifications.services import NotificationService
+
+        for i in range(40):
+            Client.objects.create(
+                name=f"Bulk Lead {i}",
+                company=company,
+                priority="low",
+                type="cold",
+                assigned_to=employee_user,
+            )
+
+        calls = {"count": 0}
+
+        def _track(*args, **kwargs):
+            calls["count"] += 1
+            return False
+
+        monkeypatch.setattr(
+            NotificationService, "send_notification", staticmethod(_track)
+        )
+
+        response = authenticated_admin.post(
+            f"/api/v1/users/{employee_user.id}/deactivate/",
+            {"reassign_leads": True},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = api_body(response)
+        assert data["assigned_lead_count"] == 40
+        assert data["leads_remaining_on_user"] == 0
+        assert calls["count"] == 0
+
+        employee_user.refresh_from_db()
+        assert employee_user.is_active is False
+        assert (
+            Client.objects.filter(
+                company=company, assigned_to=second_employee
+            ).count()
+            == 40
+        )
+        assert (
+            ClientEvent.objects.filter(
+                event_type="assignment",
+                client__company=company,
+            ).count()
+            == 40
+        )
+
     def test_cannot_deactivate_self(self, authenticated_admin, admin_user):
         response = authenticated_admin.post(
             f"/api/v1/users/{admin_user.id}/deactivate/",

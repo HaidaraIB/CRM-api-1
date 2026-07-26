@@ -109,6 +109,34 @@ def test_get_least_busy_rotates_among_tied_workload(company):
 
 
 @pytest.mark.django_db
+def test_plan_bulk_auto_assignments_matches_sequential_least_busy(company):
+    """Bulk planner should spread leads like repeated get_least_busy_employee picks."""
+    from crm.assignment import plan_bulk_auto_assignments
+
+    employees = [
+        User.objects.create_user(
+            username=f"bulk_rr{i}",
+            email=f"bulk_rr{i}@test.com",
+            role="employee",
+            company=company,
+            is_active=True,
+        )
+        for i in range(3)
+    ]
+    clients = [
+        Client(name=f"planned {i}", company=company, priority="low", type="cold")
+        for i in range(6)
+    ]
+    planned = plan_bulk_auto_assignments(company, clients)
+    assert all(pick is not None for pick in planned)
+    assert len({pick.id for pick in planned}) >= 2
+    for employee in employees:
+        assert any(pick.id == employee.id for pick in planned)
+    company.refresh_from_db()
+    assert company.last_auto_assigned_employee_id == planned[-1].id
+
+
+@pytest.mark.django_db
 def test_integration_lead_respects_auto_assign_toggle(company):
     """Integration-linked leads follow company.auto_assign_enabled like any other new lead."""
     emp = User.objects.create_user(
