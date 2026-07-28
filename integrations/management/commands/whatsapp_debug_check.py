@@ -22,6 +22,16 @@ class Command(BaseCommand):
         self.stdout.write("Meta Developer -> WhatsApp -> Configuration:")
         self.stdout.write(f"  Callback URL: {api_base}{webhook_path}")
         self.stdout.write("  Subscribe webhook field: messages (includes delivery status updates)")
+        from integrations.services.whatsapp_coexistence import COEXISTENCE_WEBHOOK_FIELDS
+
+        self.stdout.write(
+            "  Coexistence (WhatsApp Business app onboarding) — also subscribe:"
+        )
+        for field in COEXISTENCE_WEBHOOK_FIELDS:
+            self.stdout.write(f"    - {field}")
+        self.stdout.write(
+            "  Manual step: App Dashboard → WhatsApp → Configuration → Webhook fields."
+        )
         self.stdout.write("")
         self.stdout.write(
             self.style.WARNING(

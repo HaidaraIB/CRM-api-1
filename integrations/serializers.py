@@ -186,6 +186,7 @@ class WhatsAppEmbeddedSignupCompleteSerializer(serializers.Serializer):
     waba_id = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
     phone_number_id = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
     business_id = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
+    signup_event = serializers.CharField(required=False, allow_blank=True, trim_whitespace=True)
 
 
 # --------------- Twilio SMS ---------------

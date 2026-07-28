@@ -31,6 +31,12 @@ from ..whatsapp_account_sync import (
     sync_whatsapp_accounts_from_integration,
     upsert_whatsapp_account_from_embedded_signup,
 )
+from ..services.whatsapp_coexistence import (
+    initiate_smb_app_data_sync,
+    is_coexistence_signup_event,
+    subscribe_waba_webhooks,
+    verify_coexistence_phone,
+)
 from ..serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -121,8 +127,9 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
     Persist OAuth access token, IntegrationAccount metadata, Meta pages, and WhatsAppAccount rows.
     Used by redirect oauth_callback and by WhatsApp Embedded Signup (FB.login) completion.
 
-    embedded_signup_session: optional dict with waba_id, phone_number_id, business_id from
-    Meta WA_EMBEDDED_SIGNUP postMessage (required for display-name-only / 555 numbers).
+    embedded_signup_session: optional dict with waba_id, phone_number_id, business_id,
+    signup_event from Meta WA_EMBEDDED_SIGNUP postMessage (required for display-name-only / 555 numbers).
+    Coexistence numbers must NOT be registered via Cloud API /register — they are already registered.
     """
     oauth_handler = get_oauth_handler(account.platform)
     account.set_access_token(token_data['access_token'])
@@ -152,6 +159,8 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
         waba_id = str(session.get('waba_id') or '').strip()
         phone_number_id = str(session.get('phone_number_id') or '').strip()
         business_id = str(session.get('business_id') or '').strip() or None
+        signup_event = str(session.get('signup_event') or '').strip()
+        coexistence = is_coexistence_signup_event(signup_event)
         if waba_id and phone_number_id:
             try:
                 upsert_whatsapp_account_from_embedded_signup(
@@ -167,6 +176,72 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
             sync_whatsapp_accounts_from_integration(account, token)
         except Exception as e:
             logger.warning("WhatsApp WABA/phone fetch failed: %s", e)
+
+        meta = dict(account.metadata or {})
+        if signup_event:
+            meta['signup_event'] = signup_event
+        if coexistence:
+            meta['coexistence'] = True
+            meta['onboarding_mode'] = 'whatsapp_business_app'
+        elif 'coexistence' not in meta:
+            meta['coexistence'] = False
+            meta['onboarding_mode'] = 'cloud_api'
+        account.metadata = meta
+
+        # Subscribe app to each WABA so webhooks (incl. coexistence fields) are delivered.
+        waba_ids = set()
+        if waba_id:
+            waba_ids.add(waba_id)
+        for wa in WhatsAppAccount.objects.filter(
+            company=account.company,
+            integration_account=account,
+            status='connected',
+        ):
+            if wa.waba_id:
+                waba_ids.add(str(wa.waba_id))
+        for wid in waba_ids:
+            subscribe_waba_webhooks(token, wid)
+
+        # Coexistence: start contacts + history sync within Meta's 24h window (do not /register).
+        if coexistence:
+            wa_rows = list(
+                WhatsAppAccount.objects.filter(
+                    company=account.company,
+                    integration_account=account,
+                    status='connected',
+                )
+            )
+            sync_results = []
+            for wa in wa_rows:
+                verify = verify_coexistence_phone(token, wa.phone_number_id)
+                if verify:
+                    meta = dict(account.metadata or {})
+                    meta['is_on_biz_app'] = verify.get('is_on_biz_app')
+                    meta['platform_type'] = verify.get('platform_type')
+                    account.metadata = meta
+                result = initiate_smb_app_data_sync(token, wa.phone_number_id)
+                sync_results.append(
+                    {
+                        'phone_number_id': wa.phone_number_id,
+                        'contacts_request_id': (result.get('contacts') or {}).get('request_id')
+                        if isinstance(result.get('contacts'), dict)
+                        else None,
+                        'history_request_id': (result.get('history') or {}).get('request_id')
+                        if isinstance(result.get('history'), dict)
+                        else None,
+                        'errors': result.get('errors') or [],
+                    }
+                )
+            meta = dict(account.metadata or {})
+            meta['coexistence_smb_sync'] = sync_results
+            account.metadata = meta
+            IntegrationLog.objects.create(
+                account=account,
+                action='whatsapp_coexistence_smb_sync',
+                status='success' if not any(r.get('errors') for r in sync_results) else 'error',
+                message='Initiated coexistence contacts/history sync',
+                response_data={'results': sync_results},
+            )
 
     account.save()
     IntegrationLog.objects.create(
@@ -460,7 +535,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         code = ser.validated_data['code']
         embedded_session = {
             k: ser.validated_data.get(k)
-            for k in ('waba_id', 'phone_number_id', 'business_id')
+            for k in ('waba_id', 'phone_number_id', 'business_id', 'signup_event')
             if (ser.validated_data.get(k) or '').strip()
         }
         oauth_handler = get_oauth_handler('whatsapp')
@@ -505,8 +580,14 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 error_details=str(e),
             )
             return error_response(str(e), code='bad_request')
+        account.refresh_from_db()
+        coexistence = bool((account.metadata or {}).get('coexistence'))
         return success_response(
-            data={'account_id': account.id, 'connected': True},
+            data={
+                'account_id': account.id,
+                'connected': True,
+                'coexistence': coexistence,
+            },
         )
 
     @action(detail=True, methods=['post'], url_path='whatsapp/sync-phone-numbers')
