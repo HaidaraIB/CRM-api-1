@@ -43,7 +43,9 @@ def normalize_paid_subscription_end_date(subscription: Subscription) -> bool:
     Align subscription.end_date with completed payment + paid plan when the DB was never
     updated by a gateway return (e.g. trial already active, polling check_payment only).
 
-    - First completed payment: same base_date rules as Stripe (now or future start_date).
+    - First completed payment: anchor to the payment timestamp (or a future start_date),
+      never to wall-clock ``now``. Using ``now`` on every check_payment poll rewrote
+      end_date to today+period and kept days_remaining stuck near 365/30.
     - Prior completed payments: do not change a future end_date (renewals handled by gateways);
       only extend when end_date is in the past (reactivation).
 
@@ -88,10 +90,12 @@ def normalize_paid_subscription_end_date(subscription: Subscription) -> bool:
             return False
         base_date = now
     else:
-        if subscription.start_date and subscription.start_date > now:
+        # Stable anchor: when they paid (not "today" on each status poll).
+        payment_at = latest.created_at or now
+        if subscription.start_date and subscription.start_date > payment_at:
             base_date = subscription.start_date
         else:
-            base_date = now
+            base_date = payment_at
 
     new_end = base_date + timedelta(days=delta_days)
     if subscription.end_date is None:

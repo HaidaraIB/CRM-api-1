@@ -101,6 +101,62 @@ class TestNormalizePaidSubscriptionEndDate:
         sub.refresh_from_db()
         assert sub.end_date == old_end
 
+    def test_first_payment_does_not_reset_end_date_to_today_plus_period(self, company, plan):
+        """Regression: polling check_payment must not push end_date forward every day."""
+        from subscriptions.models import (
+            Payment,
+            PaymentGateway,
+            PaymentGatewayStatus,
+            PaymentStatus,
+            Subscription,
+        )
+        from subscriptions.services.subscription_helpers import (
+            normalize_paid_subscription_end_date,
+        )
+
+        gw = PaymentGateway.objects.create(
+            name="Stripe Test Sticky End",
+            status=PaymentGatewayStatus.ACTIVE.value,
+            enabled=True,
+        )
+        now = timezone.now()
+        paid_at = now - timedelta(days=90)
+        correct_end = paid_at + timedelta(days=365)
+        # Simulate the old bug: end_date was rewritten to "today + 365".
+        corrupted_end = now + timedelta(days=365)
+        sub = Subscription.objects.create(
+            company=company,
+            plan=plan,
+            is_active=True,
+            end_date=corrupted_end,
+        )
+        # auto_now_add ignores create() kwargs; set period start via UPDATE.
+        Subscription.objects.filter(pk=sub.pk).update(
+            start_date=paid_at,
+            current_period_start=paid_at,
+        )
+        sub.refresh_from_db()
+        payment = Payment.objects.create(
+            subscription=sub,
+            amount=Decimal("499.99"),
+            currency="USD",
+            amount_usd=Decimal("499.99"),
+            payment_method=gw,
+            payment_status=PaymentStatus.COMPLETED.value,
+            tran_ref="cs_sticky_end",
+        )
+        Payment.objects.filter(pk=payment.pk).update(created_at=paid_at)
+        payment.refresh_from_db()
+        assert abs((payment.created_at - paid_at).total_seconds()) < 2
+
+        assert normalize_paid_subscription_end_date(sub) is True
+        sub.refresh_from_db()
+        assert abs((sub.end_date - correct_end).total_seconds()) < 120
+        # Second call must be a no-op (idempotent; does not keep sliding forward).
+        assert normalize_paid_subscription_end_date(sub) is False
+        sub.refresh_from_db()
+        assert abs((sub.end_date - correct_end).total_seconds()) < 120
+
     def test_check_payment_status_updates_end_date_for_paid_plan(self, company, plan, api_client):
         from subscriptions.models import (
             Payment,
