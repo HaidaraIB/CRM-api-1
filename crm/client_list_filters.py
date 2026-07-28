@@ -156,4 +156,82 @@ def apply_client_list_filters(queryset, request, *, exclude_status=False):
         if dt:
             queryset = queryset.filter(created_at__lte=dt)
 
+    source_values = _csv_values(params, "source")
+    if source_values:
+        queryset = _filter_multi_iexact(queryset, "source", source_values)
+
+    campaign_values = _csv_values(params, "campaign")
+    if campaign_values:
+        campaign_ids = []
+        include_none = False
+        for value in campaign_values:
+            if value.lower() in ("none", "null", "unassigned", "nocampaign"):
+                include_none = True
+            else:
+                try:
+                    campaign_ids.append(int(value))
+                except (TypeError, ValueError):
+                    pass
+        campaign_q = Q()
+        if campaign_ids:
+            campaign_q |= Q(campaign_id__in=campaign_ids)
+        if include_none:
+            campaign_q |= Q(campaign__isnull=True)
+        if campaign_q:
+            queryset = queryset.filter(campaign_q)
+
+    created_by_values = _csv_values(params, "created_by")
+    if created_by_values:
+        created_by_ids = []
+        include_none = False
+        for value in created_by_values:
+            if value.lower() in ("none", "null", "system", "unassigned"):
+                include_none = True
+            else:
+                try:
+                    created_by_ids.append(int(value))
+                except (TypeError, ValueError):
+                    pass
+        created_by_q = Q()
+        if created_by_ids:
+            created_by_q |= Q(created_by_id__in=created_by_ids)
+        if include_none:
+            created_by_q |= Q(created_by__isnull=True)
+        if created_by_q:
+            queryset = queryset.filter(created_by_q)
+
+    for param_key, field_name in (
+        ("interested_developer", "interested_developer_id"),
+        ("interested_project", "interested_project_id"),
+        ("interested_unit", "interested_unit_id"),
+    ):
+        values = _csv_values(params, param_key)
+        if not values:
+            continue
+        ids = []
+        for value in values:
+            try:
+                ids.append(int(value))
+            except (TypeError, ValueError):
+                pass
+        if ids:
+            queryset = queryset.filter(**{f"{field_name}__in": ids})
+
+    last_contacted_from = (params.get("last_contacted_at_from") or "").strip()
+    if last_contacted_from:
+        dt = parse_datetime(last_contacted_from) or (
+            timezone.make_aware(datetime.combine(parse_date(last_contacted_from), time.min))
+            if parse_date(last_contacted_from)
+            else None
+        )
+        if dt:
+            queryset = queryset.filter(last_contacted_at__gte=dt)
+
+    last_contacted_to = (params.get("last_contacted_at_to") or "").strip()
+    if last_contacted_to:
+        parsed_date = parse_date(last_contacted_to)
+        dt = parse_datetime(last_contacted_to) or (_end_of_day(parsed_date) if parsed_date else None)
+        if dt:
+            queryset = queryset.filter(last_contacted_at__lte=dt)
+
     return queryset

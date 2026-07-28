@@ -64,6 +64,10 @@ class ClientViewSet(viewsets.ModelViewSet):
         "status__name",
         "notes",
         "residence",
+        "lead_company_name",
+        "profession",
+        "source",
+        "campaign__name",
     ]
     ordering_fields = ["created_at", "name", "priority"]
     ordering = ["-created_at"]
