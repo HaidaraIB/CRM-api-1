@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db import transaction
 from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
@@ -962,6 +963,7 @@ class RegisterCompanySerializer(serializers.Serializer):
         
         return value
 
+    @transaction.atomic
     def create(self, validated_data):
         """Create company, owner user, and subscription"""
         validated_data.pop("phone_verification_token", None)

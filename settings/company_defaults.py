@@ -5,9 +5,13 @@ call methods, visit types), keyed by company.specialization.
 
 from __future__ import annotations
 
+import logging
+
 from django.db import transaction
+from django.db.utils import IntegrityError
 
 from companies.models import Company, Specialization
+from crm_saas_api.db_sequences import reset_pk_sequences
 
 from .lead_status_automation import VISITED_AUTOMATION_KEY
 from .models import (
@@ -19,6 +23,10 @@ from .models import (
     StatusCategory,
     VisitType,
 )
+
+logger = logging.getLogger(__name__)
+
+_SEED_MODELS = (Channel, LeadStage, LeadStatus, CallMethod, VisitType)
 
 
 def _ensure_single_default_channel(company) -> None:
@@ -426,93 +434,111 @@ def _mark_default_stage(company, name: str) -> None:
     LeadStage.objects.filter(company=company, name=name).update(is_default=True)
 
 
+def _seed_company_settings_rows(company: Company, spec: str) -> None:
+    for row in _channels_for_spec(spec):
+        Channel.objects.get_or_create(
+            company=company,
+            name=row["name"],
+            defaults={
+                "type": row["type"],
+                "priority": row["priority"],
+                "is_active": True,
+                "is_default": False,
+            },
+        )
+    _ensure_single_default_channel(company)
+
+    default_stage_name = _stages_for_spec(spec)[0]["name"]
+    for row in _stages_for_spec(spec):
+        LeadStage.objects.get_or_create(
+            company=company,
+            name=row["name"],
+            defaults={
+                "description": row["description"],
+                "color": row["color"],
+                "required": row["required"],
+                "auto_advance": row["auto_advance"],
+                "order": row["order"],
+                "is_active": True,
+                "is_default": row["name"] == default_stage_name,
+            },
+        )
+    _ensure_single_default_stage(company)
+    _mark_default_stage(company, default_stage_name)
+
+    for row in _statuses_for_spec(spec):
+        automation_key = row.get("automation_key")
+        defaults = {
+            "description": "",
+            "category": row["category"],
+            "color": row["color"],
+            "is_default": row["is_default"],
+            "is_hidden": row["is_hidden"],
+            "is_active": True,
+        }
+        if automation_key:
+            defaults["automation_key"] = automation_key
+        LeadStatus.objects.get_or_create(
+            company=company,
+            name=row["name"],
+            defaults=defaults,
+        )
+    _ensure_single_default_status(company)
+
+    for row in _call_methods_for_spec(spec):
+        CallMethod.objects.get_or_create(
+            company=company,
+            name=row["name"],
+            defaults={
+                "description": row["description"],
+                "color": row["color"],
+                "is_active": True,
+                "is_default": False,
+            },
+        )
+    _ensure_single_default_call_method(company)
+
+    for row in _visit_types_for_spec(spec):
+        VisitType.objects.get_or_create(
+            company=company,
+            name=row["name"],
+            defaults={
+                "description": row["description"],
+                "color": row["color"],
+                "is_active": True,
+                "is_default": False,
+            },
+        )
+    if spec in (
+        Specialization.REAL_ESTATE.value,
+        Specialization.SERVICES.value,
+    ):
+        _ensure_single_default_visit_type(company)
+
+
 def seed_company_settings(company: Company) -> None:
     """
     Create starter settings rows for this company if missing (idempotent).
     Safe to call multiple times (e.g. signal + migration + serializer safety net).
+
+    Retries once after resetting PK sequences when Postgres sequences are behind
+    MAX(id) (common after fixture / explicit-id inserts).
     """
     if not company or not company.pk:
         return
 
     spec = company.specialization or Specialization.REAL_ESTATE.value
 
-    with transaction.atomic():
-        for row in _channels_for_spec(spec):
-            Channel.objects.get_or_create(
-                company=company,
-                name=row["name"],
-                defaults={
-                    "type": row["type"],
-                    "priority": row["priority"],
-                    "is_active": True,
-                    "is_default": False,
-                },
-            )
-        _ensure_single_default_channel(company)
-
-        default_stage_name = _stages_for_spec(spec)[0]["name"]
-        for row in _stages_for_spec(spec):
-            LeadStage.objects.get_or_create(
-                company=company,
-                name=row["name"],
-                defaults={
-                    "description": row["description"],
-                    "color": row["color"],
-                    "required": row["required"],
-                    "auto_advance": row["auto_advance"],
-                    "order": row["order"],
-                    "is_active": True,
-                    "is_default": row["name"] == default_stage_name,
-                },
-            )
-        _ensure_single_default_stage(company)
-        _mark_default_stage(company, default_stage_name)
-
-        for row in _statuses_for_spec(spec):
-            automation_key = row.get("automation_key")
-            defaults = {
-                "description": "",
-                "category": row["category"],
-                "color": row["color"],
-                "is_default": row["is_default"],
-                "is_hidden": row["is_hidden"],
-                "is_active": True,
-            }
-            if automation_key:
-                defaults["automation_key"] = automation_key
-            LeadStatus.objects.get_or_create(
-                company=company,
-                name=row["name"],
-                defaults=defaults,
-            )
-        _ensure_single_default_status(company)
-
-        for row in _call_methods_for_spec(spec):
-            CallMethod.objects.get_or_create(
-                company=company,
-                name=row["name"],
-                defaults={
-                    "description": row["description"],
-                    "color": row["color"],
-                    "is_active": True,
-                    "is_default": False,
-                },
-            )
-        _ensure_single_default_call_method(company)
-
-        for row in _visit_types_for_spec(spec):
-            VisitType.objects.get_or_create(
-                company=company,
-                name=row["name"],
-                defaults={
-                    "description": row["description"],
-                    "color": row["color"],
-                    "is_active": True,
-                    "is_default": False,
-                },
-            )
-        if spec in (
-            Specialization.REAL_ESTATE.value,
-            Specialization.SERVICES.value,
-        ):
-            _ensure_single_default_visit_type(company)
+    try:
+        with transaction.atomic():
+            _seed_company_settings_rows(company, spec)
+    except IntegrityError:
+        logger.warning(
+            "Company settings seed hit IntegrityError for company_id=%s; "
+            "resetting PK sequences and retrying",
+            company.pk,
+            exc_info=True,
+        )
+        reset_pk_sequences(_SEED_MODELS)
+        with transaction.atomic():
+            _seed_company_settings_rows(company, spec)
