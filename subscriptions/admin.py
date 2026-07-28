@@ -167,6 +167,7 @@ class PaymentAdmin(admin.ModelAdmin):
         "billing_cycle",
         "payment_method",
         "payment_status",
+        "applied_at",
         "created_at",
         "updated_at",
         "tran_ref",
@@ -185,7 +186,7 @@ class PaymentAdmin(admin.ModelAdmin):
         "payment_status",
     ]
     ordering = ["-created_at"]
-    readonly_fields = ["created_at", "updated_at"]
+    readonly_fields = ["created_at", "updated_at", "applied_at"]
 
     fieldsets = (
         (
@@ -210,7 +211,7 @@ class PaymentAdmin(admin.ModelAdmin):
                 "description": "Plan and cycle selected at checkout (may differ until payment completes).",
             },
         ),
-        ("Timestamps", {"fields": ("created_at", "updated_at")}),
+        ("Timestamps", {"fields": ("created_at", "updated_at", "applied_at")}),
     )
 
 

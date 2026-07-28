@@ -1,15 +1,9 @@
 """Subscription domain helpers (single active subscription per company)."""
 import logging
-from datetime import timedelta
-
-from django.utils import timezone
 
 from ..models import Payment, PaymentStatus, Subscription
 
 logger = logging.getLogger(__name__)
-
-# Do not rewrite end_date when it already matches computed period within this tolerance.
-_END_DATE_MATCH_TOLERANCE = timedelta(days=2)
 
 
 def infer_billing_cycle_from_amount_usd(plan, amount_usd: float) -> str:
@@ -38,29 +32,26 @@ def _payment_amount_usd(payment: Payment) -> float:
     return 0.0
 
 
-def normalize_paid_subscription_end_date(subscription: Subscription) -> bool:
+def reconcile_unapplied_completed_payment(subscription: Subscription) -> bool:
     """
-    Align subscription.end_date with completed payment + paid plan when the DB was never
-    updated by a gateway return (e.g. trial already active, polling check_payment only).
+    If the latest completed payment was never applied to the subscription window,
+    run finalize_completed_payment (same rules as gateway handlers: initial / renewal / upgrade).
 
-    - First completed payment: anchor to the payment timestamp (or a future start_date),
-      never to wall-clock ``now``. Using ``now`` on every check_payment poll rewrote
-      end_date to today+period and kept days_remaining stuck near 365/30.
-    - Prior completed payments: do not change a future end_date (renewals handled by gateways);
-      only extend when end_date is in the past (reactivation).
+    Poll-safe and idempotent via Payment.applied_at — never invents now+period.
 
-    Returns True if end_date was saved.
+    Returns True if finalize applied a payment.
     """
+    from .billing import finalize_completed_payment
+
     subscription.refresh_from_db()
     plan = subscription.plan
     is_free_or_trial = float(plan.price_monthly) <= 0 and float(plan.price_yearly) <= 0
-    if is_free_or_trial:
-        return False
 
     latest = (
         Payment.objects.filter(
             subscription=subscription,
             payment_status=PaymentStatus.COMPLETED.value,
+            applied_at__isnull=True,
         )
         .order_by("-created_at")
         .first()
@@ -68,56 +59,31 @@ def normalize_paid_subscription_end_date(subscription: Subscription) -> bool:
     if not latest:
         return False
 
+    # Paid checkout on a free/trial plan row is still applied (upgrade path).
+    # Skip only when there is nothing meaningful to apply.
     amount_float = _payment_amount_usd(latest)
+    if amount_float <= 0 and is_free_or_trial:
+        return False
     if amount_float <= 0:
         return False
 
-    billing_cycle = infer_billing_cycle_from_amount_usd(plan, amount_float)
-    delta_days = 365 if billing_cycle == "yearly" else 30
+    finalize_completed_payment(subscription, latest, amount_float)
+    latest.refresh_from_db()
 
-    has_prior = (
-        Payment.objects.filter(
-            subscription=subscription,
-            payment_status=PaymentStatus.COMPLETED.value,
-        )
-        .exclude(pk=latest.pk)
-        .exists()
-    )
-
-    now = timezone.now()
-    if has_prior:
-        if subscription.end_date and subscription.end_date > now:
-            return False
-        base_date = now
-    else:
-        # Stable anchor: when they paid (not "today" on each status poll).
-        payment_at = latest.created_at or now
-        if subscription.start_date and subscription.start_date > payment_at:
-            base_date = subscription.start_date
-        else:
-            base_date = payment_at
-
-    new_end = base_date + timedelta(days=delta_days)
-    if subscription.end_date is None:
-        subscription.end_date = new_end
-        subscription.save(update_fields=["end_date", "updated_at"])
-        logger.info(
-            "normalize_paid_subscription_end_date: set end_date subscription_id=%s",
-            subscription.pk,
-        )
-        return True
-
-    diff = new_end - subscription.end_date
-    if -_END_DATE_MATCH_TOLERANCE <= diff <= _END_DATE_MATCH_TOLERANCE:
+    if latest.applied_at is None:
         return False
 
-    subscription.end_date = new_end
-    subscription.save(update_fields=["end_date", "updated_at"])
     logger.info(
-        "normalize_paid_subscription_end_date: updated end_date subscription_id=%s",
+        "reconcile_unapplied_completed_payment: applied payment_id=%s subscription_id=%s",
+        latest.pk,
         subscription.pk,
     )
     return True
+
+
+def normalize_paid_subscription_end_date(subscription: Subscription) -> bool:
+    """Deprecated alias for reconcile_unapplied_completed_payment."""
+    return reconcile_unapplied_completed_payment(subscription)
 
 
 def deactivate_other_subscriptions_for_company(company_id, exclude_subscription_id=None):

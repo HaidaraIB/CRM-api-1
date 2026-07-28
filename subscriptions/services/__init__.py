@@ -2,6 +2,7 @@ from .payment_responses import payment_gateway_test_response
 from .subscription_helpers import (
     deactivate_other_subscriptions_for_company,
     normalize_paid_subscription_end_date,
+    reconcile_unapplied_completed_payment,
 )
 from .billing import (
     apply_successful_payment,
@@ -15,6 +16,7 @@ __all__ = [
     "payment_gateway_test_response",
     "deactivate_other_subscriptions_for_company",
     "normalize_paid_subscription_end_date",
+    "reconcile_unapplied_completed_payment",
     "apply_successful_payment",
     "finalize_completed_payment",
     "is_plan_free",

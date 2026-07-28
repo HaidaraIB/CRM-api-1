@@ -358,20 +358,29 @@ def finalize_completed_payment(
     """
     Load target plan / billing cycle from the Payment row and apply successful payment rules.
     Use this from gateway return handlers after marking the payment completed.
+
+    Idempotent: if payment.applied_at is set, returns without changing the period again.
     """
     from subscriptions.services.subscription_helpers import infer_billing_cycle_from_amount_usd
+
+    payment.refresh_from_db()
+    if payment.applied_at is not None:
+        return Subscription.objects.get(pk=subscription.pk)
 
     target = payment.target_plan or subscription.plan
     bc = payment.billing_cycle
     if not bc:
         bc = infer_billing_cycle_from_amount_usd(target, amount_usd)
-    return apply_successful_payment(
+    subscription = apply_successful_payment(
         subscription,
         amount_usd=amount_usd,
         target_plan=target,
         billing_cycle=bc,
         exclude_payment_id=payment.id,
     )
+    payment.applied_at = timezone.now()
+    payment.save(update_fields=["applied_at", "updated_at"])
+    return subscription
 
 
 def preview_plan_change(

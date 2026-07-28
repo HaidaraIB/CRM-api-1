@@ -1,7 +1,6 @@
 import json
 import logging
 import requests
-from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -489,26 +488,17 @@ def qicard_webhook(request):
         # Update payment status based on QiCard status
         if status == "SUCCESS":
             payment.payment_status = PaymentStatus.COMPLETED.value
-            payment.save(update_fields=['payment_status', 'updated_at'])
-            
-            # Activate subscription
-            if not subscription.is_active:
-                subscription.is_active = True
-                subscription.start_date = timezone.now()
-                
-                # Calculate end date based on billing cycle
-                days_diff = (subscription.end_date - subscription.start_date).days if subscription.end_date else 0
-                billing_cycle = "yearly" if days_diff >= 330 else "monthly"
-                
-                if billing_cycle == "yearly":
-                    subscription.end_date = subscription.start_date + timedelta(days=365)
-                else:
-                    subscription.end_date = subscription.start_date + timedelta(days=30)
-                
-                subscription.save(update_fields=['is_active', 'start_date', 'end_date', 'updated_at'])
-                logger.info(f"Activated subscription {subscription.id}, end_date={subscription.end_date}")
-            
-            logger.info(f"Payment {payment.id} marked as COMPLETED")
+            payment.save(update_fields=["payment_status", "updated_at"])
+
+            pay_usd = (
+                float(payment.amount_usd)
+                if getattr(payment, "amount_usd", None) is not None
+                else float(payment.amount)
+            )
+            finalize_completed_payment(subscription, payment, pay_usd)
+            logger.info(
+                f"Payment {payment.id} marked as COMPLETED and applied to subscription {subscription.id}"
+            )
         elif status == "FAILED" or status == "AUTHENTICATION_FAILED":
             payment.payment_status = PaymentStatus.FAILED.value
             payment.save(update_fields=['payment_status', 'updated_at'])

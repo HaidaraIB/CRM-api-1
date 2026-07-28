@@ -258,6 +258,12 @@ class Payment(models.Model):
         blank=True,
         help_text="Billing cycle selected for this checkout session.",
     )
+    # Set when apply_successful_payment has run for this payment (idempotency).
+    applied_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this payment's effect was applied to the subscription period.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
