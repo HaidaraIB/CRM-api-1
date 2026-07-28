@@ -7,7 +7,12 @@ from .fcm_language import (
     update_fcm_token,
     update_language,
 )
-from .impersonation import impersonate, impersonate_exchange, impersonate_exchange_status
+from .impersonation import (
+    impersonate,
+    impersonate_exchange,
+    impersonate_exchange_status,
+    impersonate_end,
+)
 from .limited_supervisor import LimitedAdminViewSet, SupervisorViewSet
 from .password_reset import forgot_password, reset_password
 from .registration import (
@@ -42,6 +47,7 @@ __all__ = [
     "impersonate",
     "impersonate_exchange",
     "impersonate_exchange_status",
+    "impersonate_end",
     "verify_email",
     "resend_verification",
     "check_registration_availability",

@@ -500,12 +500,35 @@ class SupervisorPermission(models.Model):
 
 class ImpersonationSession(models.Model):
     """
-    One-time code for super-admin impersonation handoff to CRM app.
+    Short-lived handoff code for super-admin impersonation into the CRM app.
     Stored in DB so all workers/processes can read it (unlike per-process cache).
+    Exchange is one-time with a short post-use grace window for idempotent retries.
     """
     code = models.CharField(max_length=64, unique=True, db_index=True)
-    payload = models.JSONField(help_text="Dict: access, refresh, user")
+    payload = models.JSONField(help_text="Dict: access, refresh, user, impersonation meta")
     expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    impersonator = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="impersonation_sessions_started",
+    )
+    target_user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="impersonation_sessions_as_target",
+    )
+    company = models.ForeignKey(
+        "companies.Company",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="impersonation_sessions",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

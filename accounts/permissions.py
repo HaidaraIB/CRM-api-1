@@ -5,11 +5,25 @@ from django.utils import timezone
 from subscriptions.models import Subscription
 
 
+def is_impersonating(request):
+    """
+    True when the Bearer access token carries the impersonation claim
+    (super-admin support session acting as a company owner).
+    """
+    token = getattr(request, "auth", None)
+    if token is None:
+        return False
+    try:
+        return bool(token.get("impersonation"))
+    except Exception:
+        return False
+
+
 class HasActiveSubscription(permissions.BasePermission):
     """
     Permission class to check if user's company has an active subscription.
     Checks both is_active flag and end_date to ensure subscription is truly active.
-    Super Admin is exempt from this check.
+    Super Admin and active impersonation sessions are exempt from this check.
     """
     message = "Your subscription is not active or has expired. Please contact support or Complete Your Payment to access the system."
     
@@ -20,6 +34,10 @@ class HasActiveSubscription(permissions.BasePermission):
             return False
 
         if request.user.is_super_admin():
+            return True
+
+        # Support must inspect expired / deactivated tenants while impersonating.
+        if is_impersonating(request):
             return True
 
         if not request.user.company:
