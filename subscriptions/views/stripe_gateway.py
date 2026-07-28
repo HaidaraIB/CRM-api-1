@@ -7,7 +7,7 @@ from django.shortcuts import redirect
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
 from ..models import (
@@ -19,14 +19,21 @@ from ..models import (
     PaymentGatewayStatus,
 )
 from ..serializers import CreateStripePaymentSerializer
-from ..stripe_utils import verify_stripe_payment, create_stripe_payment_session
+from ..stripe_utils import verify_stripe_payment, create_stripe_payment_session, get_stripe_gateway
 from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
+from ..services.checkout_auth import require_subscription_owner
+from ..services.payment_completion import (
+    attach_checkout_session,
+    confirm_and_finalize_payment,
+    find_payment_by_tran_ref,
+    find_reusable_pending_payment,
+)
 from ..phone_verification_gate import require_owner_phone_verified
 
 logger = logging.getLogger(__name__)
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def create_stripe_payment(request):
     """
     Create a Stripe payment session for a subscription
@@ -59,6 +66,10 @@ def create_stripe_payment(request):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
+    owner_err = require_subscription_owner(request, subscription)
+    if owner_err is not None:
+        return owner_err
+
     gate = require_owner_phone_verified(subscription)
     if gate is not None:
         return gate
@@ -87,8 +98,12 @@ def create_stripe_payment(request):
 
     amount = float(amount_dec)
     logger.info(
-        f"Creating Stripe payment for subscription {subscription_id}: "
-        f"intent={intent}, plan={target_plan.name}, billing_cycle={billing_cycle}, amount={amount}"
+        "Creating Stripe payment for subscription %s: intent=%s plan=%s cycle=%s amount=%s",
+        subscription_id,
+        intent,
+        target_plan.name,
+        billing_cycle,
+        amount,
     )
 
     if amount <= 0:
@@ -97,18 +112,41 @@ def create_stripe_payment(request):
             code="bad_request",
         )
 
-    # Prepare Stripe payment request
+    stripe_gateway = PaymentGateway.objects.filter(
+        name__icontains="stripe",
+        enabled=True,
+        status=PaymentGatewayStatus.ACTIVE.value,
+    ).first()
+    if not stripe_gateway:
+        return error_response(
+            "Stripe gateway is not configured or enabled",
+            code="bad_request",
+        )
+
+    reusable = find_reusable_pending_payment(
+        subscription=subscription,
+        gateway=stripe_gateway,
+        target_plan=target_plan,
+        billing_cycle=billing_cycle,
+        amount_usd=amount_dec,
+    )
+    if reusable and reusable.checkout_url:
+        return success_response(
+            data={
+                "payment_id": reusable.id,
+                "redirect_url": reusable.checkout_url,
+                "session_id": reusable.tran_ref,
+            },
+        )
+
     user_email = subscription.company.owner.email
     user_name = f"{subscription.company.owner.first_name} {subscription.company.owner.last_name}".strip()
     if not user_name:
         user_name = subscription.company.owner.username
 
-    # Stripe success and cancel URLs
-    # IMPORTANT: success_url must point to backend stripe_return endpoint
-    # so that payment can be verified and subscription updated before redirecting to frontend
     success_url = f"{settings.API_BASE_URL}/api/payments/stripe-return/?subscription_id={subscription_id}&session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{settings.FRONTEND_URL}/payment?subscription_id={subscription_id}&canceled=true"
-    return_url = f"{settings.API_BASE_URL}/api/payments/stripe-return/?subscription_id={subscription_id}"  # Deprecated, kept for compatibility
+    return_url = f"{settings.API_BASE_URL}/api/payments/stripe-return/?subscription_id={subscription_id}"
 
     try:
         result = create_stripe_payment_session(
@@ -126,23 +164,7 @@ def create_stripe_payment(request):
             },
         )
 
-        # Check for url (for Stripe Checkout)
         if result.get("url"):
-            # Get Stripe gateway
-            stripe_gateway = PaymentGateway.objects.filter(
-                name__icontains="stripe",
-                enabled=True,
-                status=PaymentGatewayStatus.ACTIVE.value,
-            ).first()
-
-            if not stripe_gateway:
-                return error_response(
-                    "Stripe gateway is not configured or enabled",
-                    code="bad_request",
-                )
-            
-            # Create payment record (Stripe amount in USD)
-            from decimal import Decimal
             session_id = result.get("session_id", "")
             payment = Payment.objects.create(
                 subscription=subscription,
@@ -152,9 +174,14 @@ def create_stripe_payment(request):
                 amount_usd=Decimal(str(amount)),
                 payment_method=stripe_gateway,
                 payment_status=PaymentStatus.PENDING.value,
-                tran_ref=session_id,  # Store session_id as tran_ref
+                tran_ref=session_id,
                 target_plan=target_plan,
                 billing_cycle=billing_cycle,
+            )
+            attach_checkout_session(
+                payment,
+                tran_ref=session_id,
+                checkout_url=result.get("url") or "",
             )
 
             return success_response(
@@ -165,7 +192,6 @@ def create_stripe_payment(request):
                 },
             )
         else:
-            # Error response from Stripe
             error_msg = (
                 result.get("error")
                 or result.get("message")
@@ -173,7 +199,7 @@ def create_stripe_payment(request):
             )
             return error_response(str(error_msg), code="bad_request")
     except Exception as e:
-        logger.error(f"Error creating Stripe payment: {str(e)}", exc_info=True)
+        logger.error("Error creating Stripe payment: %s", e, exc_info=True)
         return error_response(
             f"Error creating Stripe payment: {str(e)}",
             code="server_error",
@@ -352,3 +378,73 @@ def stripe_return(request):
         return redirect(
             f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=error&message={str(e)}"
         )
+
+
+@csrf_exempt
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def stripe_webhook(request):
+    """
+    Stripe server webhook. Verifies signature then finalizes via Session re-query.
+    POST /api/payments/stripe-webhook/
+    """
+    import stripe
+
+    payload = request.body
+    sig_header = request.META.get("HTTP_STRIPE_SIGNATURE", "")
+    gateway = get_stripe_gateway()
+    if not gateway:
+        return error_response("Stripe gateway not configured", code="bad_request")
+
+    config = gateway.config or {}
+    webhook_secret = (config.get("webhookSecret") or "").strip()
+    secret_key = (config.get("secretKey") or "").strip()
+    if not webhook_secret or not secret_key:
+        logger.error("Stripe webhookSecret or secretKey missing")
+        return error_response(
+            "Stripe webhook not configured",
+            code="bad_request",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    stripe.api_key = secret_key
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except ValueError:
+        logger.warning("Stripe webhook invalid payload")
+        return error_response("Invalid payload", code="bad_request")
+    except stripe.error.SignatureVerificationError:
+        logger.warning("Stripe webhook signature verification failed")
+        return error_response(
+            "Invalid signature",
+            code="invalid_signature",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    event_type = event.get("type") or ""
+    data_object = (event.get("data") or {}).get("object") or {}
+
+    if event_type == "checkout.session.completed":
+        session_id = data_object.get("id")
+        payment = find_payment_by_tran_ref(session_id) if session_id else None
+        if not payment:
+            logger.warning("Stripe webhook: payment not found for session %s", session_id)
+            return success_response(message="ignored")
+        ok, reason = confirm_and_finalize_payment(payment)
+        logger.info("Stripe webhook checkout.session.completed payment=%s result=%s", payment.id, reason)
+        return success_response(data={"ok": ok, "reason": reason})
+
+    if event_type in (
+        "checkout.session.async_payment_failed",
+        "checkout.session.expired",
+    ):
+        session_id = data_object.get("id")
+        payment = find_payment_by_tran_ref(session_id) if session_id else None
+        if payment and payment.payment_status == PaymentStatus.PENDING.value:
+            payment.payment_status = PaymentStatus.FAILED.value
+            payment.save(update_fields=["payment_status", "updated_at"])
+            logger.info("Stripe webhook marked payment %s FAILED (%s)", payment.id, event_type)
+        return success_response(message="OK")
+
+    return success_response(message="ignored")
+

@@ -2,7 +2,7 @@ import logging
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from crm_saas_api.responses import error_response, success_response
 
 from ..models import Subscription, Payment, PaymentStatus
@@ -11,6 +11,7 @@ from ..stripe_utils import verify_stripe_payment
 from ..zaincash_utils import check_zaincash_payment_status
 from ..fib_utils import check_fib_payment_status
 from ..services.billing import finalize_completed_payment
+from ..services.checkout_auth import require_subscription_owner
 from ..services.subscription_helpers import (
     _payment_amount_usd,
     reconcile_unapplied_completed_payment,
@@ -30,15 +31,19 @@ def _mark_completed_and_finalize(subscription, payment):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def check_payment_status(request, subscription_id):
     """
     Check payment status by subscription_id - for frontend polling
-    GET /api/payments/subscription/{subscription_id}/status/
+    GET /api/payment-status/<subscription_id>/
     Returns payment status and subscription status
     """
     try:
-        subscription = Subscription.objects.get(id=subscription_id)
+        subscription = Subscription.objects.select_related("company__owner").get(id=subscription_id)
+        owner_err = require_subscription_owner(request, subscription)
+        if owner_err is not None:
+            return owner_err
+
         try:
             payment = (
                 Payment.objects.filter(subscription=subscription)
@@ -46,7 +51,7 @@ def check_payment_status(request, subscription_id):
                 .first()
             )
         except Exception as e:
-            logger.warning(f"Error fetching payment: {str(e)}")
+            logger.warning("Error fetching payment: %s", e)
             payment = None
 
         subscription.refresh_from_db()
@@ -74,7 +79,7 @@ def check_payment_status(request, subscription_id):
                             payment_status_value = PaymentStatus.COMPLETED.value
                             _mark_completed_and_finalize(subscription, payment)
                     except Exception as e:
-                        logger.warning(f"Could not verify Zain Cash payment: {str(e)}")
+                        logger.warning("Could not verify Zain Cash payment: %s", e)
                         if payment.payment_status == PaymentStatus.COMPLETED.value:
                             gateway_status = "success"
 
@@ -84,8 +89,11 @@ def check_payment_status(request, subscription_id):
                         paytabs_status = result.get("payment_result", {}).get(
                             "response_status"
                         )
+                        if paytabs_status == "A":
+                            payment_status_value = PaymentStatus.COMPLETED.value
+                            _mark_completed_and_finalize(subscription, payment)
                     except Exception as e:
-                        logger.warning(f"Could not verify payment with PayTabs: {str(e)}")
+                        logger.warning("Could not verify payment with PayTabs: %s", e)
                         if payment.payment_status == PaymentStatus.COMPLETED.value:
                             paytabs_status = "A"
 
@@ -98,7 +106,7 @@ def check_payment_status(request, subscription_id):
                             payment_status_value = PaymentStatus.COMPLETED.value
                             _mark_completed_and_finalize(subscription, payment)
                     except Exception as e:
-                        logger.warning(f"Could not verify Stripe payment: {str(e)}")
+                        logger.warning("Could not verify Stripe payment: %s", e)
                         if payment.payment_status == PaymentStatus.COMPLETED.value:
                             gateway_status = "success"
 
@@ -117,7 +125,7 @@ def check_payment_status(request, subscription_id):
                                 payment.payment_status = PaymentStatus.FAILED.value
                                 payment.save(update_fields=["payment_status", "updated_at"])
                     except Exception as e:
-                        logger.warning(f"Could not verify FIB payment: {str(e)}")
+                        logger.warning("Could not verify FIB payment: %s", e)
                         if payment.payment_status == PaymentStatus.COMPLETED.value:
                             gateway_status = "success"
 
@@ -165,7 +173,8 @@ def check_payment_status(request, subscription_id):
             subscription.refresh_from_db()
             is_truly_active = False
             logger.info(
-                f"Subscription {subscription_id} was marked as inactive due to expired end_date"
+                "Subscription %s was marked as inactive due to expired end_date",
+                subscription_id,
             )
 
         response_data = {
@@ -195,7 +204,7 @@ def check_payment_status(request, subscription_id):
             status_code=status.HTTP_404_NOT_FOUND,
         )
     except Exception as e:
-        logger.error(f"Error checking payment status: {str(e)}", exc_info=True)
+        logger.error("Error checking payment status: %s", e, exc_info=True)
         return error_response(
             f"Error checking payment status: {str(e)}",
             code="server_error",

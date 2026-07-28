@@ -304,7 +304,12 @@ class UserSerializer(serializers.ModelSerializer):
                 "subscription_status": getattr(subscription, "subscription_status", None),
                 "days_remaining_in_period": days_remaining,
                 "pending_plan": (
-                    {"id": pending.id, "name": pending.name, "tier": getattr(pending, "tier", 0)}
+                    {
+                        "id": pending.id,
+                        "name": pending.name,
+                        "name_ar": pending.name_ar if pending.name_ar else None,
+                        "tier": getattr(pending, "tier", 0),
+                    }
                     if pending
                     else None
                 ),

@@ -6,6 +6,7 @@ Plans are priced in USD; PayTabs uses IQD, so we convert using SystemSettings.us
 import logging
 import requests
 import json
+from urllib.parse import urlparse
 from django.conf import settings
 from .models import PaymentGateway, PaymentGatewayStatus
 from settings.models import SystemSettings
@@ -26,6 +27,31 @@ def get_paytabs_gateway():
         return None
 
 
+def _is_paytabs_public_callback_url(url: str | None) -> bool:
+    """
+    PayTabs callback must be public and reachable:
+    - no localhost / private hosts
+    - no port numbers
+    - https preferred (required for reliable IPN in practice)
+    """
+    if not url or not str(url).strip():
+        return False
+    try:
+        parsed = urlparse(str(url).strip())
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host or "." not in host:
+        return False
+    if host in ("localhost", "127.0.0.1") or host.endswith(".local"):
+        return False
+    if parsed.port is not None:
+        return False
+    return True
+
+
 def create_paytabs_payment_session(
     amount: float,
     customer_email: str,
@@ -33,6 +59,7 @@ def create_paytabs_payment_session(
     customer_phone: str,
     subscription_id: str,
     return_url: str,
+    callback_url: str | None = None,
 ):
     """
     Create a payment session with Paytabs.
@@ -46,6 +73,7 @@ def create_paytabs_payment_session(
         customer_phone: Customer phone
         subscription_id: Unique subscription ID
         return_url: URL to redirect customer after payment
+        callback_url: Server-to-server IPN/callback URL (optional; omitted if not publicly reachable)
 
     Returns:
         dict: Response from Paytabs API containing payment URL
@@ -101,6 +129,13 @@ def create_paytabs_payment_session(
         },
         "return": return_url,
     }
+    if _is_paytabs_public_callback_url(callback_url):
+        payment_data["callback"] = callback_url
+    elif callback_url:
+        logger.warning(
+            "PayTabs callback omitted (must be public HTTPS without port); got %s",
+            callback_url,
+        )
 
     # Make API request
     api_url = f"{settings.PAYTABS_DOMAIN}/payment/request"
@@ -115,10 +150,27 @@ def create_paytabs_payment_session(
             headers=headers,
             timeout=30,
         )
-        response.raise_for_status()
+        if not response.ok:
+            detail = response.text
+            try:
+                detail = response.json()
+            except Exception:
+                pass
+            logger.error(
+                "PayTabs payment/request failed status=%s detail=%s",
+                response.status_code,
+                detail,
+            )
+            raise Exception(
+                f"Paytabs API error: {response.status_code} {detail}"
+            )
         return response.json()
     except requests.exceptions.RequestException as e:
-        raise Exception(f"Paytabs API error: {str(e)}")
+        body = ""
+        if getattr(e, "response", None) is not None:
+            body = e.response.text
+            logger.error("PayTabs request exception body=%s", body)
+        raise Exception(f"Paytabs API error: {str(e)}" + (f" | {body}" if body else ""))
 
 
 def verify_paytabs_payment(transaction_ref: str):
@@ -132,13 +184,10 @@ def verify_paytabs_payment(transaction_ref: str):
     Returns:
         dict: Payment verification response
     """
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    logger.info(f"Verifying PayTabs payment with transaction_ref: {transaction_ref}")
-    
+    logger.info("Verifying PayTabs payment with transaction_ref: %s", transaction_ref)
+
     paytabs_gateway = get_paytabs_gateway()
-    
+
     if not paytabs_gateway:
         logger.error("PayTabs gateway not found or not active")
         raise ValueError("Paytabs gateway not found or not active")
@@ -153,8 +202,8 @@ def verify_paytabs_payment(transaction_ref: str):
 
     server_key = server_key.strip()
     profile_id = int(profile_id)
-    
-    logger.info(f"Using PayTabs profile_id: {profile_id}")
+
+    logger.info("Using PayTabs profile_id: %s", profile_id)
 
     api_url = f"{settings.PAYTABS_DOMAIN}/payment/query"
     query_data = {
@@ -162,9 +211,8 @@ def verify_paytabs_payment(transaction_ref: str):
         "tran_ref": transaction_ref,
     }
     headers = {"authorization": server_key, "content-type": "application/octet-stream"}
-    
-    logger.info(f"Sending verification request to: {api_url}")
-    logger.info(f"Request data: {json.dumps(query_data)}")
+
+    logger.info("Sending verification request to: %s", api_url)
 
     try:
         verify_response = requests.post(
@@ -173,15 +221,13 @@ def verify_paytabs_payment(transaction_ref: str):
             headers=headers,
             timeout=30,
         )
-        logger.info(f"PayTabs API response status: {verify_response.status_code}")
-        logger.info(f"PayTabs API response body: {verify_response.text}")
-        
+        logger.info("PayTabs API response status: %s", verify_response.status_code)
+
         verify_response.raise_for_status()
         result = verify_response.json()
-        logger.info(f"PayTabs verification successful. Response: {json.dumps(result, indent=2, default=str)}")
         return result
     except requests.exceptions.RequestException as e:
-        logger.error(f"PayTabs verification error: {str(e)}")
-        logger.error(f"Response status: {e.response.status_code if hasattr(e, 'response') and e.response else 'N/A'}")
-        logger.error(f"Response body: {e.response.text if hasattr(e, 'response') and e.response else 'N/A'}")
+        logger.error("PayTabs verification error: %s", e)
+        if getattr(e, "response", None) is not None:
+            logger.error("Response body: %s", e.response.text)
         raise Exception(f"Paytabs verification error: {str(e)}")

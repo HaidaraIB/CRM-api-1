@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
 from ..models import (
@@ -22,14 +22,19 @@ from ..models import (
     PaymentGatewayStatus,
 )
 from ..serializers import CreateZaincashPaymentSerializer
-from ..zaincash_utils import verify_zaincash_payment, create_zaincash_payment_session
+from ..zaincash_utils import verify_zaincash_payment, create_zaincash_payment_session, get_zaincash_gateway
 from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
+from ..services.checkout_auth import require_subscription_owner
+from ..services.payment_completion import (
+    attach_checkout_session,
+    find_reusable_pending_payment,
+)
 from ..phone_verification_gate import require_owner_phone_verified
 
 logger = logging.getLogger(__name__)
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def create_zaincash_payment(request):
     """
     Create a Zain Cash payment session for a subscription
@@ -62,6 +67,10 @@ def create_zaincash_payment(request):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
+    owner_err = require_subscription_owner(request, subscription)
+    if owner_err is not None:
+        return owner_err
+
     gate = require_owner_phone_verified(subscription)
     if gate is not None:
         return gate
@@ -90,14 +99,40 @@ def create_zaincash_payment(request):
 
     amount = float(amount_dec)
     logger.info(
-        f"Creating Zain Cash payment for subscription {subscription_id}: "
-        f"intent={intent}, plan={target_plan.name}, billing_cycle={billing_cycle}, amount={amount}"
+        "Creating Zain Cash payment for subscription %s: intent=%s plan=%s cycle=%s amount=%s",
+        subscription_id,
+        intent,
+        target_plan.name,
+        billing_cycle,
+        amount,
     )
 
     if amount <= 0:
         return error_response(
             "Plan is free, no payment required",
             code="bad_request",
+        )
+
+    zaincash_gateway = get_zaincash_gateway()
+    if not zaincash_gateway:
+        return error_response(
+            "Zain Cash gateway is not configured or enabled",
+            code="bad_request",
+        )
+
+    reusable = find_reusable_pending_payment(
+        subscription=subscription,
+        gateway=zaincash_gateway,
+        target_plan=target_plan,
+        billing_cycle=billing_cycle,
+        amount_usd=amount_dec,
+    )
+    if reusable and reusable.checkout_url:
+        return success_response(
+            data={
+                "redirect_url": reusable.checkout_url,
+                "transaction_id": reusable.tran_ref,
+            },
         )
 
     # Prepare Zain Cash payment request
@@ -122,8 +157,7 @@ def create_zaincash_payment(request):
             return_url=return_url,
         )
 
-        # Log the response for debugging
-        logger.info(f"Zain Cash API response: {result}")
+        logger.info("Zain Cash API session created for subscription %s", subscription_id)
         
         # Extract transaction ID and payment URL from result
         # The utility function now returns: {"id": "...", "payment_url": "..."}
@@ -131,7 +165,7 @@ def create_zaincash_payment(request):
         payment_url = result.get("payment_url")
         
         if not transaction_id:
-            logger.error(f"Zain Cash API did not return transaction ID. Response: {result}")
+            logger.error("Zain Cash API did not return transaction ID")
             return error_response(
                 "Failed to create payment session: No transaction ID received",
                 code="bad_request",
@@ -139,23 +173,10 @@ def create_zaincash_payment(request):
         
         if not payment_url:
             # Construct payment URL if not provided
-            environment = subscription.payment_method.config.get("environment", "test") if subscription.payment_method else "test"
+            environment = (zaincash_gateway.config or {}).get("environment", "test")
             api_base_url = "https://api.zaincash.iq" if environment == "live" else "https://test.zaincash.iq"
             payment_url = f"{api_base_url}/transaction/pay?id={transaction_id}"
         
-        # Get Zain Cash gateway using the utility function
-        from ..zaincash_utils import get_zaincash_gateway
-        zaincash_gateway = get_zaincash_gateway()
-
-        if not zaincash_gateway:
-            logger.error("Zain Cash gateway not found after payment session creation")
-            return error_response(
-                "Zain Cash gateway is not configured or enabled",
-                code="bad_request",
-            )
-        
-        # Create payment record (amount in USD at creation; return callback will update to IQD)
-        from decimal import Decimal
         payment = Payment.objects.create(
             subscription=subscription,
             amount=amount,
@@ -164,15 +185,21 @@ def create_zaincash_payment(request):
             amount_usd=Decimal(str(amount)),
             payment_method=zaincash_gateway,
             payment_status=PaymentStatus.PENDING.value,
-            tran_ref=transaction_id,  # Store transaction ID
+            tran_ref=transaction_id,
             target_plan=target_plan,
             billing_cycle=billing_cycle,
         )
+        attach_checkout_session(
+            payment,
+            tran_ref=transaction_id,
+            checkout_url=payment_url,
+        )
 
         logger.info(
-            f"Created Zain Cash payment record: payment_id={payment.id}, "
-            f"transaction_id={transaction_id}, subscription_id={subscription_id}, "
-            f"payment_url={payment_url}"
+            "Created Zain Cash payment record: payment_id=%s transaction_id=%s subscription_id=%s",
+            payment.id,
+            transaction_id,
+            subscription_id,
         )
 
         # Return the payment URL that frontend should redirect user to
@@ -186,7 +213,7 @@ def create_zaincash_payment(request):
         error_details = {}
         try:
             error_details = e.response.json()
-        except:
+        except Exception:
             error_details = {"message": e.response.text}
 
         return error_response(
@@ -196,10 +223,10 @@ def create_zaincash_payment(request):
         )
     except ValueError as e:
         # Handle configuration errors (gateway not found, credentials missing, etc.)
-        logger.error(f"Zain Cash configuration error: {str(e)}")
+        logger.error("Zain Cash configuration error: %s", e)
         return error_response(str(e), code="bad_request")
     except requests.exceptions.RequestException as e:
-        logger.error(f"Zain Cash request error: {str(e)}", exc_info=True)
+        logger.error("Zain Cash request error: %s", e, exc_info=True)
         return error_response(
             f"Error communicating with Zain Cash: {str(e)}",
             code="server_error",

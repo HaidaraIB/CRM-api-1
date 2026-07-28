@@ -264,6 +264,15 @@ class Payment(models.Model):
         blank=True,
         help_text="When this payment's effect was applied to the subscription period.",
     )
+    # Hosted checkout URL (or empty for FIB QR flows). Used to reuse pending sessions.
+    checkout_url = models.TextField(blank=True, default="")
+    session_expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the gateway checkout session expires; retries may reuse until then.",
+    )
+    # Gateway-specific session payload for reuse (e.g. FIB QR / app links).
+    session_meta = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

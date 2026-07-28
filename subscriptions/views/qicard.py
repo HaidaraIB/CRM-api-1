@@ -9,7 +9,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
 from ..models import (
@@ -26,12 +26,19 @@ from ..qicard_utils import (
     get_qicard_gateway,
 )
 from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
+from ..services.checkout_auth import require_subscription_owner
+from ..services.payment_completion import (
+    attach_checkout_session,
+    confirm_and_finalize_payment,
+    find_payment_by_tran_ref,
+    find_reusable_pending_payment,
+)
 from ..phone_verification_gate import require_owner_phone_verified
 
 logger = logging.getLogger(__name__)
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def create_qicard_payment(request):
     """
     Create a QiCard payment session for a subscription
@@ -64,6 +71,10 @@ def create_qicard_payment(request):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
+    owner_err = require_subscription_owner(request, subscription)
+    if owner_err is not None:
+        return owner_err
+
     gate = require_owner_phone_verified(subscription)
     if gate is not None:
         return gate
@@ -92,8 +103,12 @@ def create_qicard_payment(request):
 
     amount = float(amount_dec)
     logger.info(
-        f"Creating QiCard payment for subscription {subscription_id}: "
-        f"intent={intent}, plan={target_plan.name}, billing_cycle={billing_cycle}, amount={amount}"
+        "Creating QiCard payment for subscription %s: intent=%s plan=%s cycle=%s amount=%s",
+        subscription_id,
+        intent,
+        target_plan.name,
+        billing_cycle,
+        amount,
     )
 
     if amount <= 0:
@@ -102,15 +117,35 @@ def create_qicard_payment(request):
             code="bad_request",
         )
 
-    # Prepare QiCard payment request
+    qicard_gateway = get_qicard_gateway()
+    if not qicard_gateway:
+        return error_response(
+            "QiCard gateway is not configured or enabled",
+            code="bad_request",
+        )
+
+    reusable = find_reusable_pending_payment(
+        subscription=subscription,
+        gateway=qicard_gateway,
+        target_plan=target_plan,
+        billing_cycle=billing_cycle,
+        amount_usd=amount_dec,
+    )
+    if reusable and reusable.checkout_url:
+        return success_response(
+            data={
+                "redirect_url": reusable.checkout_url,
+                "payment_id": reusable.tran_ref,
+                "request_id": (reusable.session_meta or {}).get("request_id"),
+            },
+        )
+
     user_email = subscription.company.owner.email
     user_name = f"{subscription.company.owner.first_name} {subscription.company.owner.last_name}".strip()
     if not user_name:
         user_name = subscription.company.owner.username
 
-    # QiCard redirects to BACKEND return URL first, then we redirect to frontend
     return_url = f"{settings.API_BASE_URL}/api/payments/qicard-return/?subscription_id={subscription_id}"
-    # Webhook URL for payment notifications
     notification_url = f"{settings.API_BASE_URL}/api/payments/qicard-webhook/"
 
     customer_phone = subscription.company.owner.phone or ""
@@ -126,34 +161,17 @@ def create_qicard_payment(request):
             notification_url=notification_url,
         )
 
-        # Log the response for debugging
-        logger.info(f"QiCard API response: {result}")
-        
-        # Extract payment ID and form URL from result
         payment_id = result.get("payment_id")
         form_url = result.get("form_url")
         request_id = result.get("request_id")
         
         if not payment_id or not form_url:
-            logger.error(f"QiCard API did not return payment ID or form URL. Response: {result}")
+            logger.error("QiCard API did not return payment ID or form URL")
             return error_response(
                 "Failed to create payment session: No payment ID or form URL received",
                 code="bad_request",
             )
         
-        # Get QiCard gateway using the utility function
-        from ..qicard_utils import get_qicard_gateway
-        qicard_gateway = get_qicard_gateway()
-
-        if not qicard_gateway:
-            logger.error("QiCard gateway not found after payment session creation")
-            return error_response(
-                "QiCard gateway is not configured or enabled",
-                code="bad_request",
-            )
-        
-        # Create payment record (QiCard plan amount in USD at creation; return may store IQD for display)
-        from decimal import Decimal
         payment = Payment.objects.create(
             subscription=subscription,
             amount=amount,
@@ -162,18 +180,24 @@ def create_qicard_payment(request):
             amount_usd=Decimal(str(amount)),
             payment_method=qicard_gateway,
             payment_status=PaymentStatus.PENDING.value,
-            tran_ref=payment_id,  # Store payment ID as tran_ref
+            tran_ref=payment_id,
             target_plan=target_plan,
             billing_cycle=billing_cycle,
         )
-
-        logger.info(
-            f"Created QiCard payment record: payment_id={payment.id}, "
-            f"qicard_payment_id={payment_id}, subscription_id={subscription_id}, "
-            f"form_url={form_url}"
+        attach_checkout_session(
+            payment,
+            tran_ref=payment_id,
+            checkout_url=form_url,
+            session_meta={"request_id": request_id},
         )
 
-        # Return the form URL that frontend should redirect user to
+        logger.info(
+            "Created QiCard payment record: payment_id=%s qicard_payment_id=%s subscription_id=%s",
+            payment.id,
+            payment_id,
+            subscription_id,
+        )
+
         return success_response(
             data={
                 "redirect_url": form_url,
@@ -185,7 +209,7 @@ def create_qicard_payment(request):
         error_details = {}
         try:
             error_details = e.response.json()
-        except:
+        except Exception:
             error_details = {"message": e.response.text}
 
         return error_response(
@@ -194,11 +218,10 @@ def create_qicard_payment(request):
             details=error_details,
         )
     except ValueError as e:
-        # Handle configuration errors (gateway not found, credentials missing, etc.)
-        logger.error(f"QiCard configuration error: {str(e)}")
+        logger.error("QiCard configuration error: %s", e)
         return error_response(str(e), code="bad_request")
     except requests.exceptions.RequestException as e:
-        logger.error(f"QiCard request error: {str(e)}", exc_info=True)
+        logger.error("QiCard request error: %s", e, exc_info=True)
         return error_response(
             f"Error communicating with QiCard: {str(e)}",
             code="server_error",
@@ -433,88 +456,44 @@ def qicard_return(request):
 @permission_classes([AllowAny])
 def qicard_webhook(request):
     """
-    Handle QiCard webhook notifications
+    Handle QiCard webhook notifications.
+    Payload is a hint only — status is confirmed via QiCard API before finalize.
     POST /api/payments/qicard-webhook/
-    QiCard sends payment status updates via webhook
     """
-    logger = logging.getLogger(__name__)
-    
-    logger.info("=" * 80)
-    logger.info("QICARD WEBHOOK CALLED")
-    logger.info(f"Request method: {request.method}")
-    logger.info(f"Request body: {request.body.decode('utf-8') if request.body else 'Empty'}")
-    logger.info("=" * 80)
+    logger.info("QiCard webhook called method=%s", request.method)
 
     try:
-        # Parse webhook payload
-        if hasattr(request, 'data') and request.data:
+        if hasattr(request, "data") and request.data:
             payload = request.data
         else:
             try:
-                payload = json.loads(request.body.decode('utf-8'))
-            except:
+                payload = json.loads(request.body.decode("utf-8"))
+            except Exception:
                 payload = {}
-        
-        logger.info(f"QiCard webhook payload: {json.dumps(payload, indent=2, default=str)}")
-        
-        # Extract payment information from webhook
+
         payment_id = payload.get("paymentId")
-        status = payload.get("status")
-        request_id = payload.get("requestId")
-        
         if not payment_id:
             logger.error("Missing paymentId in QiCard webhook")
             return error_response(
                 "Missing paymentId",
                 code="bad_request",
             )
-        
-        # Find payment by tran_ref (which stores payment_id)
-        payment = Payment.objects.filter(tran_ref=payment_id).order_by("-created_at").first()
-        
+
+        payment = find_payment_by_tran_ref(str(payment_id))
         if not payment:
-            logger.warning(f"Payment not found for QiCard payment_id: {payment_id}")
+            logger.warning("Payment not found for QiCard payment_id: %s", payment_id)
             return error_response(
                 "Payment not found",
                 code="not_found",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
-        
-        subscription = payment.subscription
-        
-        logger.info(f"Found payment: ID={payment.id}, subscription_id={subscription.id}, "
-                   f"status={status}, current_payment_status={payment.payment_status}")
-        
-        # Update payment status based on QiCard status
-        if status == "SUCCESS":
-            payment.payment_status = PaymentStatus.COMPLETED.value
-            payment.save(update_fields=["payment_status", "updated_at"])
 
-            pay_usd = (
-                float(payment.amount_usd)
-                if getattr(payment, "amount_usd", None) is not None
-                else float(payment.amount)
-            )
-            finalize_completed_payment(subscription, payment, pay_usd)
-            logger.info(
-                f"Payment {payment.id} marked as COMPLETED and applied to subscription {subscription.id}"
-            )
-        elif status == "FAILED" or status == "AUTHENTICATION_FAILED":
-            payment.payment_status = PaymentStatus.FAILED.value
-            payment.save(update_fields=['payment_status', 'updated_at'])
-            logger.info(f"Payment {payment.id} marked as FAILED")
-        else:
-            # CREATED or other status - keep as PENDING
-            logger.info(f"Payment {payment.id} status is {status}, keeping as PENDING")
-        
-        return success_response(message="OK")
-        
+        ok, reason = confirm_and_finalize_payment(payment, mark_failed=True)
+        logger.info("QiCard webhook payment=%s ok=%s reason=%s", payment.id, ok, reason)
+        return success_response(message="OK", data={"ok": ok, "reason": reason})
+
     except Exception as e:
-        logger.error("=" * 80)
-        logger.error(f"ERROR processing QiCard webhook: {str(e)}")
-        logger.error(f"Exception type: {type(e).__name__}")
-        logger.error(f"Traceback:", exc_info=True)
-        logger.error("=" * 80)
+        logger.error("ERROR processing QiCard webhook: %s", e, exc_info=True)
         return error_response(
             str(e),
             code="server_error",

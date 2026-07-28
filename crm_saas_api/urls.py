@@ -109,10 +109,12 @@ from subscriptions.views import (
     PublicPaymentGatewayListView,
     create_paytabs_payment,
     paytabs_return,
+    paytabs_callback,
     create_zaincash_payment,
     zaincash_return,
     create_stripe_payment,
     stripe_return,
+    stripe_webhook,
     create_qicard_payment,
     qicard_return,
     qicard_webhook,
@@ -121,6 +123,7 @@ from subscriptions.views import (
     check_payment_status,
     preview_subscription_change,
     schedule_subscription_downgrade,
+    cancel_pending_plan_change,
     switch_subscription_plan_free,
 )
 from integrations import urls as integrations_urls
@@ -206,10 +209,12 @@ router.register(
 v1_patterns = [
     path("payments/create-paytabs-session/", create_paytabs_payment, name="create_paytabs_payment"),
     path("payments/paytabs-return/", paytabs_return, name="paytabs_return"),
+    path("payments/paytabs-callback/", paytabs_callback, name="paytabs_callback"),
     path("payments/create-zaincash-session/", create_zaincash_payment, name="create_zaincash_payment"),
     path("payments/zaincash-return/", zaincash_return, name="zaincash_return"),
     path("payments/create-stripe-session/", create_stripe_payment, name="create_stripe_payment"),
     path("payments/stripe-return/", stripe_return, name="stripe_return"),
+    path("payments/stripe-webhook/", stripe_webhook, name="stripe_webhook"),
     path("payments/create-qicard-session/", create_qicard_payment, name="create_qicard_payment"),
     path("payments/qicard-return/", qicard_return, name="qicard_return"),
     path("payments/qicard-webhook/", qicard_webhook, name="qicard_webhook"),
@@ -219,6 +224,11 @@ v1_patterns = [
     path("subscriptions/switch-plan-free/", switch_subscription_plan_free, name="switch_subscription_plan_free"),
     path("subscriptions/preview-change/", preview_subscription_change, name="preview_subscription_change"),
     path("subscriptions/schedule-downgrade/", schedule_subscription_downgrade, name="schedule_subscription_downgrade"),
+    path(
+        "subscriptions/cancel-pending-plan-change/",
+        cancel_pending_plan_change,
+        name="cancel_pending_plan_change",
+    ),
     path("users/update-fcm-token/", update_fcm_token, name="update_fcm_token"),
     path("users/remove-fcm-token/", remove_fcm_token, name="remove_fcm_token"),
     path(

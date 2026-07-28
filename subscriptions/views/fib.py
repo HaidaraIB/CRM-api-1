@@ -5,7 +5,7 @@ from decimal import Decimal
 from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -18,13 +18,21 @@ from ..models import (
 )
 from ..serializers import CreateFibPaymentSerializer
 from ..fib_utils import get_fib_gateway, create_fib_payment_session
-from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
+from ..services.billing import resolve_checkout_pricing
+from ..services.checkout_auth import require_subscription_owner
+from ..services.payment_completion import (
+    attach_checkout_session,
+    confirm_and_finalize_payment,
+    find_payment_by_tran_ref,
+    find_reusable_pending_payment,
+    parse_gateway_expiry,
+)
 from ..phone_verification_gate import require_owner_phone_verified
 
 logger = logging.getLogger(__name__)
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def create_fib_payment(request):
     """
     Create a FIB (First Iraqi Bank) payment session for a subscription.
@@ -56,6 +64,10 @@ def create_fib_payment(request):
             code="not_found",
             status_code=status.HTTP_404_NOT_FOUND,
         )
+
+    owner_err = require_subscription_owner(request, subscription)
+    if owner_err is not None:
+        return owner_err
 
     gate = require_owner_phone_verified(subscription)
     if gate is not None:
@@ -97,6 +109,29 @@ def create_fib_payment(request):
             code="bad_request",
         )
 
+    reusable = find_reusable_pending_payment(
+        subscription=subscription,
+        gateway=fib_gateway,
+        target_plan=target_plan,
+        billing_cycle=billing_cycle,
+        amount_usd=amount_dec,
+    )
+    if reusable and reusable.session_meta:
+        meta = reusable.session_meta or {}
+        return success_response(
+            data={
+                "payment_id": reusable.tran_ref or meta.get("payment_id"),
+                "subscription_id": subscription_id,
+                "redirect_url": None,
+                "qr_code": meta.get("qr_code"),
+                "readable_code": meta.get("readable_code"),
+                "business_app_link": meta.get("business_app_link"),
+                "corporate_app_link": meta.get("corporate_app_link"),
+                "personal_app_link": meta.get("personal_app_link"),
+                "valid_until": meta.get("valid_until"),
+            },
+        )
+
     callback_url = f"{settings.API_BASE_URL}/api/payments/fib-callback/"
     user_name = f"{subscription.company.owner.first_name} {subscription.company.owner.last_name}".strip()
     if not user_name:
@@ -120,8 +155,16 @@ def create_fib_payment(request):
         logger.error("FIB create session error: %s", e, exc_info=True)
         return error_response(str(e), code="fib_session_error", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    from decimal import Decimal
     payment_id = result.get("paymentId")
+    session_meta = {
+        "payment_id": payment_id,
+        "qr_code": result.get("qrCode"),
+        "readable_code": result.get("readableCode"),
+        "business_app_link": result.get("businessAppLink"),
+        "corporate_app_link": result.get("corporateAppLink"),
+        "personal_app_link": result.get("personalAppLink"),
+        "valid_until": result.get("validUntil"),
+    }
     payment = Payment.objects.create(
         subscription=subscription,
         amount=amount,
@@ -133,6 +176,13 @@ def create_fib_payment(request):
         tran_ref=payment_id,
         target_plan=target_plan,
         billing_cycle=billing_cycle,
+    )
+    attach_checkout_session(
+        payment,
+        tran_ref=payment_id,
+        checkout_url="",
+        session_expires_at=parse_gateway_expiry(result.get("validUntil")),
+        session_meta=session_meta,
     )
     logger.info(
         "Created FIB payment record: payment_id=%s, fib_payment_id=%s, subscription_id=%s",
@@ -159,10 +209,10 @@ def create_fib_payment(request):
 @permission_classes([AllowAny])
 def fib_callback(request):
     """
-    FIB server-to-server callback when payment status changes.
+    FIB server-to-server callback. Payload is a hint; status is confirmed via FIB API.
     POST body: { "id": paymentId, "status": "PAID" | "UNPAID" | "DECLINED" }
     """
-    logger.info("FIB callback received: method=%s, body=%s", request.method, request.body)
+    logger.info("FIB callback received: method=%s", request.method)
     try:
         if hasattr(request, "data") and request.data:
             payload = request.data
@@ -173,45 +223,14 @@ def fib_callback(request):
         return error_response("Invalid JSON", code="invalid_json")
 
     payment_id = payload.get("id")
-    fib_status = (payload.get("status") or "").upper()
     if not payment_id:
         return error_response("Missing id", code="missing_field")
 
-    payment = Payment.objects.filter(tran_ref=payment_id).order_by("-created_at").first()
+    payment = find_payment_by_tran_ref(str(payment_id))
     if not payment:
         logger.warning("FIB callback: payment not found for id=%s", payment_id)
         return error_response("Payment not found", code="not_found", status_code=status.HTTP_404_NOT_FOUND)
 
-    subscription = payment.subscription
-    subscription_id = subscription.id
-    amount = float(payment.amount)
-
-    if fib_status == "PAID":
-        payment_was_completed = payment.payment_status == PaymentStatus.COMPLETED.value
-        if not payment_was_completed:
-            payment.payment_status = PaymentStatus.COMPLETED.value
-            payment.save(update_fields=["payment_status", "updated_at"])
-
-        pay_usd = float(payment.amount_usd) if payment.amount_usd is not None else float(payment.amount)
-        if not payment_was_completed:
-            try:
-                finalize_completed_payment(subscription, payment, pay_usd)
-                subscription.refresh_from_db()
-            except ValueError as err:
-                logger.error("FIB billing apply failed: %s", err, exc_info=True)
-                return error_response(str(err), code="billing_error", status_code=status.HTTP_400_BAD_REQUEST)
-
-        logger.info(
-            "FIB payment PAID: subscription_id=%s, amount_usd=%s, end_date=%s",
-            subscription_id,
-            pay_usd,
-            subscription.end_date,
-        )
-    elif fib_status == "DECLINED":
-        payment.payment_status = PaymentStatus.FAILED.value
-        payment.save(update_fields=["payment_status", "updated_at"])
-        logger.info("FIB payment DECLINED: payment_id=%s", payment.id)
-    else:
-        logger.info("FIB callback status=%s for payment_id=%s, no change", fib_status, payment_id)
-
-    return success_response(message="OK")
+    ok, reason = confirm_and_finalize_payment(payment, mark_failed=True)
+    logger.info("FIB callback payment=%s ok=%s reason=%s", payment.id, ok, reason)
+    return success_response(message="OK", data={"ok": ok, "reason": reason})

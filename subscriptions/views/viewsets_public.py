@@ -44,6 +44,7 @@ from accounts.permissions import (
     CanManagePayments,
     CanManagePaymentGateways,
     CanManageCommunication,
+    CanViewCompanyInvoicesOrManagePayments,
 )
 from ..utils import send_broadcast_email
 from ..zaincash_utils import test_zaincash_credentials
@@ -189,6 +190,7 @@ def switch_subscription_plan_free(request):
                 "subscription_id": subscription.id,
                 "pending_plan_id": plan.id,
                 "pending_plan_name": plan.name,
+                "pending_plan_name_ar": plan.name_ar if plan.name_ar else None,
                 "current_period_end": subscription.end_date.isoformat() if subscription.end_date else None,
                 "message": "Your plan will switch at the end of the current billing period.",
             },
@@ -345,7 +347,58 @@ def schedule_subscription_downgrade(request):
             "subscription_id": subscription.id,
             "pending_plan_id": target.id,
             "pending_plan_name": target.name,
+            "pending_plan_name_ar": target.name_ar if target.name_ar else None,
             "effective_at": subscription.end_date.isoformat() if subscription.end_date else None,
+        },
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def cancel_pending_plan_change(request):
+    """
+    Cancel a scheduled plan change (clear pending_plan / pending_billing_cycle).
+    POST /api/subscriptions/cancel-pending-plan-change/
+    """
+    user = request.user
+    company = getattr(user, "company", None)
+    if not company:
+        return error_response(
+            "User is not associated with a company.",
+            code="no_company",
+        )
+
+    subscription = (
+        Subscription.objects.filter(company=company, is_active=True)
+        .select_related("plan", "pending_plan")
+        .order_by("-created_at")
+        .first()
+    )
+    if not subscription:
+        return error_response(
+            "Subscription not found.",
+            code="not_found",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    if not subscription.pending_plan_id:
+        return error_response(
+            "No scheduled plan change to cancel.",
+            code="no_pending_change",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    subscription.pending_plan = None
+    subscription.pending_billing_cycle = None
+    subscription.save(update_fields=["pending_plan", "pending_billing_cycle", "updated_at"])
+    invalidate_company_subscription_cache(company.id)
+
+    return success_response(
+        data={
+            "subscription_id": subscription.id,
+            "cancelled": True,
+            "current_plan_id": subscription.plan_id,
+            "current_plan_name": subscription.plan.name if subscription.plan_id else None,
         },
     )
 
@@ -410,6 +463,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
 class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Read-only invoices (auto-created per Payment). PDF download and email actions only.
+    Platform payment managers see all; tenant company admins see their company only.
     """
 
     queryset = Invoice.objects.select_related(
@@ -420,7 +474,7 @@ class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
         "subscription__company__owner",
         "subscription__plan",
     ).all()
-    permission_classes = [IsAuthenticated, CanManagePayments]
+    permission_classes = [IsAuthenticated, CanViewCompanyInvoicesOrManagePayments]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "invoice_number",
@@ -432,6 +486,16 @@ class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     ]
     ordering_fields = ["created_at", "due_date", "amount", "invoice_number"]
     ordering = ["-created_at"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if CanManagePayments().has_permission(self.request, self):
+            return qs
+        company_id = getattr(user, "company_id", None)
+        if user.is_admin() and company_id:
+            return qs.filter(subscription__company_id=company_id)
+        return qs.none()
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -451,6 +515,14 @@ class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"], url_path="send-email")
     def send_email(self, request, pk=None):
         from subscriptions.invoicing import send_invoice_email
+
+        # Tenant company admins: list/PDF only — email stays platform-admin.
+        if not CanManagePayments().has_permission(request, self):
+            return error_response(
+                "You do not have permission to email invoices.",
+                code="forbidden",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
 
         invoice = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}

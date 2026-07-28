@@ -350,6 +350,7 @@ def resolve_checkout_pricing(
     return target_plan, billing_cycle, price, "initial"
 
 
+@transaction.atomic
 def finalize_completed_payment(
     subscription: Subscription,
     payment: Payment,
@@ -360,10 +361,11 @@ def finalize_completed_payment(
     Use this from gateway return handlers after marking the payment completed.
 
     Idempotent: if payment.applied_at is set, returns without changing the period again.
+    Locks the Payment row to prevent concurrent double-apply.
     """
     from subscriptions.services.subscription_helpers import infer_billing_cycle_from_amount_usd
 
-    payment.refresh_from_db()
+    payment = Payment.objects.select_for_update().get(pk=payment.pk)
     if payment.applied_at is not None:
         return Subscription.objects.get(pk=subscription.pk)
 

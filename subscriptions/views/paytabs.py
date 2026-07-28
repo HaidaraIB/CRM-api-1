@@ -8,7 +8,7 @@ from django.shortcuts import redirect
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
 from ..models import (
@@ -22,12 +22,19 @@ from ..models import (
 from ..serializers import CreatePaytabsPaymentSerializer
 from ..paytabs_utils import verify_paytabs_payment, create_paytabs_payment_session
 from ..services.billing import finalize_completed_payment, resolve_checkout_pricing
+from ..services.checkout_auth import require_subscription_owner
+from ..services.payment_completion import (
+    attach_checkout_session,
+    confirm_and_finalize_payment,
+    find_payment_by_tran_ref,
+    find_reusable_pending_payment,
+)
 from ..phone_verification_gate import require_owner_phone_verified
 
 logger = logging.getLogger(__name__)
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def create_paytabs_payment(request):
     """
     Create a Paytabs payment session for a subscription
@@ -60,6 +67,10 @@ def create_paytabs_payment(request):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
+    owner_err = require_subscription_owner(request, subscription)
+    if owner_err is not None:
+        return owner_err
+
     gate = require_owner_phone_verified(subscription)
     if gate is not None:
         return gate
@@ -88,8 +99,12 @@ def create_paytabs_payment(request):
 
     amount = float(amount_dec)
     logger.info(
-        f"Creating PayTabs payment for subscription {subscription_id}: "
-        f"intent={intent}, plan={target_plan.name}, billing_cycle={billing_cycle}, amount={amount}"
+        "Creating PayTabs payment for subscription %s: intent=%s plan=%s cycle=%s amount=%s",
+        subscription_id,
+        intent,
+        target_plan.name,
+        billing_cycle,
+        amount,
     )
 
     if amount <= 0:
@@ -98,20 +113,46 @@ def create_paytabs_payment(request):
             code="bad_request",
         )
 
-    # Prepare Paytabs payment request
+    paytabs_gateway = PaymentGateway.objects.filter(
+        name__icontains="paytabs",
+        enabled=True,
+        status=PaymentGatewayStatus.ACTIVE.value,
+    ).first()
+    if not paytabs_gateway:
+        return error_response(
+            "Paytabs gateway is not configured or enabled",
+            code="bad_request",
+        )
+
+    reusable = find_reusable_pending_payment(
+        subscription=subscription,
+        gateway=paytabs_gateway,
+        target_plan=target_plan,
+        billing_cycle=billing_cycle,
+        amount_usd=amount_dec,
+    )
+    if reusable and reusable.checkout_url:
+        return success_response(
+            data={
+                "payment_id": reusable.id,
+                "redirect_url": reusable.checkout_url,
+                "tran_ref": reusable.tran_ref,
+            },
+        )
+
     user_email = subscription.company.owner.email
     user_name = f"{subscription.company.owner.first_name} {subscription.company.owner.last_name}".strip()
     if not user_name:
         user_name = subscription.company.owner.username
 
     return_url = f"{settings.PAYTABS_RETURN_URL}?subscription_id={subscription_id}"
+    callback_url = getattr(settings, "PAYTABS_CALLBACK_URL", "") or (
+        f"{settings.API_BASE_URL}/api/payments/paytabs-callback/"
+    )
 
     customer_phone = subscription.company.owner.phone or ""
 
     try:
-        # Make request to Paytabs
-        # Note: Paytabs expects application/octet-stream and data=json.dumps(), not json=payload
-
         result = create_paytabs_payment_session(
             amount=amount,
             customer_email=user_email,
@@ -119,36 +160,27 @@ def create_paytabs_payment(request):
             customer_phone=customer_phone,
             subscription_id=subscription_id,
             return_url=return_url,
+            callback_url=callback_url,
         )
 
-        # Check for redirect_url (for hosted payment page)
         if result.get("redirect_url"):
-            # Get Paytabs gateway
-            paytabs_gateway = PaymentGateway.objects.filter(
-                name__icontains="paytabs",
-                enabled=True,
-                status=PaymentGatewayStatus.ACTIVE.value,
-            ).first()
-
-            if not paytabs_gateway:
-                return error_response(
-                    "Paytabs gateway is not configured or enabled",
-                    code="bad_request",
-                )
-            # Create payment record (amount in USD at creation; callback will update to IQD if PayTabs charges in IQD)
             tran_ref = result.get("tran_ref", "")
-            from decimal import Decimal
             payment = Payment.objects.create(
                 subscription=subscription,
                 amount=amount,
                 currency="USD",
                 exchange_rate=Decimal("1"),
                 amount_usd=Decimal(str(amount)),
-                payment_method=paytabs_gateway,  # Use ForeignKey
+                payment_method=paytabs_gateway,
                 payment_status=PaymentStatus.PENDING.value,
-                tran_ref=tran_ref,  # Store tran_ref
+                tran_ref=tran_ref,
                 target_plan=target_plan,
                 billing_cycle=billing_cycle,
+            )
+            attach_checkout_session(
+                payment,
+                tran_ref=tran_ref,
+                checkout_url=result.get("redirect_url") or "",
             )
 
             return success_response(
@@ -159,7 +191,6 @@ def create_paytabs_payment(request):
                 },
             )
         else:
-            # Error response from Paytabs
             error_msg = (
                 result.get("message")
                 or result.get("error")
@@ -167,11 +198,10 @@ def create_paytabs_payment(request):
             )
             return error_response(error_msg, code="bad_request")
     except requests.exceptions.HTTPError as e:
-        # Try to get error details from response
         error_details = {}
         try:
             error_details = e.response.json()
-        except:
+        except Exception:
             error_details = {"message": e.response.text}
 
         return error_response(
@@ -420,4 +450,49 @@ def paytabs_return(request):
         return redirect(
             f"{frontend_url}/payment/success?subscription_id={subscription_id}&status=error&message={str(e)}"
         )
+
+
+@csrf_exempt
+@api_view(["POST", "GET"])
+@permission_classes([AllowAny])
+def paytabs_callback(request):
+    """
+    PayTabs server-to-server callback (IPN). Confirm via query API before finalize.
+    POST /api/payments/paytabs-callback/
+    """
+    logger.info("PayTabs callback received method=%s", request.method)
+    data = {}
+    try:
+        if hasattr(request, "data") and request.data:
+            data = request.data
+        elif request.body:
+            data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        data = {}
+
+    # PayTabs may send form-encoded or JSON; also check query params
+    tran_ref = (
+        data.get("tran_ref")
+        or data.get("tranRef")
+        or request.GET.get("tran_ref")
+        or request.GET.get("tranRef")
+        or request.POST.get("tran_ref")
+        or request.POST.get("tranRef")
+    )
+    if not tran_ref:
+        logger.warning("PayTabs callback missing tran_ref")
+        return error_response("Missing tran_ref", code="bad_request")
+
+    payment = find_payment_by_tran_ref(str(tran_ref))
+    if not payment:
+        logger.warning("PayTabs callback: payment not found for tran_ref=%s", tran_ref)
+        return error_response(
+            "Payment not found",
+            code="not_found",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    ok, reason = confirm_and_finalize_payment(payment)
+    logger.info("PayTabs callback payment=%s ok=%s reason=%s", payment.id, ok, reason)
+    return success_response(message="OK", data={"ok": ok, "reason": reason})
 

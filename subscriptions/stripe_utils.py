@@ -157,7 +157,6 @@ def verify_stripe_payment(session_id: str):
 
     # Set Stripe API key
     stripe.api_key = secret_key.strip()
-    logger.info(f"Using Stripe API key (first 10 chars): {secret_key[:10]}...")
 
     try:
         # Retrieve the session

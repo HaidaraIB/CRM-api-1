@@ -424,6 +424,35 @@ class CanManagePayments(LimitedAdminPermission):
         return la.can_manage_payment_gateways or la.can_view_reports
 
 
+class CanViewCompanyInvoicesOrManagePayments(permissions.BasePermission):
+    """
+    Platform payment managers (admin panel) OR tenant company admin for their own invoices.
+    Safe methods + PDF download only — tenants cannot email on behalf of platform.
+    """
+
+    message = "You do not have permission to view invoices."
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if CanManagePayments().has_permission(request, view):
+            return True
+        # Tenant company admin/owner: list/retrieve/pdf only
+        action = getattr(view, "action", None)
+        if action in ("list", "retrieve", "pdf", None) and request.method in permissions.SAFE_METHODS:
+            return bool(request.user.is_admin() and request.user.company_id)
+        if action == "pdf" and request.method in permissions.SAFE_METHODS:
+            return bool(request.user.is_admin() and request.user.company_id)
+        return False
+
+    def has_object_permission(self, request, view, obj):
+        if CanManagePayments().has_permission(request, view):
+            return True
+        company_id = getattr(request.user, "company_id", None)
+        sub = getattr(obj, "subscription", None)
+        return bool(company_id and sub and sub.company_id == company_id)
+
+
 class CanManagePaymentGateways(LimitedAdminPermission):
     message = "You do not have permission to manage payment gateways."
     required_permission = "can_manage_payment_gateways"
