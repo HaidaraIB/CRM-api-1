@@ -79,6 +79,11 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("  Not enabled - add WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID in .env (see WHATSAPP_EMBEDDED_SIGNUP.md)."))
 
         self.stdout.write("")
+        self.stdout.write(
+            "Platform / Company WhatsApp (admin → owner): "
+            "run  .venv\\Scripts\\python.exe manage.py platform_whatsapp_check"
+        )
+        self.stdout.write("")
         self.stdout.write(f"Authenticated send endpoint (Bearer token): POST {api_base}{send_path}")
         self.stdout.write("  Body: to (E.164 digits), message, optional phone_number_id, optional client_id")
         self.stdout.write("  On failure, API JSON details include graph_http_status when Graph returns an HTTP error.")

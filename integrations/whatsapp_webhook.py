@@ -245,7 +245,8 @@ def process_whatsapp_message(message, phone_number_id):
     """
     معالجة رسالة WhatsApp واردة.
     Multi-tenant: نستخرج phone_number_id → نبحث في WhatsAppAccount → نحصل على tenant (company).
-    Tenant CRM accounts take priority over the platform admin number when both share a phone_number_id.
+    Platform Company WhatsApp number always routes to admin↔owner thread (never tenant CRM),
+    even if a WhatsAppAccount row incorrectly reuses the same phone_number_id.
     """
     from accounts.platform_whatsapp import effective_platform_phone_number_id
 
@@ -262,16 +263,17 @@ def process_whatsapp_message(message, phone_number_id):
         logger.warning("No 'from' number in WhatsApp message")
         return
 
+    platform_pid = effective_platform_phone_number_id()
+    if platform_pid and str(phone_number_id) == str(platform_pid):
+        process_platform_admin_inbound(message)
+        return
+
     wa_account = WhatsAppAccount.objects.filter(
         phone_number_id=phone_number_id,
         status='connected',
     ).select_related('company', 'integration_account').first()
 
     if not wa_account:
-        platform_pid = effective_platform_phone_number_id()
-        if platform_pid and str(phone_number_id) == str(platform_pid):
-            process_platform_admin_inbound(message)
-            return
         logger.warning(
             "No WhatsAppAccount found for phone_number_id=%s. "
             "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "

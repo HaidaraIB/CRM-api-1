@@ -502,3 +502,13 @@ curl -X POST \
 ---
 
 **آخر تحديث:** 2024
+
+---
+
+## Company WhatsApp (platform number)
+
+Admin **Company WhatsApp** uses the same webhook URL. Subscribe `messages` on the WABA that owns `PLATFORM_WHATSAPP_PHONE_NUMBER_ID`.
+
+If `metadata.phone_number_id` equals the platform PID, inbound messages go to the admin↔owner thread (`AdminTenantWhatsAppMessage`), not tenant CRM chat.
+
+Do not connect the platform phone as a tenant WhatsApp account. See [COMPANY_WHATSAPP.md](./COMPANY_WHATSAPP.md).

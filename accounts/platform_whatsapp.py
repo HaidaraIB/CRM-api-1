@@ -20,6 +20,27 @@ def normalize_phone_digits(phone: str) -> str:
     return "".join(c for c in str(phone).replace(" ", "") if c.isdigit())
 
 
+def _strip_env_value(value: str) -> str:
+    """Strip whitespace and optional surrounding quotes from .env values."""
+    s = (value or "").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        s = s[1:-1].strip()
+    return s
+
+
+def _looks_like_template_name(name: str) -> bool:
+    """
+    Meta template names are snake_case labels, not numeric Graph IDs.
+    Digit-only values (e.g. pasted phone_number_id) are treated as misconfigured.
+    """
+    n = (name or "").strip()
+    if not n:
+        return False
+    if n.isdigit():
+        return False
+    return True
+
+
 def _db_whatsapp_row():
     try:
         from settings.models import PlatformWhatsAppSettings
@@ -32,8 +53,8 @@ def _db_whatsapp_row():
 def effective_platform_phone_number_id() -> str:
     row = _db_whatsapp_row()
     if row and (row.phone_number_id or "").strip():
-        return row.phone_number_id.strip()
-    return (getattr(settings, "PLATFORM_WHATSAPP_PHONE_NUMBER_ID", "") or "").strip()
+        return _strip_env_value(row.phone_number_id)
+    return _strip_env_value(getattr(settings, "PLATFORM_WHATSAPP_PHONE_NUMBER_ID", "") or "")
 
 
 def effective_platform_access_token() -> str:
@@ -41,47 +62,66 @@ def effective_platform_access_token() -> str:
     if row:
         tok = row.get_access_token()
         if tok:
-            return tok
-    return (getattr(settings, "PLATFORM_WHATSAPP_ACCESS_TOKEN", "") or "").strip()
+            return _strip_env_value(tok)
+    return _strip_env_value(getattr(settings, "PLATFORM_WHATSAPP_ACCESS_TOKEN", "") or "")
 
 
 def effective_graph_api_version() -> str:
     row = _db_whatsapp_row()
     if row and (row.graph_api_version or "").strip():
-        return row.graph_api_version.strip()
-    return (getattr(settings, "PLATFORM_WHATSAPP_GRAPH_API_VERSION", META_GRAPH_API_VERSION) or META_GRAPH_API_VERSION).strip()
+        return _strip_env_value(row.graph_api_version) or META_GRAPH_API_VERSION
+    return _strip_env_value(
+        getattr(settings, "PLATFORM_WHATSAPP_GRAPH_API_VERSION", META_GRAPH_API_VERSION) or META_GRAPH_API_VERSION
+    ) or META_GRAPH_API_VERSION
 
 
 def effective_otp_template_name() -> str:
     row = _db_whatsapp_row()
     if row and (row.otp_template_name or "").strip():
-        return row.otp_template_name.strip()
-    return (getattr(settings, "PLATFORM_WHATSAPP_OTP_TEMPLATE_NAME", "") or "").strip()
+        return _strip_env_value(row.otp_template_name)
+    return _strip_env_value(getattr(settings, "PLATFORM_WHATSAPP_OTP_TEMPLATE_NAME", "") or "")
 
 
 def effective_otp_template_lang() -> str:
     row = _db_whatsapp_row()
     if row and (row.otp_template_lang or "").strip():
-        return row.otp_template_lang.strip()
-    return (getattr(settings, "PLATFORM_WHATSAPP_OTP_TEMPLATE_LANG", "en") or "en").strip()
+        return _strip_env_value(row.otp_template_lang) or "en"
+    return _strip_env_value(getattr(settings, "PLATFORM_WHATSAPP_OTP_TEMPLATE_LANG", "en") or "en") or "en"
 
 
 def effective_admin_template_name() -> str:
     row = _db_whatsapp_row()
     if row and (row.admin_template_name or "").strip():
-        return row.admin_template_name.strip()
-    return (getattr(settings, "PLATFORM_WHATSAPP_ADMIN_TEMPLATE_NAME", "") or "").strip()
+        name = _strip_env_value(row.admin_template_name)
+    else:
+        name = _strip_env_value(getattr(settings, "PLATFORM_WHATSAPP_ADMIN_TEMPLATE_NAME", "") or "")
+    if name and not _looks_like_template_name(name):
+        logger.warning(
+            "Platform WhatsApp admin_template_name looks invalid (digit-only ID). "
+            "Ignoring it; set a Meta template name like admin_notify_1."
+        )
+        return ""
+    return name
 
 
 def effective_admin_template_lang() -> str:
     row = _db_whatsapp_row()
     if row and (row.admin_template_lang or "").strip():
-        return row.admin_template_lang.strip()
-    return (getattr(settings, "PLATFORM_WHATSAPP_ADMIN_TEMPLATE_LANG", "en") or "en").strip()
+        return _strip_env_value(row.admin_template_lang) or "en"
+    return _strip_env_value(getattr(settings, "PLATFORM_WHATSAPP_ADMIN_TEMPLATE_LANG", "en") or "en") or "en"
 
 
 def platform_whatsapp_configured() -> bool:
+    """True when PID + token are present (does not validate token with Graph)."""
     return bool(effective_platform_phone_number_id() and effective_platform_access_token())
+
+
+def platform_access_token_looks_valid() -> bool:
+    """Heuristic: real Meta user tokens are long and usually start with EAA."""
+    tok = effective_platform_access_token()
+    if len(tok) < 50:
+        return False
+    return True
 
 
 def _graph_base() -> str:
@@ -177,6 +217,19 @@ def send_admin_message(to_digits: str, body: str) -> tuple[bool, Any]:
     If admin template name is set (DB or env), use that template (works outside 24h session).
     Otherwise send a plain text session message (requires an open customer-care window).
     """
+    if not platform_access_token_looks_valid():
+        logger.warning(
+            "Platform WhatsApp access token looks invalid (too short). "
+            "Paste a System User permanent token from Meta Business Suite."
+        )
+        return False, {
+            "error": "platform_whatsapp_token_invalid",
+            "message": (
+                "Platform WhatsApp access token is missing or too short. "
+                "Set a valid Meta System User token in Admin → Settings → Platform WhatsApp "
+                "or PLATFORM_WHATSAPP_ACCESS_TOKEN."
+            ),
+        }
     admin_tpl = effective_admin_template_name()
     admin_lang = effective_admin_template_lang()
     if admin_tpl:
