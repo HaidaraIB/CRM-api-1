@@ -337,6 +337,16 @@ def process_whatsapp_message(message, phone_number_id):
             whatsapp_message_id=message_id,
         )
 
+        # Customer replied ⇒ treat recent outbound as read (covers disabled read receipts).
+        LeadWhatsAppMessage.objects.filter(
+            client=client,
+            direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+        ).exclude(
+            delivery_status='failed',
+        ).exclude(
+            delivery_status='read',
+        ).update(delivery_status='read', delivery_error=None)
+
         ClientEvent.objects.create(
             client=client,
             event_type='whatsapp_message',
@@ -373,6 +383,16 @@ def process_whatsapp_message(message, phone_number_id):
         raise
 
 
+# Meta status progression; never downgrade (e.g. read → delivered).
+_WA_STATUS_RANK = {
+    'pending': 0,
+    'sent': 1,
+    'delivered': 2,
+    'read': 3,
+    'failed': 4,
+}
+
+
 def process_whatsapp_status_update(status_obj, phone_number_id=None):
     """
     Update outbound LeadWhatsAppMessage rows from Meta delivery webhooks.
@@ -396,13 +416,30 @@ def process_whatsapp_status_update(status_obj, phone_number_id=None):
             part for part in (str(code) if code else '', title, details) if part
         )[:512]
 
-    updated = LeadWhatsAppMessage.objects.filter(
+    qs = LeadWhatsAppMessage.objects.filter(
         whatsapp_message_id=message_id,
         direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
-    ).update(
-        delivery_status=status,
-        delivery_error=error_text if status == 'failed' else None,
     )
+    msg_row = qs.only('id', 'delivery_status').first()
+    updated = 0
+    if msg_row:
+        current = (msg_row.delivery_status or '').strip().lower() or 'pending'
+        new_rank = _WA_STATUS_RANK.get(status, -1)
+        cur_rank = _WA_STATUS_RANK.get(current, -1)
+        # Always apply failed; otherwise only advance forward.
+        if status == 'failed' or new_rank >= cur_rank:
+            updated = qs.filter(pk=msg_row.pk).update(
+                delivery_status=status,
+                delivery_error=error_text if status == 'failed' else None,
+            )
+        else:
+            updated = 0
+            logger.debug(
+                "WhatsApp status ignored (no downgrade): wam_id=%s current=%s incoming=%s",
+                message_id,
+                current,
+                status,
+            )
 
     redacted_recipient = (
         f"...{str(recipient)[-4:]}" if recipient and len(str(recipient)) >= 4 else '????'
