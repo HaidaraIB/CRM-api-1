@@ -457,15 +457,19 @@ class DealViewSet(viewsets.ModelViewSet):
         )
 
         if user.is_admin():
-            return queryset.filter(company=user.company)
+            queryset = queryset.filter(company=user.company)
+        elif user.is_supervisor() and user.supervisor_has_permission("manage_deals"):
+            queryset = queryset.filter(company=user.company)
+        elif user.is_employee():
+            queryset = queryset.filter(employee=user)
+        else:
+            return queryset.none()
 
-        if user.is_supervisor() and user.supervisor_has_permission("manage_deals"):
-            return queryset.filter(company=user.company)
+        stage = self.request.query_params.get("stage")
+        if stage:
+            queryset = queryset.filter(stage=stage)
 
-        if user.is_employee():
-            return queryset.filter(employee=user)
-
-        return queryset.none()
+        return queryset
 
     def get_serializer_class(self):
         if self.action == "list":
