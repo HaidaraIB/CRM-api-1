@@ -11,7 +11,7 @@ from ..stripe_utils import verify_stripe_payment
 from ..zaincash_utils import check_zaincash_payment_status
 from ..fib_utils import check_fib_payment_status
 from ..services.billing import finalize_completed_payment
-from ..services.checkout_auth import require_subscription_owner
+from ..services.checkout_auth import require_subscription_company_member
 from ..services.subscription_helpers import (
     _payment_amount_usd,
     reconcile_unapplied_completed_payment,
@@ -40,9 +40,10 @@ def check_payment_status(request, subscription_id):
     """
     try:
         subscription = Subscription.objects.select_related("company__owner").get(id=subscription_id)
-        owner_err = require_subscription_owner(request, subscription)
-        if owner_err is not None:
-            return owner_err
+        # Status is read-only: any company member may poll (owners pay; staff need this after login).
+        member_err = require_subscription_company_member(request, subscription)
+        if member_err is not None:
+            return member_err
 
         try:
             payment = (

@@ -268,6 +268,26 @@ class TestReconcileUnappliedCompletedPayment:
         assert (sub.end_date - now).days >= 28
         assert sub.payments.get(tran_ref="cs_check_reconcile").applied_at is not None
 
+    def test_check_payment_status_allows_company_employee(
+        self, company, plan, api_client, employee_user
+    ):
+        from subscriptions.models import BillingCycle, Subscription
+
+        now = timezone.now()
+        sub = Subscription.objects.create(
+            company=company,
+            plan=plan,
+            is_active=True,
+            end_date=now + timedelta(days=30),
+            billing_cycle=BillingCycle.MONTHLY,
+        )
+        api_client.force_authenticate(user=employee_user)
+        response = api_client.get(f"/api/v1/payment-status/{sub.id}/")
+        assert response.status_code == 200
+        data = api_body(response)
+        assert data.get("is_truly_active") is True
+        assert data.get("subscription_id") == sub.id
+
 
 @pytest.mark.django_db
 class TestRepairSubscriptionPeriodWindows:
