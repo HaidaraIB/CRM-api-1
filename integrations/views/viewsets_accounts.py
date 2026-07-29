@@ -28,6 +28,7 @@ from ..models import (
 )
 from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_VERSION
 from ..whatsapp_account_sync import (
+    disconnect_whatsapp_accounts_for_integration,
     sync_whatsapp_accounts_from_integration,
     upsert_whatsapp_account_from_embedded_signup,
 )
@@ -783,9 +784,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         if account.platform == 'meta':
             self._meta_cache_invalidate(account.id)
         elif account.platform == 'whatsapp':
-            WhatsAppAccount.objects.filter(integration_account=account).update(
-                status='disconnected'
-            )
+            disconnect_whatsapp_accounts_for_integration(account)
 
         IntegrationLog.objects.create(
             account=account,
@@ -881,6 +880,9 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                     logger.info("Meta permissions revoked before delete for account %s", instance.id)
                 except Exception as e:
                     logger.warning("Meta revoke_permissions before delete failed: %s", e)
+        elif instance.platform == 'whatsapp':
+            # Prevent orphaned WhatsAppAccount rows (SET_NULL) from staying connected+tokened.
+            disconnect_whatsapp_accounts_for_integration(instance)
         super().perform_destroy(instance)
     
     @action(detail=True, methods=['post'])

@@ -132,7 +132,7 @@ def whatsapp_conversations_list(request):
                 'id': c.id,
                 'name': c.name,
                 'phone_number': c.phone_number or '',
-                'company_name': getattr(c, 'company_name', None) or c.name,
+                'lead_company_name': getattr(c, 'lead_company_name', None) or '',
             }
             for c in clients
         ],
@@ -162,7 +162,7 @@ def whatsapp_contact_by_phone(request):
             'id': client.id,
             'name': client.name,
             'phone_number': client.phone_number or '',
-            'company_name': getattr(client, 'lead_company_name', None) or client.name,
+            'lead_company_name': getattr(client, 'lead_company_name', None) or '',
         },
     )
 

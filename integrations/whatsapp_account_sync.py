@@ -10,11 +10,43 @@ import logging
 from typing import Optional
 
 import requests
+from django.db.models import Q
 
 from .models import IntegrationAccount, WhatsAppAccount
 from .oauth_utils import get_oauth_handler, META_GRAPH_API_BASE_URL
 
 logger = logging.getLogger(__name__)
+
+
+def disconnect_whatsapp_accounts_for_integration(account: IntegrationAccount) -> int:
+    """
+    Mark WhatsApp phone rows as disconnected and clear their tokens.
+
+    Updates rows linked to this IntegrationAccount, plus company orphans still
+    marked connected with no integration FK (left behind by DELETE + SET_NULL).
+    """
+    if getattr(account, 'platform', None) != 'whatsapp':
+        return 0
+
+    qs = WhatsAppAccount.objects.filter(company_id=account.company_id).filter(
+        Q(integration_account=account)
+        | Q(integration_account__isnull=True, status='connected')
+    )
+    count = 0
+    for wa in qs:
+        wa.set_access_token(None)
+        wa.status = 'disconnected'
+        wa.integration_account = None
+        wa.save(update_fields=['access_token', 'status', 'integration_account', 'updated_at'])
+        count += 1
+    if count:
+        logger.info(
+            'Disconnected %s WhatsAppAccount row(s) for integration %s (company=%s)',
+            count,
+            account.id,
+            account.company_id,
+        )
+    return count
 
 
 def upsert_whatsapp_account_from_embedded_signup(
@@ -188,6 +220,25 @@ def get_connected_whatsapp_account(company, phone_number_id=None) -> Optional[Wh
         if pid_filter:
             qs = qs.filter(phone_number_id=pid_filter)
         return qs.first()
+
+    # No connected IntegrationAccount → clear orphan phone rows left by DELETE + SET_NULL
+    # so outbound send cannot succeed while the UI shows Disconnected.
+    if not has_connected_whatsapp_integration(company):
+        orphans = list(
+            WhatsAppAccount.objects.filter(company=company, status='connected')
+        )
+        for wa in orphans:
+            wa.set_access_token(None)
+            wa.status = 'disconnected'
+            wa.integration_account = None
+            wa.save(update_fields=['access_token', 'status', 'integration_account', 'updated_at'])
+        if orphans:
+            logger.info(
+                'Cleared %s orphan connected WhatsAppAccount row(s) for company=%s (no connected integration)',
+                len(orphans),
+                getattr(company, 'id', company),
+            )
+        return None
 
     wa = _query()
     if wa:

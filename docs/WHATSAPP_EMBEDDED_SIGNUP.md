@@ -140,5 +140,11 @@ Official Meta guide: [Onboard WhatsApp Business app users](https://developers.fa
 - **No contacts/history after coexistence**: subscribe webhook fields in Part A §8; keep the Business app open during sync; check logs for `WhatsApp SMB sync`.  
 - **History empty with error 2593109**: customer declined history sharing in the Business app — expected.  
 - **`#N/A` Graph errors**: confirm app is in **Live** mode for real users when required.
+- **Outbound works but customer replies never appear in Messaging Center**:
+  1. Run `.venv\Scripts\python.exe manage.py whatsapp_debug_check` — check webhook URL, secrets, and inbound vs outbound message counts.
+  2. Confirm Meta callback is `{API_BASE_URL}/api/integrations/webhooks/whatsapp/` and the WABA is subscribed to **`messages`** (plus coexistence fields if using the Business app).
+  3. Confirm the tenant `WhatsAppAccount.phone_number_id` is **not** the same as Platform WhatsApp (`PLATFORM_WHATSAPP_PHONE_NUMBER_ID`) — platform PID diverts replies to the admin chat, not Messaging Center.
+  4. Confirm `WhatsAppAccount.status` is `connected` (Disconnect clears tokens and status; reconnect if needed).
+  5. In the CRM chat thread, use **Refresh** or wait a few seconds — Messaging Center polls for new messages while the chat is open.
 
 Official reference: [WhatsApp Embedded Signup implementation](https://developers.facebook.com/docs/whatsapp/embedded-signup/implementation).
