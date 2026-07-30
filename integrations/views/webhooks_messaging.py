@@ -111,6 +111,7 @@ _META_GRAPH_ERROR_CODES = {
     131047: 'whatsapp_outside_session_use_template',
     132000: 'whatsapp_template_parameter_count',
     132001: 'whatsapp_template_parameter_mismatch',
+    133010: 'whatsapp_account_not_registered',
 }
 
 

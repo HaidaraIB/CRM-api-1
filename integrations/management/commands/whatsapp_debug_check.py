@@ -89,29 +89,60 @@ class Command(BaseCommand):
         self.stdout.write("  On failure, API JSON details include graph_http_status when Graph returns an HTTP error.")
         self.stdout.write("")
 
-        qs = WhatsAppAccount.objects.select_related("company").order_by("-id")[:100]
+        qs = WhatsAppAccount.objects.select_related("company", "integration_account").order_by("-id")[:100]
         count = WhatsAppAccount.objects.count()
         self.stdout.write(f"WhatsAppAccount rows (showing up to 100 of {count}):")
         if not count:
             self.stdout.write(self.style.WARNING("  No rows - connect WhatsApp in the app or run OAuth flow."))
             return
 
+        from integrations.services.whatsapp_coexistence import (
+            fetch_phone_registration_fields,
+            fetch_waba_subscribed_apps,
+        )
+
         for wa in qs:
             tok = wa.get_access_token()
             self.stdout.write(
                 f"  id={wa.id} company_id={wa.company_id} "
-                f"phone_number_id={wa.phone_number_id} status={wa.status} "
-                f"has_token={bool(tok)} display={wa.display_phone_number or '-'}"
+                f"phone_number_id={wa.phone_number_id} waba_id={wa.waba_id or '-'} "
+                f"status={wa.status} has_token={bool(tok)} display={wa.display_phone_number or '-'}"
             )
             disp = (wa.display_phone_number or '').replace(' ', '').replace('-', '')
             if disp.startswith('+1555') or disp.startswith('1555'):
                 self.stdout.write(
                     self.style.WARNING(
-                        "    ^ Meta sandbox/test number (+1 555-...). Add each recipient phone in "
-                        "Meta Developer Console -> WhatsApp -> API Setup -> test numbers, or complete "
-                        "Business Verification for real delivery."
+                        "    ^ Meta sandbox/test number (+1 555-...). Outbound/status may work while "
+                        "user replies stay at 1 tick — use a real business number for two-way QA. "
+                        "Also add test recipients in Meta Developer Console -> WhatsApp -> API Setup."
                     )
                 )
+            if tok and wa.status == 'connected':
+                fields = fetch_phone_registration_fields(tok, wa.phone_number_id)
+                if fields:
+                    self.stdout.write(
+                        f"    graph: status={fields.get('status')} platform={fields.get('platform_type')} "
+                        f"is_on_biz_app={fields.get('is_on_biz_app')} "
+                        f"name_status={fields.get('name_status')}"
+                    )
+                if wa.waba_id:
+                    listed = fetch_waba_subscribed_apps(tok, wa.waba_id)
+                    if listed.get('ok'):
+                        self.stdout.write(f"    subscribed_apps GET: {str(listed.get('body'))[:200]}")
+                    else:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"    subscribed_apps GET failed/flaky status={listed.get('status_code')} "
+                                f"err={listed.get('error')} — if inbound is broken run "
+                                "manage.py whatsapp_repair_subscriptions"
+                            )
+                        )
+            acc = wa.integration_account
+            if acc and isinstance(acc.metadata, dict):
+                if acc.metadata.get('coexistence'):
+                    self.stdout.write("    coexistence=true (WhatsApp Business app onboarding)")
+                if acc.metadata.get('phone_status'):
+                    self.stdout.write(f"    metadata.phone_status={acc.metadata.get('phone_status')}")
 
         from integrations.models import LeadWhatsAppMessage
         inbound = LeadWhatsAppMessage.objects.filter(direction='inbound').count()
@@ -123,6 +154,11 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.WARNING(
                     "  No inbound messages in DB - Meta webhooks must POST to your PUBLIC API URL "
-                    "(not localhost). Check Meta Developer -> WhatsApp -> Configuration -> Webhook."
+                    "(not localhost). Check Meta Developer -> WhatsApp -> Configuration -> Webhook, "
+                    "and run: python manage.py whatsapp_repair_subscriptions"
                 )
             )
+        self.stdout.write("")
+        self.stdout.write(
+            "Repair helper: python manage.py whatsapp_repair_subscriptions [--register] [--company-id N]"
+        )

@@ -96,8 +96,11 @@ That unlocks Meta’s dual setup screen: **Connect your existing WhatsApp Busine
 6. The CRM calls  
    `POST /api/integrations/accounts/{id}/whatsapp/embedded-signup/complete/`  
    with `{ "code": "...", "waba_id", "phone_number_id", "signup_event" }`.  
-7. The API exchanges the code, upserts `WhatsAppAccount` rows, subscribes the WABA (`POST /{waba-id}/subscribed_apps`), and — for coexistence — immediately starts SMB contacts + history sync (`POST /{phone_number_id}/smb_app_data`).  
-8. Coexistence numbers are **not** registered via Cloud API `/register` (already registered on the Business app).
+7. The API exchanges the code, upserts `WhatsAppAccount` rows, subscribes the WABA (`POST /{waba-id}/subscribed_apps` — hard requirement; connect is marked error if all subscribe calls fail), and:
+   - **Cloud API numbers:** `POST /{phone_number_id}/register` (avoids Graph `#133010 Account not registered`)
+   - **Coexistence:** SMB contacts + history sync (`POST /{phone_number_id}/smb_app_data`) within 24h — **do not** `/register`
+8. Coexistence is detected from `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` **or** Graph `is_on_biz_app=true` if the browser postMessage event was missed.
+9. Repair helper on the API host: `python manage.py whatsapp_repair_subscriptions [--register] [--company-id N]`
 
 If `WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID` is **not** set, behavior is unchanged: **popup** opens the classic `authorization_url`.
 

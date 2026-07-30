@@ -34,6 +34,7 @@ def is_coexistence_signup_event(signup_event: Optional[str]) -> bool:
 def subscribe_waba_webhooks(access_token: str, waba_id: str) -> bool:
     """
     POST /{waba-id}/subscribed_apps — required for Tech Provider Embedded Signup webhooks.
+    Without this, outbound may work while inbound replies never reach the CRM.
     """
     waba_id = (waba_id or "").strip()
     token = (access_token or "").strip()
@@ -41,7 +42,11 @@ def subscribe_waba_webhooks(access_token: str, waba_id: str) -> bool:
         return False
     url = f"{META_GRAPH_API_BASE_URL}/{waba_id}/subscribed_apps"
     try:
-        resp = requests.post(url, params={"access_token": token}, timeout=20)
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
         if resp.status_code >= 400:
             logger.warning(
                 "WhatsApp WABA subscribe failed: waba_id=%s status=%s body=%s",
@@ -55,6 +60,137 @@ def subscribe_waba_webhooks(access_token: str, waba_id: str) -> bool:
     except Exception as e:
         logger.warning("WhatsApp WABA subscribe error: waba_id=%s error=%s", waba_id, e)
         return False
+
+
+def fetch_waba_subscribed_apps(access_token: str, waba_id: str) -> dict[str, Any]:
+    """GET /{waba-id}/subscribed_apps — Meta sometimes returns 500 here even when POST succeeded."""
+    out: dict[str, Any] = {"ok": False, "status_code": None, "body": None, "error": None}
+    waba_id = (waba_id or "").strip()
+    token = (access_token or "").strip()
+    if not waba_id or not token:
+        out["error"] = "missing waba_id or access_token"
+        return out
+    url = f"{META_GRAPH_API_BASE_URL}/{waba_id}/subscribed_apps"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        out["status_code"] = resp.status_code
+        try:
+            out["body"] = resp.json()
+        except Exception:
+            out["body"] = {"raw": (resp.text or "")[:500]}
+        out["ok"] = resp.status_code < 400
+        return out
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+
+
+def fetch_phone_registration_fields(access_token: str, phone_number_id: str) -> Optional[dict]:
+    """Phone fields used to decide Cloud register vs coexistence."""
+    phone_number_id = (phone_number_id or "").strip()
+    token = (access_token or "").strip()
+    if not phone_number_id or not token:
+        return None
+    try:
+        resp = requests.get(
+            f"{META_GRAPH_API_BASE_URL}/{phone_number_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "fields": (
+                    "id,display_phone_number,account_mode,is_on_biz_app,"
+                    "platform_type,status,name_status,code_verification_status"
+                ),
+            },
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            logger.warning(
+                "fetch_phone_registration_fields failed: phone_number_id=%s status=%s body=%s",
+                phone_number_id,
+                resp.status_code,
+                (resp.text or "")[:300],
+            )
+            return None
+        return resp.json()
+    except Exception as e:
+        logger.warning("fetch_phone_registration_fields error: %s", e)
+        return None
+
+
+def register_cloud_phone_number(
+    access_token: str,
+    phone_number_id: str,
+    pin: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    POST /{phone_number_id}/register — required for Cloud API (non-coexistence) numbers.
+    Skipping this causes Graph error 133010 Account not registered.
+    Do NOT call for coexistence (is_on_biz_app) numbers.
+    """
+    import secrets
+
+    out: dict[str, Any] = {
+        "ok": False,
+        "status_code": None,
+        "body": None,
+        "pin": None,
+        "error": None,
+        "skipped": False,
+    }
+    phone_number_id = (phone_number_id or "").strip()
+    token = (access_token or "").strip()
+    if not phone_number_id or not token:
+        out["error"] = "missing phone_number_id or access_token"
+        return out
+
+    pin_digits = "".join(ch for ch in str(pin or "") if ch.isdigit())
+    if len(pin_digits) != 6:
+        pin_digits = f"{secrets.randbelow(1_000_000):06d}"
+    out["pin"] = pin_digits
+
+    url = f"{META_GRAPH_API_BASE_URL}/{phone_number_id}/register"
+    try:
+        resp = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"messaging_product": "whatsapp", "pin": pin_digits},
+            timeout=60,
+        )
+        out["status_code"] = resp.status_code
+        try:
+            out["body"] = resp.json()
+        except Exception:
+            out["body"] = {"raw": (resp.text or "")[:500]}
+        if resp.status_code < 400 and isinstance(out["body"], dict) and out["body"].get("success"):
+            out["ok"] = True
+            logger.info(
+                "WhatsApp Cloud register ok: phone_number_id=%s",
+                phone_number_id,
+            )
+        else:
+            out["error"] = f"register failed status={resp.status_code} body={out['body']}"
+            logger.warning(
+                "WhatsApp Cloud register failed: phone_number_id=%s status=%s body=%s",
+                phone_number_id,
+                resp.status_code,
+                str(out["body"])[:500],
+            )
+        return out
+    except Exception as e:
+        out["error"] = str(e)
+        logger.warning(
+            "WhatsApp Cloud register error: phone_number_id=%s error=%s",
+            phone_number_id,
+            e,
+        )
+        return out
 
 
 def initiate_smb_app_data_sync(access_token: str, phone_number_id: str) -> dict[str, Any]:

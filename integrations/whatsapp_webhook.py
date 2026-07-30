@@ -8,7 +8,6 @@ from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount, LeadWhatsAppMessage
-from .decorators import rate_limit_webhook
 from crm.models import ClientEvent
 import json
 import hmac
@@ -54,7 +53,6 @@ def verify_whatsapp_webhook_signature(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-@rate_limit_webhook(max_requests=100, window=60)
 def whatsapp_webhook(request):
     """
     Webhook endpoint لاستقبال الرسائل من WhatsApp Business API
@@ -136,42 +134,48 @@ def whatsapp_webhook(request):
                             process_smb_message_echoes(value, waba_id=waba_id)
                         elif field == 'account_update':
                             process_account_update(value, waba_id=waba_id)
-                        elif 'messages' in value:
-                            # رسالة واردة: استخراج phone_number_id لربط الرسالة بـ tenant
-                            messages = value.get('messages', [])
+                        elif field == 'messages' or (
+                            not field and ('messages' in value or 'statuses' in value)
+                        ):
+                            # field=messages carries inbound messages and/or delivery statuses
                             phone_number_id = value.get('metadata', {}).get('phone_number_id')
-                            if not phone_number_id:
-                                logger.warning("WhatsApp webhook: missing phone_number_id in value.metadata")
-                                continue
-                            logger.info(
-                                "WhatsApp webhook inbound: phone_number_id=%s messages_count=%s",
-                                phone_number_id,
-                                len(messages),
-                            )
-                            for message in messages:
-                                try:
-                                    process_whatsapp_message(message, phone_number_id)
-                                except Exception as e:
-                                    logger.error(f"Error processing WhatsApp message: {str(e)}", exc_info=True)
-                                    continue
-                        elif 'statuses' in value:
-                            phone_number_id = value.get('metadata', {}).get('phone_number_id')
-                            statuses = value.get('statuses', [])
-                            logger.info(
-                                "WhatsApp webhook statuses: phone_number_id=%s count=%s",
-                                phone_number_id,
-                                len(statuses),
-                            )
-                            for status_obj in statuses:
-                                try:
-                                    process_whatsapp_status_update(status_obj, phone_number_id)
-                                except Exception as e:
-                                    logger.error(
-                                        "Error processing WhatsApp status update: %s",
-                                        e,
-                                        exc_info=True,
+                            messages = value.get('messages') or []
+                            statuses = value.get('statuses') or []
+                            if messages:
+                                if not phone_number_id:
+                                    logger.warning(
+                                        "WhatsApp webhook: missing phone_number_id in value.metadata"
                                     )
-                                    continue
+                                else:
+                                    logger.info(
+                                        "WhatsApp webhook inbound: phone_number_id=%s messages_count=%s",
+                                        phone_number_id,
+                                        len(messages),
+                                    )
+                                    for message in messages:
+                                        try:
+                                            process_whatsapp_message(message, phone_number_id)
+                                        except Exception as e:
+                                            logger.error(
+                                                "Error processing WhatsApp message: %s",
+                                                e,
+                                                exc_info=True,
+                                            )
+                            if statuses:
+                                logger.info(
+                                    "WhatsApp webhook statuses: phone_number_id=%s count=%s",
+                                    phone_number_id,
+                                    len(statuses),
+                                )
+                                for status_obj in statuses:
+                                    try:
+                                        process_whatsapp_status_update(status_obj, phone_number_id)
+                                    except Exception as e:
+                                        logger.error(
+                                            "Error processing WhatsApp status update: %s",
+                                            e,
+                                            exc_info=True,
+                                        )
                         else:
                             logger.debug(
                                 "WhatsApp webhook unhandled field=%s keys=%s",

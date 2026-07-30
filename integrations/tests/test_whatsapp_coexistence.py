@@ -224,3 +224,36 @@ def test_initiate_smb_app_data_sync_calls_both(mock_post, settings):
     assert mock_post.call_count == 2
     sync_types = [c.kwargs["json"]["sync_type"] for c in mock_post.call_args_list]
     assert sync_types == ["smb_app_state_sync", "history"]
+
+
+@patch("integrations.services.whatsapp_coexistence.requests.post")
+def test_register_cloud_phone_number_ok(mock_post):
+    from integrations.services.whatsapp_coexistence import register_cloud_phone_number
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"success": True}
+
+    mock_post.return_value = Resp()
+    result = register_cloud_phone_number("token", "phone-1", pin="212834")
+    assert result["ok"] is True
+    assert result["pin"] == "212834"
+    assert mock_post.call_args.kwargs["json"] == {
+        "messaging_product": "whatsapp",
+        "pin": "212834",
+    }
+
+
+@patch("integrations.services.whatsapp_coexistence.requests.post")
+def test_subscribe_waba_webhooks_uses_bearer(mock_post):
+    from integrations.services.whatsapp_coexistence import subscribe_waba_webhooks
+
+    class Resp:
+        status_code = 200
+        text = '{"success":true}'
+
+    mock_post.return_value = Resp()
+    assert subscribe_waba_webhooks("tok", "waba-1") is True
+    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer tok"

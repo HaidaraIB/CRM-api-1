@@ -33,8 +33,10 @@ from ..whatsapp_account_sync import (
     upsert_whatsapp_account_from_embedded_signup,
 )
 from ..services.whatsapp_coexistence import (
+    fetch_phone_registration_fields,
     initiate_smb_app_data_sync,
     is_coexistence_signup_event,
+    register_cloud_phone_number,
     subscribe_waba_webhooks,
     verify_coexistence_phone,
 )
@@ -178,47 +180,91 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
         except Exception as e:
             logger.warning("WhatsApp WABA/phone fetch failed: %s", e)
 
+        wa_rows = list(
+            WhatsAppAccount.objects.filter(
+                company=account.company,
+                integration_account=account,
+                status='connected',
+            )
+        )
+
+        # Detect coexistence via Graph when postMessage signup_event was missed.
+        phone_fields_by_id = {}
+        for wa in wa_rows:
+            fields = fetch_phone_registration_fields(token, wa.phone_number_id)
+            if fields:
+                phone_fields_by_id[str(wa.phone_number_id)] = fields
+                if fields.get('is_on_biz_app') is True:
+                    coexistence = True
+
         meta = dict(account.metadata or {})
         if signup_event:
             meta['signup_event'] = signup_event
-        if coexistence:
-            meta['coexistence'] = True
-            meta['onboarding_mode'] = 'whatsapp_business_app'
-        elif 'coexistence' not in meta:
-            meta['coexistence'] = False
-            meta['onboarding_mode'] = 'cloud_api'
+        meta['coexistence'] = bool(coexistence)
+        meta['onboarding_mode'] = (
+            'whatsapp_business_app' if coexistence else 'cloud_api'
+        )
+        if phone_fields_by_id:
+            # Persist latest Graph health for the first connected number (UI/debug).
+            first_fields = next(iter(phone_fields_by_id.values()))
+            meta['phone_status'] = first_fields.get('status')
+            meta['is_on_biz_app'] = first_fields.get('is_on_biz_app')
+            meta['platform_type'] = first_fields.get('platform_type')
+            meta['phone_registration_fields'] = phone_fields_by_id
         account.metadata = meta
 
-        # Subscribe app to each WABA so webhooks (incl. coexistence fields) are delivered.
+        # Subscribe app to each WABA so webhooks are delivered (hard requirement).
         waba_ids = set()
         if waba_id:
             waba_ids.add(waba_id)
-        for wa in WhatsAppAccount.objects.filter(
-            company=account.company,
-            integration_account=account,
-            status='connected',
-        ):
+        for wa in wa_rows:
             if wa.waba_id:
                 waba_ids.add(str(wa.waba_id))
+        subscribe_results = []
+        subscribe_ok_any = False
         for wid in waba_ids:
-            subscribe_waba_webhooks(token, wid)
-
-        # Coexistence: start contacts + history sync within Meta's 24h window (do not /register).
-        if coexistence:
-            wa_rows = list(
-                WhatsAppAccount.objects.filter(
-                    company=account.company,
-                    integration_account=account,
-                    status='connected',
-                )
+            ok = subscribe_waba_webhooks(token, wid)
+            subscribe_results.append({'waba_id': wid, 'ok': ok})
+            if ok:
+                subscribe_ok_any = True
+        meta = dict(account.metadata or {})
+        meta['waba_subscribed_apps'] = subscribe_results
+        account.metadata = meta
+        if waba_ids and not subscribe_ok_any:
+            account.status = 'error'
+            account.error_message = (
+                'WhatsApp connected but webhook subscription failed. '
+                'Inbound replies will not arrive until WABA subscribed_apps succeeds. '
+                'Run: python manage.py whatsapp_repair_subscriptions'
             )
+            IntegrationLog.objects.create(
+                account=account,
+                action='whatsapp_waba_subscribe',
+                status='error',
+                message='All WABA subscribed_apps calls failed',
+                response_data={'results': subscribe_results},
+            )
+        elif waba_ids:
+            IntegrationLog.objects.create(
+                account=account,
+                action='whatsapp_waba_subscribe',
+                status='success',
+                message='WABA subscribed for webhooks',
+                response_data={'results': subscribe_results},
+            )
+
+        if coexistence:
+            # Coexistence: contacts + history sync within Meta's 24h window (do not /register).
             sync_results = []
             for wa in wa_rows:
-                verify = verify_coexistence_phone(token, wa.phone_number_id)
+                verify = verify_coexistence_phone(token, wa.phone_number_id) or phone_fields_by_id.get(
+                    str(wa.phone_number_id)
+                )
                 if verify:
                     meta = dict(account.metadata or {})
                     meta['is_on_biz_app'] = verify.get('is_on_biz_app')
                     meta['platform_type'] = verify.get('platform_type')
+                    meta['phone_status'] = verify.get('status') or meta.get('phone_status')
                     account.metadata = meta
                 result = initiate_smb_app_data_sync(token, wa.phone_number_id)
                 sync_results.append(
@@ -243,13 +289,67 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                 message='Initiated coexistence contacts/history sync',
                 response_data={'results': sync_results},
             )
+        else:
+            # Cloud API: register each phone or sends fail with 133010.
+            register_results = []
+            pins = dict((account.metadata or {}).get('cloud_api_two_step_pins') or {})
+            for wa in wa_rows:
+                existing_pin = pins.get(str(wa.phone_number_id))
+                result = register_cloud_phone_number(
+                    token,
+                    wa.phone_number_id,
+                    pin=existing_pin,
+                )
+                if result.get('pin'):
+                    pins[str(wa.phone_number_id)] = result['pin']
+                register_results.append(
+                    {
+                        'phone_number_id': wa.phone_number_id,
+                        'ok': bool(result.get('ok')),
+                        'status_code': result.get('status_code'),
+                        'error': result.get('error'),
+                    }
+                )
+                # Refresh status after register.
+                refreshed = fetch_phone_registration_fields(token, wa.phone_number_id)
+                if refreshed:
+                    phone_fields_by_id[str(wa.phone_number_id)] = refreshed
+            meta = dict(account.metadata or {})
+            meta['cloud_api_two_step_pins'] = pins
+            meta['cloud_api_register'] = register_results
+            if phone_fields_by_id:
+                first_fields = next(iter(phone_fields_by_id.values()))
+                meta['phone_status'] = first_fields.get('status')
+                meta['platform_type'] = first_fields.get('platform_type')
+                meta['is_on_biz_app'] = first_fields.get('is_on_biz_app')
+                meta['phone_registration_fields'] = phone_fields_by_id
+            account.metadata = meta
+            IntegrationLog.objects.create(
+                account=account,
+                action='whatsapp_cloud_register',
+                status='success' if all(r.get('ok') for r in register_results) else 'error',
+                message='Cloud API phone registration after Embedded Signup',
+                response_data={'results': register_results},
+            )
+            if register_results and not any(r.get('ok') for r in register_results):
+                if account.status == 'connected':
+                    account.status = 'error'
+                account.error_message = (
+                    (account.error_message + ' ' if account.error_message else '')
+                    + 'Phone not registered for Cloud API (Graph 133010). '
+                    'Reconnect or run whatsapp_repair_subscriptions.'
+                ).strip()
 
     account.save()
     IntegrationLog.objects.create(
         account=account,
         action='oauth_connect',
-        status='success',
-        message='Account connected successfully',
+        status='success' if account.status == 'connected' else 'error',
+        message=(
+            'Account connected successfully'
+            if account.status == 'connected'
+            else (account.error_message or 'Account connected with errors')
+        ),
     )
 
 
