@@ -91,15 +91,42 @@ class Command(BaseCommand):
 
             if do_register:
                 is_coex = bool(fields and fields.get("is_on_biz_app") is True)
+                status = (fields or {}).get("status") or ""
                 if is_coex:
                     self.stdout.write("  skip /register (coexistence / is_on_biz_app)")
+                    continue
+                if str(status).upper() == "CONNECTED":
+                    self.stdout.write(
+                        self.style.SUCCESS(
+                            "  skip /register (already CONNECTED — PIN mismatch is expected if you re-register with a new PIN)"
+                        )
+                    )
+                    # Persist known PIN if operator passed --pin so future repairs reuse it.
+                    acc = wa.integration_account
+                    if acc and pin_arg and len("".join(ch for ch in pin_arg if ch.isdigit())) == 6:
+                        meta = dict(acc.metadata or {})
+                        pins = dict(meta.get("cloud_api_two_step_pins") or {})
+                        pins[str(wa.phone_number_id)] = "".join(ch for ch in pin_arg if ch.isdigit())
+                        meta["cloud_api_two_step_pins"] = pins
+                        acc.metadata = meta
+                        acc.save(update_fields=["metadata", "updated_at"])
                     continue
                 existing = None
                 acc = wa.integration_account
                 if acc:
                     pins = (acc.metadata or {}).get("cloud_api_two_step_pins") or {}
                     existing = pins.get(str(wa.phone_number_id)) or pin_arg or None
-                result = register_cloud_phone_number(token, wa.phone_number_id, pin=existing or pin_arg or None)
+                pin_to_use = existing or pin_arg or None
+                if not pin_to_use:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            "  /register needs a PIN. Re-run with --pin=XXXXXX "
+                            "(the 6-digit PIN set at first register). "
+                            "Do not invent a new PIN or Meta returns 133005."
+                        )
+                    )
+                    continue
+                result = register_cloud_phone_number(token, wa.phone_number_id, pin=pin_to_use)
                 if result.get("ok"):
                     self.stdout.write(self.style.SUCCESS("  /register ok"))
                     if acc and result.get("pin"):
@@ -113,8 +140,20 @@ class Command(BaseCommand):
                             acc.error_message = None
                         acc.save(update_fields=["metadata", "status", "error_message", "updated_at"])
                 else:
-                    self.stdout.write(
-                        self.style.ERROR(f"  /register failed: {result.get('error') or result.get('body')}")
-                    )
+                    body = result.get("body") or {}
+                    err = body.get("error") if isinstance(body, dict) else None
+                    code = err.get("code") if isinstance(err, dict) else None
+                    if code == 133005:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                "  /register PIN mismatch (133005). Number may already be registered. "
+                                "If status is CONNECTED you can ignore this. "
+                                "Otherwise re-run with the correct --pin=XXXXXX."
+                            )
+                        )
+                    else:
+                        self.stdout.write(
+                            self.style.ERROR(f"  /register failed: {result.get('error') or result.get('body')}")
+                        )
 
         self.stdout.write(self.style.SUCCESS("Done."))

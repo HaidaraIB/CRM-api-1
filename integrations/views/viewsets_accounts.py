@@ -291,9 +291,21 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
             )
         else:
             # Cloud API: register each phone or sends fail with 133010.
+            # Skip if Graph already reports CONNECTED (re-register with a new PIN → 133005).
             register_results = []
             pins = dict((account.metadata or {}).get('cloud_api_two_step_pins') or {})
             for wa in wa_rows:
+                prior = phone_fields_by_id.get(str(wa.phone_number_id)) or {}
+                if str(prior.get('status') or '').upper() == 'CONNECTED':
+                    register_results.append(
+                        {
+                            'phone_number_id': wa.phone_number_id,
+                            'ok': True,
+                            'skipped': True,
+                            'reason': 'already_connected',
+                        }
+                    )
+                    continue
                 existing_pin = pins.get(str(wa.phone_number_id))
                 result = register_cloud_phone_number(
                     token,
@@ -302,18 +314,21 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                 )
                 if result.get('pin'):
                     pins[str(wa.phone_number_id)] = result['pin']
-                register_results.append(
-                    {
-                        'phone_number_id': wa.phone_number_id,
-                        'ok': bool(result.get('ok')),
-                        'status_code': result.get('status_code'),
-                        'error': result.get('error'),
-                    }
-                )
-                # Refresh status after register.
+                # Refresh status after register (or failed attempt).
                 refreshed = fetch_phone_registration_fields(token, wa.phone_number_id)
                 if refreshed:
                     phone_fields_by_id[str(wa.phone_number_id)] = refreshed
+                already_connected = str((refreshed or {}).get('status') or '').upper() == 'CONNECTED'
+                ok = bool(result.get('ok')) or already_connected
+                register_results.append(
+                    {
+                        'phone_number_id': wa.phone_number_id,
+                        'ok': ok,
+                        'status_code': result.get('status_code'),
+                        'error': None if ok else result.get('error'),
+                        'skipped': False,
+                    }
+                )
             meta = dict(account.metadata or {})
             meta['cloud_api_two_step_pins'] = pins
             meta['cloud_api_register'] = register_results
@@ -337,7 +352,7 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                 account.error_message = (
                     (account.error_message + ' ' if account.error_message else '')
                     + 'Phone not registered for Cloud API (Graph 133010). '
-                    'Reconnect or run whatsapp_repair_subscriptions.'
+                    'Reconnect or run whatsapp_repair_subscriptions --register --pin=XXXXXX.'
                 ).strip()
 
     account.save()
