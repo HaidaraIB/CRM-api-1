@@ -168,6 +168,36 @@ def whatsapp_send_message(request):
             'Invalid "to" phone number',
             code='bad_request',
         )
+
+    from integrations.whatsapp_access import (
+        require_client_whatsapp_access,
+        resolve_accessible_client_by_phone,
+        user_is_whatsapp_staff_scoped,
+    )
+
+    # ACL before contacting Meta
+    access_client = None
+    if client_id is not None:
+        try:
+            access_client = company.clients.get(id=int(client_id))
+        except Exception:
+            access_client = None
+        if access_client is None:
+            return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
+        denied = require_client_whatsapp_access(request.user, access_client)
+        if denied:
+            return error_response('Contact not found', code=denied, status_code=404)
+    else:
+        access_client, err = resolve_accessible_client_by_phone(request.user, to)
+        if err:
+            return error_response('Contact not found', code=err, status_code=404)
+        if access_client is None and user_is_whatsapp_staff_scoped(request.user):
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+
     wa_account, wa_err = resolve_whatsapp_account_for_api(company, phone_number_id)
     if not wa_account:
         if wa_err == 'whatsapp_phone_numbers_not_synced':
@@ -342,33 +372,85 @@ def _template_outbound_log_body(template, param_values=None) -> str:
 def whatsapp_session_window(request):
     """
     Whether the CRM considers the customer service window open for free-form WhatsApp messages.
-    GET /api/integrations/whatsapp/session-window/?client_id=
+    GET /api/integrations/whatsapp/session-window/?client_id= | ?phone=
     """
+    from integrations.whatsapp_access import (
+        require_client_whatsapp_access,
+        resolve_accessible_client_by_phone,
+        user_is_whatsapp_staff_scoped,
+    )
+    from integrations.services.phone_match import find_client_by_phone, phone_match_keys
+
     company = request.user.company
     gate = _integration_gate(company, "whatsapp")
     if not gate["enabled"]:
         return error_response(gate["message"], code="integration_disabled", status_code=403)
     client_id = request.query_params.get('client_id')
     phone = (request.query_params.get('phone') or '').strip()
-    resolved_client_id = None
+    resolved_client = None
     if client_id and str(client_id).isdigit():
-        resolved_client_id = int(client_id)
+        try:
+            resolved_client = company.clients.get(id=int(client_id))
+        except Exception:
+            resolved_client = None
+        if resolved_client is None:
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+        denied = require_client_whatsapp_access(request.user, resolved_client)
+        if denied:
+            return error_response('Contact not found', code=denied, status_code=404)
     elif phone:
-        from integrations.services.phone_match import find_client_by_phone
-        client = find_client_by_phone(company, phone)
-        if client:
-            resolved_client_id = client.id
-    if resolved_client_id is None:
+        resolved_client, err = resolve_accessible_client_by_phone(request.user, phone)
+        if err:
+            return error_response('Contact not found', code=err, status_code=404)
+        if resolved_client is None and user_is_whatsapp_staff_scoped(request.user):
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+    else:
         return error_response(
             'client_id or phone query parameter is required',
             code='bad_request',
         )
+
+    from django.db.models import Q
+
+    msg_filter = Q(client__company=company, direction=LeadWhatsAppMessage.DIRECTION_INBOUND)
+    if resolved_client is not None:
+        msg_filter &= Q(client_id=resolved_client.id)
+        # Also include phone-matched rows in case of legacy client mismatches
+        phone_for_keys = (resolved_client.phone_number or phone or '').strip()
+        if phone_for_keys:
+            keys = phone_match_keys(phone_for_keys)
+            phone_q = Q()
+            for k in keys:
+                if len(k) >= 7:
+                    phone_q |= Q(phone_number=k) | Q(phone_number__endswith=k[-10:])
+            if phone_q:
+                msg_filter = (
+                    Q(client__company=company, direction=LeadWhatsAppMessage.DIRECTION_INBOUND)
+                    & (Q(client_id=resolved_client.id) | phone_q)
+                )
+    elif phone:
+        prefer = request.user if user_is_whatsapp_staff_scoped(request.user) else None
+        client = find_client_by_phone(company, phone, prefer_assigned_to=prefer)
+        if client:
+            msg_filter &= Q(client_id=client.id)
+        else:
+            keys = phone_match_keys(phone)
+            phone_q = Q()
+            for k in keys:
+                if len(k) >= 7:
+                    phone_q |= Q(phone_number=k) | Q(phone_number__endswith=k[-10:])
+            msg_filter &= phone_q if phone_q else Q(pk__in=[])
+
     last_inbound = (
-        LeadWhatsAppMessage.objects.filter(
-            client_id=resolved_client_id,
-            client__company=company,
-            direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
-        ).aggregate(m=Max('created_at'))['m']
+        LeadWhatsAppMessage.objects.filter(msg_filter).aggregate(m=Max('created_at'))['m']
     )
     now = timezone.now()
     if not last_inbound:
@@ -440,6 +522,33 @@ def whatsapp_send_template(request):
     to = str(to).replace(' ', '').replace('+', '').strip()
     if not to.isdigit():
         return error_response('Invalid "to" phone number', code='bad_request')
+
+    from integrations.whatsapp_access import (
+        require_client_whatsapp_access,
+        resolve_accessible_client_by_phone,
+        user_is_whatsapp_staff_scoped,
+    )
+
+    if client_id is not None:
+        try:
+            access_client = company.clients.get(id=int(client_id))
+        except Exception:
+            access_client = None
+        if access_client is None:
+            return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
+        denied = require_client_whatsapp_access(request.user, access_client)
+        if denied:
+            return error_response('Contact not found', code=denied, status_code=404)
+    else:
+        access_client, err = resolve_accessible_client_by_phone(request.user, to)
+        if err:
+            return error_response('Contact not found', code=err, status_code=404)
+        if access_client is None and user_is_whatsapp_staff_scoped(request.user):
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
 
     template = MessageTemplate.objects.filter(
         id=template_id,

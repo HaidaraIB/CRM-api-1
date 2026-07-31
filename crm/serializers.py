@@ -15,6 +15,54 @@ MEDICAL_ASSIGNEE_ROLES = frozenset(
 )
 
 
+def _collect_phones_for_uniqueness_check(attrs, initial_data, instance=None) -> list[str]:
+    """Phones that will exist on the lead after this write (primary + phone_numbers)."""
+    phones: list[str] = []
+    if "phone_number" in attrs and attrs.get("phone_number"):
+        phones.append(str(attrs["phone_number"]))
+    elif instance is not None and instance.phone_number and "phone_numbers" not in (initial_data or {}):
+        # Keep existing primary unless phone_numbers replaces the set
+        if "phone_number" not in attrs:
+            phones.append(str(instance.phone_number))
+
+    phone_numbers_data = (initial_data or {}).get("phone_numbers", None)
+    if phone_numbers_data is not None:
+        for row in phone_numbers_data:
+            if isinstance(row, dict) and row.get("phone_number"):
+                phones.append(str(row["phone_number"]))
+    elif instance is not None and "phone_number" not in attrs:
+        for row in instance.phone_numbers.all():
+            if row.phone_number:
+                phones.append(str(row.phone_number))
+    return phones
+
+
+def _assert_company_phone_unique(company, phones: list[str], exclude_client_id=None) -> None:
+    """Raise ValidationError if any phone already belongs to another lead in the company."""
+    if not company or not phones:
+        return
+    from integrations.services.phone_match import find_client_by_phone, phone_match_keys
+
+    seen_keys: set[str] = set()
+    for phone in phones:
+        keys = phone_match_keys(phone)
+        # Skip if we already validated an equivalent number on this same payload
+        if keys & seen_keys:
+            continue
+        seen_keys |= keys
+        other = find_client_by_phone(company, phone)
+        if other is None:
+            continue
+        if exclude_client_id is not None and other.id == exclude_client_id:
+            continue
+        raise serializers.ValidationError(
+            {
+                "phone_number": "A lead with this phone number already exists in your company.",
+                "error_key": "duplicate_lead_phone",
+            }
+        )
+
+
 def _format_client_location_pair(latitude, longitude):
     """Store map pin as lat,lng for timeline (both required)."""
     if latitude is None or longitude is None:
@@ -503,6 +551,23 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         self._validate_location_pair(attrs)
 
         request = self.context.get("request")
+        company = None
+        if request and getattr(request.user, "company", None):
+            company = request.user.company
+        elif self.instance is not None:
+            company = self.instance.company
+        if company:
+            phones = _collect_phones_for_uniqueness_check(
+                attrs,
+                getattr(self, "initial_data", None) or {},
+                instance=self.instance,
+            )
+            _assert_company_phone_unique(
+                company,
+                phones,
+                exclude_client_id=self.instance.id if self.instance else None,
+            )
+
         if request and request.user.is_authenticated and request.user.is_data_entry():
             attrs.pop("assigned_to", None)
             company = getattr(request.user, "company", None)

@@ -333,13 +333,23 @@ def process_whatsapp_message(message, phone_number_id):
             logger.info("WhatsApp inbound duplicate skipped message_id=%s", message_id)
             return
 
-        LeadWhatsAppMessage.objects.create(
+        from datetime import datetime, timezone as dt_timezone
+
+        row = LeadWhatsAppMessage.objects.create(
             client=client,
             phone_number=from_number,
             body=text_body,
             direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
             whatsapp_message_id=message_id,
         )
+        # Prefer Meta message timestamp for accurate 24h customer-service window.
+        ts_raw = message.get('timestamp')
+        if ts_raw:
+            try:
+                ts = datetime.fromtimestamp(int(ts_raw), tz=dt_timezone.utc)
+                LeadWhatsAppMessage.objects.filter(pk=row.pk).update(created_at=ts)
+            except (TypeError, ValueError, OSError):
+                pass
 
         # Customer replied ⇒ treat recent outbound as read (covers disabled read receipts).
         LeadWhatsAppMessage.objects.filter(

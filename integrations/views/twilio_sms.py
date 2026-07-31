@@ -272,7 +272,10 @@ class LeadWhatsAppMessageViewSet(
 
     def get_queryset(self):
         user = self.request.user
+        from integrations.whatsapp_access import filter_whatsapp_messages_queryset
+
         qs = LeadWhatsAppMessage.objects.filter(client__company=user.company).order_by('-created_at')
+        qs = filter_whatsapp_messages_queryset(user, qs)
         client_id = self.request.query_params.get('client')
         phone = (self.request.query_params.get('phone') or '').strip()
         client_ids: set[int] = set()
@@ -284,8 +287,10 @@ class LeadWhatsAppMessageViewSet(
         if phone:
             from django.db.models import Q
             from integrations.services.phone_match import find_client_by_phone, phone_match_keys
+            from integrations.whatsapp_access import user_is_whatsapp_staff_scoped
 
-            client = find_client_by_phone(user.company, phone)
+            prefer = user if user_is_whatsapp_staff_scoped(user) else None
+            client = find_client_by_phone(user.company, phone, prefer_assigned_to=prefer)
             if client:
                 client_ids.add(client.id)
             keys = phone_match_keys(phone)

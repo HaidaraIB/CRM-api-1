@@ -104,6 +104,11 @@ def whatsapp_conversations_list(request):
     """
     from django.db.models import Max
     from crm.models import Client
+    from integrations.whatsapp_access import (
+        filter_clients_queryset_for_whatsapp,
+        user_can_access_client,
+    )
+
     company = request.user.company
     blocked = _integration_gate(company, "whatsapp")
     if blocked is not None:
@@ -114,18 +119,50 @@ def whatsapp_conversations_list(request):
         phone = (request.query_params.get('phone') or '').strip()
         if not (client_id and str(client_id).isdigit()) and not phone:
             return error_response('client or phone query parameter is required', code='bad_request')
+        if client_id and str(client_id).isdigit():
+            try:
+                client = company.clients.get(id=int(client_id))
+            except Client.DoesNotExist:
+                return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
+            if not user_can_access_client(request.user, client):
+                return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
         qs = _whatsapp_thread_messages_qs(company, client_id=client_id, phone=phone or None)
         deleted_count, _ = qs.delete()
         return success_response(data={'deleted': deleted_count})
 
     # عملاء لديهم على الأقل رسالة واتساب، مرتبون بآخر رسالة
-    sub = LeadWhatsAppMessage.objects.filter(client__company=company).values('client_id').annotate(
-        last_at=Max('created_at')
-    ).order_by('-last_at')
-    client_ids = [s['client_id'] for s in sub[:100]]
+    sub = (
+        LeadWhatsAppMessage.objects.filter(client__company=company)
+        .values('client_id')
+        .annotate(last_at=Max('created_at'))
+        .order_by('-last_at')
+    )
+    client_ids = [s['client_id'] for s in sub[:200]]
+    last_at_by_id = {s['client_id']: s['last_at'] for s in sub if s['client_id'] in client_ids}
     order = {cid: i for i, cid in enumerate(client_ids)}
-    clients = list(Client.objects.filter(id__in=client_ids).select_related('company'))
+    clients_qs = filter_clients_queryset_for_whatsapp(
+        request.user,
+        Client.objects.filter(id__in=client_ids),
+    )
+    clients = list(clients_qs.select_related('company', 'assigned_to'))
     clients.sort(key=lambda c: order.get(c.id, 999))
+    clients = clients[:100]
+
+    # Last message preview per client (one query)
+    last_bodies: dict[int, str] = {}
+    if clients:
+        from django.db.models import OuterRef, Subquery
+
+        latest_body = (
+            LeadWhatsAppMessage.objects.filter(client_id=OuterRef('pk'))
+            .order_by('-created_at')
+            .values('body')[:1]
+        )
+        for row in Client.objects.filter(id__in=[c.id for c in clients]).annotate(
+            last_body=Subquery(latest_body)
+        ).values('id', 'last_body'):
+            last_bodies[row['id']] = (row['last_body'] or '')[:160]
+
     return success_response(
         data=[
             {
@@ -133,6 +170,9 @@ def whatsapp_conversations_list(request):
                 'name': c.name,
                 'phone_number': c.phone_number or '',
                 'lead_company_name': getattr(c, 'lead_company_name', None) or '',
+                'last_message_at': last_at_by_id.get(c.id).isoformat() if last_at_by_id.get(c.id) else None,
+                'last_message_preview': last_bodies.get(c.id, ''),
+                'assigned_to_id': c.assigned_to_id,
             }
             for c in clients
         ],
@@ -145,8 +185,12 @@ def whatsapp_contact_by_phone(request):
     """
     Resolve a CRM client by phone for WhatsApp chat (manual number → lead link).
     GET /api/integrations/whatsapp/contact-by-phone/?phone=...
+
+    Staff: returns not_found if the lead is missing or not assigned to them
+    (same response whether missing or owned by someone else).
     """
-    from integrations.services.phone_match import find_client_by_phone
+    from integrations.whatsapp_access import resolve_accessible_client_by_phone
+
     company = request.user.company
     blocked = _integration_gate(company, "whatsapp")
     if blocked is not None:
@@ -154,7 +198,13 @@ def whatsapp_contact_by_phone(request):
     phone = (request.query_params.get('phone') or '').strip()
     if not phone:
         return error_response('phone is required', code='bad_request')
-    client = find_client_by_phone(company, phone)
+    client, err = resolve_accessible_client_by_phone(request.user, phone)
+    if err:
+        return error_response(
+            'Contact not found',
+            code='whatsapp_contact_not_found',
+            status_code=404,
+        )
     if not client:
         return success_response(data=None)
     return success_response(

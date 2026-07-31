@@ -51,8 +51,14 @@ def _is_dialable_phone(phone: str) -> bool:
     return len(digits) >= 7
 
 
-def find_client_by_phone(company, phone: str) -> Optional[Client]:
-    """Find a lead by phone number within a company."""
+def find_client_by_phone(company, phone: str, prefer_assigned_to=None) -> Optional[Client]:
+    """
+    Find a lead by phone number within a company.
+
+    When multiple leads share a matching phone (legacy duplicates), prefer:
+    1. Lead assigned to ``prefer_assigned_to`` (if given)
+    2. Otherwise first match (iteration order)
+    """
     if not phone or not company or not _is_dialable_phone(phone):
         return None
 
@@ -60,16 +66,30 @@ def find_client_by_phone(company, phone: str) -> Optional[Client]:
     if not keys:
         return None
 
+    matches: list[Client] = []
+    seen_ids: set[int] = set()
+
     for client in Client.objects.filter(company=company).only(
         "id", "phone_number", "name", "assigned_to_id"
     ):
         client_keys = phone_match_keys(client.phone_number or "")
-        if keys & client_keys:
-            return client
+        if keys & client_keys and client.id not in seen_ids:
+            matches.append(client)
+            seen_ids.add(client.id)
 
     for row in ClientPhoneNumber.objects.filter(client__company=company).select_related("client"):
         row_keys = phone_match_keys(row.phone_number or "")
-        if keys & row_keys:
-            return row.client
+        if keys & row_keys and row.client_id not in seen_ids:
+            matches.append(row.client)
+            seen_ids.add(row.client_id)
 
-    return None
+    if not matches:
+        return None
+
+    if prefer_assigned_to is not None:
+        prefer_id = getattr(prefer_assigned_to, "id", prefer_assigned_to)
+        for client in matches:
+            if getattr(client, "assigned_to_id", None) == prefer_id:
+                return client
+
+    return matches[0]
