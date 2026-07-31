@@ -98,6 +98,9 @@ def noop_reverse(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # PostgreSQL rejects ALTER TABLE in the same transaction as prior DML on that
+    # table ("pending trigger events"). Commit each operation separately.
+    atomic = False
 
     dependencies = [
         ("companies", "0001_initial"),
