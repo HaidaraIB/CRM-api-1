@@ -37,11 +37,25 @@ def _collect_phones_for_uniqueness_check(attrs, initial_data, instance=None) -> 
     return phones
 
 
+def _duplicate_lead_phone_error():
+    return serializers.ValidationError(
+        {
+            "phone_number": "A lead with this phone number already exists in your company.",
+            "error_key": "duplicate_lead_phone",
+        }
+    )
+
+
 def _assert_company_phone_unique(company, phones: list[str], exclude_client_id=None) -> None:
     """Raise ValidationError if any phone already belongs to another lead in the company."""
     if not company or not phones:
         return
-    from integrations.services.phone_match import find_client_by_phone, phone_match_keys
+    from crm.models import ClientPhoneNumber
+    from integrations.services.phone_match import (
+        canonical_phone_key,
+        find_client_by_phone,
+        phone_match_keys,
+    )
 
     seen_keys: set[str] = set()
     for phone in phones:
@@ -50,17 +64,21 @@ def _assert_company_phone_unique(company, phones: list[str], exclude_client_id=N
         if keys & seen_keys:
             continue
         seen_keys |= keys
+
+        canon = canonical_phone_key(phone)
+        if canon:
+            qs = ClientPhoneNumber.objects.filter(company=company, phone_normalized=canon)
+            if exclude_client_id is not None:
+                qs = qs.exclude(client_id=exclude_client_id)
+            if qs.exists():
+                raise _duplicate_lead_phone_error()
+
         other = find_client_by_phone(company, phone)
         if other is None:
             continue
         if exclude_client_id is not None and other.id == exclude_client_id:
             continue
-        raise serializers.ValidationError(
-            {
-                "phone_number": "A lead with this phone number already exists in your company.",
-                "error_key": "duplicate_lead_phone",
-            }
-        )
+        raise _duplicate_lead_phone_error()
 
 
 def _format_client_location_pair(latitude, longitude):
@@ -597,6 +615,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
 
     def create(self, validated_data):
         """Create client and handle phone numbers"""
+        from django.db import IntegrityError, transaction
+
         phone_numbers_data = self.initial_data.get("phone_numbers", [])
         
         # Don't auto-assign to current user unless explicitly provided or auto_assign is enabled
@@ -608,20 +628,26 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             # The auto_assign signal will handle assignment if enabled
             validated_data['assigned_to'] = None
         
-        client = Client.objects.create(**validated_data)
+        try:
+            with transaction.atomic():
+                client = Client.objects.create(**validated_data)
 
-        # Create phone numbers if provided
-        if phone_numbers_data:
-            for phone_data in phone_numbers_data:
-                ClientPhoneNumber.objects.create(client=client, **phone_data)
-        elif validated_data.get("phone_number"):
-            # If old phone_number field is provided, create a primary phone number
-            ClientPhoneNumber.objects.create(
-                client=client,
-                phone_number=validated_data["phone_number"],
-                phone_type="mobile",
-                is_primary=True,
-            )
+                # Create phone numbers if provided
+                if phone_numbers_data:
+                    for phone_data in phone_numbers_data:
+                        ClientPhoneNumber.objects.create(client=client, **phone_data)
+                elif validated_data.get("phone_number"):
+                    # If old phone_number field is provided, create a primary phone number
+                    ClientPhoneNumber.objects.create(
+                        client=client,
+                        phone_number=validated_data["phone_number"],
+                        phone_type="mobile",
+                        is_primary=True,
+                    )
+        except IntegrityError as exc:
+            if "uniq_company_phone_normalized" in str(exc):
+                raise _duplicate_lead_phone_error() from exc
+            raise
 
         return client
 
@@ -763,20 +789,28 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             )
 
         # Update phone numbers if provided
-        if phone_numbers_data is not None:
-            # Delete existing phone numbers
-            instance.phone_numbers.all().delete()
-            # Create new phone numbers
-            for phone_data in phone_numbers_data:
-                ClientPhoneNumber.objects.create(client=instance, **phone_data)
-        elif validated_data.get("phone_number") and not instance.phone_numbers.exists():
-            # If old phone_number field is provided and no phone numbers exist, create one
-            ClientPhoneNumber.objects.create(
-                client=instance,
-                phone_number=validated_data["phone_number"],
-                phone_type="mobile",
-                is_primary=True,
-            )
+        from django.db import IntegrityError, transaction
+
+        try:
+            with transaction.atomic():
+                if phone_numbers_data is not None:
+                    # Delete existing phone numbers
+                    instance.phone_numbers.all().delete()
+                    # Create new phone numbers
+                    for phone_data in phone_numbers_data:
+                        ClientPhoneNumber.objects.create(client=instance, **phone_data)
+                elif validated_data.get("phone_number") and not instance.phone_numbers.exists():
+                    # If old phone_number field is provided and no phone numbers exist, create one
+                    ClientPhoneNumber.objects.create(
+                        client=instance,
+                        phone_number=validated_data["phone_number"],
+                        phone_type="mobile",
+                        is_primary=True,
+                    )
+        except IntegrityError as exc:
+            if "uniq_company_phone_normalized" in str(exc):
+                raise _duplicate_lead_phone_error() from exc
+            raise
 
         if "meta_qualification_status" in validated_data:
             from integrations.services.meta_conversion_leads import apply_qualification_status_change

@@ -408,9 +408,22 @@ class ClientPhoneNumber(models.Model):
         related_name="phone_numbers",
         help_text="The client this phone number belongs to",
     )
+    company = models.ForeignKey(
+        "companies.Company",
+        on_delete=models.CASCADE,
+        related_name="client_phone_numbers",
+        help_text="Denormalized from client.company for company-wide phone uniqueness.",
+    )
     phone_number = models.CharField(
         max_length=64,
         help_text="The phone number",
+    )
+    phone_normalized = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Digits-only E.164 key for company-wide uniqueness (empty = not enforced).",
     )
     phone_type = models.CharField(
         max_length=10,
@@ -438,8 +451,29 @@ class ClientPhoneNumber(models.Model):
             models.UniqueConstraint(
                 fields=["client", "phone_number"],
                 name="unique_client_phone_number"
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["company", "phone_normalized"],
+                condition=models.Q(phone_normalized__gt=""),
+                name="uniq_company_phone_normalized",
+            ),
         ]
+
+    def save(self, *args, **kwargs):
+        from integrations.services.phone_match import canonical_phone_key
+
+        if self.client_id:
+            company_id = getattr(self.client, "company_id", None)
+            if company_id is None:
+                company_id = (
+                    Client.objects.filter(pk=self.client_id)
+                    .values_list("company_id", flat=True)
+                    .first()
+                )
+            if company_id is not None:
+                self.company_id = company_id
+        self.phone_normalized = canonical_phone_key(self.phone_number) or ""
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.client.name} - {self.phone_number} ({self.phone_type})"

@@ -1086,22 +1086,35 @@ def tiktok_leadgen_webhook(request):
         logger.warning("TikTok Lead Gen webhook: plan quota blocked lead creation for company_id=%s err=%s", company_id, str(e)[:200])
         return HttpResponse('OK', status=200)
     try:
-        client = Client.objects.create(
-            name=payload.get('name') or 'TikTok Lead',
-            priority='medium',
-            type='fresh',
-            company=company,
-            source='tiktok',
-            integration_account=account,
-            phone_number=payload.get('phone') or None,
-        )
-        if payload.get('phone'):
-            ClientPhoneNumber.objects.create(
-                client=client,
-                phone_number=payload['phone'],
-                phone_type='mobile',
-                is_primary=True,
+        from django.db import transaction
+        from integrations.services.phone_match import find_client_by_phone
+
+        tiktok_phone = payload.get('phone') or None
+        if tiktok_phone and find_client_by_phone(company, tiktok_phone):
+            logger.info(
+                "TikTok Lead Gen: duplicate phone ignored company_id=%s phone=%s",
+                company_id,
+                tiktok_phone,
             )
+            return HttpResponse('OK', status=200)
+
+        with transaction.atomic():
+            client = Client.objects.create(
+                name=payload.get('name') or 'TikTok Lead',
+                priority='medium',
+                type='fresh',
+                company=company,
+                source='tiktok',
+                integration_account=account,
+                phone_number=tiktok_phone,
+            )
+            if tiktok_phone:
+                ClientPhoneNumber.objects.create(
+                    client=client,
+                    phone_number=tiktok_phone,
+                    phone_type='mobile',
+                    is_primary=True,
+                )
         created_notes = 'Lead from TikTok Instant Form (form_id=%s)' % (payload.get('form_id') or '')
         if payload.get('email'):
             created_notes += '. Email: %s' % payload['email']
@@ -1427,28 +1440,50 @@ def meta_webhook(request):
                                 except Campaign.DoesNotExist:
                                     pass
                             
-                            # إنشاء Client
-                            client = Client.objects.create(
-                                name=name,
-                                priority='medium',
-                                type='fresh',
-                                company=account.company,
-                                campaign=campaign,
-                                source='meta_lead_form',
-                                integration_account=account,
-                                meta_leadgen_id=str(leadgen_id),
-                                phone_number=phone,  # للتوافق مع الإصدارات القديمة
-                            )
-                            
-                            # إضافة رقم الهاتف إذا كان موجوداً
-                            if phone:
-                                ClientPhoneNumber.objects.create(
-                                    client=client,
-                                    phone_number=phone,
-                                    phone_type='mobile',
-                                    is_primary=True,
+                            from django.db import IntegrityError, transaction
+                            from integrations.services.phone_match import find_client_by_phone
+
+                            if phone and find_client_by_phone(account.company, phone):
+                                logger.info(
+                                    "META_WEBHOOK: duplicate phone ignored company_id=%s phone=%s leadgen_id=%s",
+                                    getattr(account.company, "id", None),
+                                    phone,
+                                    leadgen_id,
                                 )
-                            
+                                continue
+
+                            # إنشاء Client
+                            try:
+                                with transaction.atomic():
+                                    client = Client.objects.create(
+                                        name=name,
+                                        priority='medium',
+                                        type='fresh',
+                                        company=account.company,
+                                        campaign=campaign,
+                                        source='meta_lead_form',
+                                        integration_account=account,
+                                        meta_leadgen_id=str(leadgen_id),
+                                        phone_number=phone,  # للتوافق مع الإصدارات القديمة
+                                    )
+
+                                    # إضافة رقم الهاتف إذا كان موجوداً
+                                    if phone:
+                                        ClientPhoneNumber.objects.create(
+                                            client=client,
+                                            phone_number=phone,
+                                            phone_type='mobile',
+                                            is_primary=True,
+                                        )
+                            except IntegrityError:
+                                logger.info(
+                                    "META_WEBHOOK: lead create IntegrityError (dup phone/meta id) "
+                                    "company_id=%s leadgen_id=%s",
+                                    getattr(account.company, "id", None),
+                                    leadgen_id,
+                                )
+                                continue
+
                             # تسجيل الحدث
                             ClientEvent.objects.create(
                                 client=client,

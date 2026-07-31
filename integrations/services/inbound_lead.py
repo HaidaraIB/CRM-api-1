@@ -188,6 +188,26 @@ def create_inbound_lead(
                 False,
             )
 
+    phone_preview = (payload.get("phone") or "").strip() or None
+    if phone_preview:
+        from integrations.services.phone_match import find_client_by_phone
+
+        existing_by_phone = find_client_by_phone(company, phone_preview)
+        if existing_by_phone:
+            return (
+                {
+                    "client_id": existing_by_phone.id,
+                    "patient_file_number": existing_by_phone.patient_file_number,
+                    "created_at": (
+                        existing_by_phone.created_at.isoformat()
+                        if existing_by_phone.created_at
+                        else None
+                    ),
+                    "duplicate": True,
+                },
+                False,
+            )
+
     gate = integration_gate(company, platform_gate)
     if not gate["enabled"]:
         raise DRFValidationError(
@@ -225,22 +245,32 @@ def create_inbound_lead(
     if not status_id:
         status_id = _default_lead_status_id(company)
 
+    from django.db import transaction
+
     try:
-        client = Client.objects.create(
-            name=name,
-            priority=priority,
-            type=lead_type,
-            company=company,
-            source=source,
-            integration_account=account,
-            external_lead_id=external_id,
-            phone_number=phone,
-            notes=notes,
-            communication_way_id=payload.get("communication_way_id"),
-            status_id=status_id,
-            campaign_id=payload.get("campaign_id"),
-            created_by=None,
-        )
+        with transaction.atomic():
+            client = Client.objects.create(
+                name=name,
+                priority=priority,
+                type=lead_type,
+                company=company,
+                source=source,
+                integration_account=account,
+                external_lead_id=external_id,
+                phone_number=phone,
+                notes=notes,
+                communication_way_id=payload.get("communication_way_id"),
+                status_id=status_id,
+                campaign_id=payload.get("campaign_id"),
+                created_by=None,
+            )
+            if phone:
+                ClientPhoneNumber.objects.create(
+                    client=client,
+                    phone_number=phone,
+                    phone_type="mobile",
+                    is_primary=True,
+                )
     except IntegrityError:
         if external_id:
             existing = find_existing_by_external_id(company, external_id)
@@ -254,15 +284,25 @@ def create_inbound_lead(
                     },
                     False,
                 )
-        raise
+        if phone:
+            from integrations.services.phone_match import find_client_by_phone
 
-    if phone:
-        ClientPhoneNumber.objects.create(
-            client=client,
-            phone_number=phone,
-            phone_type="mobile",
-            is_primary=True,
-        )
+            existing_by_phone = find_client_by_phone(company, phone)
+            if existing_by_phone:
+                return (
+                    {
+                        "client_id": existing_by_phone.id,
+                        "patient_file_number": existing_by_phone.patient_file_number,
+                        "created_at": (
+                            existing_by_phone.created_at.isoformat()
+                            if existing_by_phone.created_at
+                            else None
+                        ),
+                        "duplicate": True,
+                    },
+                    False,
+                )
+        raise
 
     event_notes = f"Lead from {source_label}"
     if payload.get("email"):

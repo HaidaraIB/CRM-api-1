@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from crm.models import Client, ClientEvent, ClientPhoneNumber
@@ -29,27 +30,41 @@ def ensure_client_for_whatsapp_phone(company, phone: str, integration_account=No
     if not normalized:
         return None
 
-    client = Client.objects.create(
-        name=f"WhatsApp: {normalized}",
-        priority="medium",
-        type="fresh",
-        company=company,
-        source="whatsapp",
-        integration_account=integration_account,
-        phone_number=normalized,
-    )
-    ClientPhoneNumber.objects.create(
-        client=client,
-        phone_number=normalized,
-        phone_type="mobile",
-        is_primary=True,
-    )
-    ClientEvent.objects.create(
-        client=client,
-        event_type="created",
-        new_value="WhatsApp",
-        notes="Client created for WhatsApp conversation",
-    )
+    try:
+        with transaction.atomic():
+            client = Client.objects.create(
+                name=f"WhatsApp: {normalized}",
+                priority="medium",
+                type="fresh",
+                company=company,
+                source="whatsapp",
+                integration_account=integration_account,
+                phone_number=normalized,
+            )
+            ClientPhoneNumber.objects.create(
+                client=client,
+                phone_number=normalized,
+                phone_type="mobile",
+                is_primary=True,
+            )
+            ClientEvent.objects.create(
+                client=client,
+                event_type="created",
+                new_value="WhatsApp",
+                notes="Client created for WhatsApp conversation",
+            )
+    except IntegrityError:
+        # Race or company-wide unique phone: return the existing lead.
+        client = find_client_by_phone(company, phone)
+        if client:
+            return client
+        logger.exception(
+            "Failed to create WhatsApp client company_id=%s phone=%s",
+            getattr(company, "id", None),
+            normalized,
+        )
+        return None
+
     logger.info("Created WhatsApp client company_id=%s client_id=%s", company.id, client.id)
     return client
 
