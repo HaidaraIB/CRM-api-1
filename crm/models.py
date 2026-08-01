@@ -600,6 +600,11 @@ class Task(models.Model):
     )
     notes = models.TextField(blank=True, null=True)
     reminder_date = models.DateTimeField(blank=True, null=True)
+    completed_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When this deal task was marked done",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

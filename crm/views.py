@@ -528,6 +528,16 @@ class TaskViewSet(viewsets.ModelViewSet):
             return TaskListSerializer
         return TaskSerializer
 
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete(self, request, pk=None):
+        """Mark this deal task as done so it leaves the Active Todos queue."""
+        task = self.get_object()
+        if task.completed_at is None:
+            task.completed_at = timezone.now()
+            task.save(update_fields=["completed_at", "updated_at"])
+        serializer = self.get_serializer(task)
+        return Response(serializer.data)
+
 
 class CampaignViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Campaign instances (CRUD)."""

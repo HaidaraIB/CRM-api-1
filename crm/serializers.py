@@ -88,6 +88,37 @@ def _format_client_location_pair(latitude, longitude):
     return f"{latitude},{longitude}"
 
 
+def _client_field_values_equal(old_val, new_val):
+    """
+    Semantic equality for ClientEvent edit detection.
+    Treat None and '' as the same so full PUT/PATCH payloads that coerce
+    empty optionals to null do not log false 'edited to same value' events.
+    """
+    if old_val is None and new_val in (None, ""):
+        return True
+    if new_val is None and old_val in (None, ""):
+        return True
+    if old_val == new_val:
+        return True
+    # Decimal / numeric: compare as Decimal when both are numeric-like
+    try:
+        from decimal import Decimal, InvalidOperation
+
+        if old_val is not None and new_val is not None and not isinstance(
+            old_val, (bool, str)
+        ):
+            if isinstance(old_val, Decimal) or isinstance(new_val, Decimal):
+                return Decimal(str(old_val)) == Decimal(str(new_val))
+    except (InvalidOperation, TypeError, ValueError):
+        pass
+    # FK instances: compare by pk when both have one
+    old_pk = getattr(old_val, "pk", None)
+    new_pk = getattr(new_val, "pk", None)
+    if old_pk is not None or new_pk is not None:
+        return old_pk == new_pk
+    return False
+
+
 META_QUALIFICATION_ERROR_MESSAGES = {
     "metaQualificationErrorNotMetaLead": "This lead is not from a Meta Lead Form.",
     "metaQualificationErrorNoLeadgenId": "Missing Meta lead ID on this lead.",
@@ -749,25 +780,32 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             'interested_unit',
         ]
         for field in other_fields:
-            if field in validated_data and getattr(instance, field) != validated_data[field]:
-                old_val = getattr(instance, field)
-                new_val = validated_data[field]
-                # Prefer human-readable related names for FKs when available
-                if hasattr(old_val, "name"):
-                    old_display = old_val.name
-                else:
-                    old_display = "" if old_val is None else str(old_val)
-                if hasattr(new_val, "name"):
-                    new_display = new_val.name
-                else:
-                    new_display = "" if new_val is None else str(new_val)
-                changes.append({
-                    'event_type': 'edit',
-                    'old_value': old_display,
-                    'new_value': new_display,
-                    # Machine key — localized when building owner team-activity push
-                    'notes': f"field_updated:{field}",
-                })
+            if field not in validated_data:
+                continue
+            old_val = getattr(instance, field)
+            new_val = validated_data[field]
+            if _client_field_values_equal(old_val, new_val):
+                continue
+            # Prefer human-readable related names for FKs when available
+            if hasattr(old_val, "name"):
+                old_display = old_val.name
+            else:
+                old_display = "" if old_val is None else str(old_val)
+            if hasattr(new_val, "name"):
+                new_display = new_val.name
+            else:
+                new_display = "" if new_val is None else str(new_val)
+            # Skip when displays are both empty (None/"" already equal above;
+            # also covers Decimal(0) vs None if displays collapse — keep real 0 changes)
+            if old_display == new_display and old_display == "":
+                continue
+            changes.append({
+                'event_type': 'edit',
+                'old_value': old_display,
+                'new_value': new_display,
+                # Machine key — localized when building owner team-activity push
+                'notes': f"field_updated:{field}",
+            })
 
         # Update client fields
         for attr, value in validated_data.items():
@@ -1098,10 +1136,11 @@ class TaskSerializer(serializers.ModelSerializer):
             "stage_name",
             "notes",
             "reminder_date",
+            "completed_at",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "completed_at", "created_at", "updated_at"]
 
 
 class TaskListSerializer(serializers.ModelSerializer):
@@ -1124,8 +1163,10 @@ class TaskListSerializer(serializers.ModelSerializer):
             "stage_name",
             "notes",
             "reminder_date",
+            "completed_at",
             "created_at",
         ]
+        read_only_fields = ["id", "completed_at", "created_at"]
 
 
 @extend_schema_serializer(component_name="Campaign")
