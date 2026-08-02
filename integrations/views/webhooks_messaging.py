@@ -329,6 +329,276 @@ def whatsapp_send_message(request):
     return success_response(data=data)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_send_media(request):
+    """
+    Send WhatsApp session media (image/video/audio/document).
+    POST /api/integrations/whatsapp/send-media/
+    Multipart: file, to, optional client_id / phone_number_id / caption / is_voice_note
+    """
+    from integrations.services import whatsapp_media as wa_media
+
+    company = request.user.company
+    gate = _integration_gate(company, "whatsapp")
+    if not gate["enabled"]:
+        return error_response(gate["message"], code="integration_disabled", status_code=403)
+
+    from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
+
+    require_monthly_usage(
+        company,
+        "monthly_whatsapp_messages",
+        requested_delta=1,
+        message="You have reached your monthly WhatsApp messages limit. Please upgrade your plan.",
+        error_key="plan_usage_monthly_whatsapp_exceeded",
+    )
+
+    uploaded = request.FILES.get('file') or request.FILES.get('attachment')
+    to = request.data.get('to')
+    client_id = request.data.get('client_id') or request.data.get('client')
+    phone_number_id = request.data.get('phone_number_id')
+    caption = (request.data.get('caption') or request.data.get('message') or request.data.get('text') or '')
+    caption = str(caption)[:1024]
+    is_voice_raw = request.data.get('is_voice_note')
+    is_voice_note = str(is_voice_raw).lower() in ('1', 'true', 'yes', 'on') if is_voice_raw is not None else False
+    # Browser voice recordings: treat audio/* as voice note when flagged or filename starts with voice-
+    if not is_voice_note and uploaded and (getattr(uploaded, 'name', '') or '').lower().startswith('voice-'):
+        is_voice_note = True
+
+    if not uploaded or not to:
+        return error_response('to and file are required', code='bad_request')
+
+    to = str(to).replace(' ', '').replace('+', '').strip()
+    if not to.isdigit():
+        return error_response('Invalid "to" phone number', code='bad_request')
+
+    try:
+        kind, mime, _size = wa_media.validate_whatsapp_upload(uploaded, want_voice=is_voice_note)
+    except ValueError as e:
+        return error_response(str(e), code='bad_request')
+
+    from integrations.whatsapp_access import (
+        require_client_whatsapp_access,
+        resolve_accessible_client_by_phone,
+        user_is_whatsapp_staff_scoped,
+    )
+
+    access_client = None
+    if client_id is not None:
+        try:
+            access_client = company.clients.get(id=int(client_id))
+        except Exception:
+            access_client = None
+        if access_client is None:
+            return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
+        denied = require_client_whatsapp_access(request.user, access_client)
+        if denied:
+            return error_response('Contact not found', code=denied, status_code=404)
+    else:
+        access_client, err = resolve_accessible_client_by_phone(request.user, to)
+        if err:
+            return error_response('Contact not found', code=err, status_code=404)
+        if access_client is None and user_is_whatsapp_staff_scoped(request.user):
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+
+    wa_account, wa_err = resolve_whatsapp_account_for_api(company, phone_number_id)
+    if not wa_account:
+        if wa_err == 'whatsapp_phone_numbers_not_synced':
+            return error_response(
+                'WhatsApp is connected but your phone number could not be loaded from Meta. '
+                'Disconnect and reconnect the account, or check Meta permissions '
+                '(whatsapp_business_management, whatsapp_business_messaging).',
+                code=wa_err,
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        return error_response(
+            'No connected WhatsApp number for this company',
+            code=wa_err or 'no_connected_whatsapp_number',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    access_token = wa_account.get_access_token()
+    if not access_token:
+        return error_response(
+            'WhatsApp account has no access token',
+            code='whatsapp_no_access_token',
+        )
+
+    file_bytes = uploaded.read()
+    filename = getattr(uploaded, 'name', None) or 'file'
+    try:
+        file_bytes, mime, filename, is_voice_note = wa_media.prepare_bytes_for_meta(
+            data=file_bytes,
+            mime=mime,
+            filename=filename,
+            is_voice_note=is_voice_note and kind == wa_media.KIND_AUDIO,
+        )
+    except ValueError as e:
+        return error_response(str(e), code='bad_request')
+
+    try:
+        meta_media_id = wa_media.upload_media_to_meta(
+            phone_number_id=wa_account.phone_number_id,
+            access_token=access_token,
+            data=file_bytes,
+            mime=mime,
+            filename=filename,
+        )
+    except ValueError as e:
+        return error_response(str(e), code='bad_request')
+    except requests.RequestException as e:
+        logger.warning("WhatsApp media upload request error: %s", e)
+        return error_response('WhatsApp media upload failed.', code='bad_request')
+
+    media_part = wa_media.graph_media_payload(
+        kind=kind,
+        media_id=meta_media_id,
+        caption=caption,
+        filename=filename,
+        is_voice_note=is_voice_note,
+    )
+    url = f"{META_GRAPH_API_BASE_URL}/{wa_account.phone_number_id}/messages"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        **media_part,
+    }
+    redacted_to = _redact_phone_e164(to)
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+    except requests.RequestException as e:
+        logger.warning(
+            "WhatsApp send-media request error: phone_number_id=%s to=%s error=%s",
+            wa_account.phone_number_id,
+            redacted_to,
+            e,
+        )
+        return error_response(
+            "WhatsApp API request failed.",
+            code="bad_request",
+            details={"error": str(e)},
+        )
+
+    graph_status = resp.status_code
+    if graph_status >= 400:
+        try:
+            err_body = resp.json()
+        except Exception:
+            err_body = {'error': getattr(resp, 'text', '') or str(resp)}
+        if isinstance(err_body, dict):
+            err_body['graph_http_status'] = graph_status
+        logger.warning(
+            "WhatsApp send-media failed: graph_status=%s phone_number_id=%s to=%s body=%s",
+            graph_status,
+            wa_account.phone_number_id,
+            redacted_to,
+            err_body,
+        )
+        return error_response(
+            "WhatsApp API request failed.",
+            code=_api_code_from_graph_error(err_body if isinstance(err_body, dict) else {}),
+            details=err_body if isinstance(err_body, dict) else {"error": str(err_body)},
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return error_response(
+            "WhatsApp API returned invalid JSON.",
+            code="bad_request",
+            details={"graph_http_status": graph_status},
+        )
+
+    wam_id = (data.get('messages') or [{}])[0].get('id') if isinstance(data.get('messages'), list) else None
+    increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
+
+    if wa_account.integration_account_id:
+        IntegrationLog.objects.create(
+            account_id=wa_account.integration_account_id,
+            action='whatsapp_media_sent',
+            status='success',
+            message=f'Media ({kind}) sent to {to}',
+            response_data=data,
+        )
+
+    client = _resolve_whatsapp_client(
+        company,
+        client_id,
+        to,
+        integration_account=wa_account.integration_account,
+        create_if_missing=True,
+    )
+    serialized = None
+    if client:
+        try:
+            row = LeadWhatsAppMessage(
+                client=client,
+                phone_number=to,
+                body=(caption or '')[:65535],
+                direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+                whatsapp_message_id=wam_id,
+                delivery_status='sent',
+                created_by=request.user,
+                attachment_kind=kind,
+                attachment_mime=mime,
+                attachment_size=len(file_bytes),
+                original_filename=filename[:255],
+                is_voice_note=bool(is_voice_note),
+                meta_media_id=str(meta_media_id),
+            )
+            wa_media.save_bytes_to_message_attachment(row, file_bytes, filename, mime)
+            row.save()
+            serialized = LeadWhatsAppMessageSerializer(row, context={'request': request}).data
+        except Exception:
+            logger.exception("Failed to persist outbound WhatsApp media client_id=%s", client.id)
+
+    out = dict(data) if isinstance(data, dict) else {'graph': data}
+    if serialized:
+        out['message'] = serialized
+    return success_response(data=out)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_message_attachment(request, pk):
+    """Authenticated download for a WhatsApp message attachment."""
+    from django.http import FileResponse
+
+    from integrations.whatsapp_access import require_client_whatsapp_access
+
+    try:
+        msg = LeadWhatsAppMessage.objects.select_related('client').get(
+            pk=pk,
+            client__company=request.user.company,
+        )
+    except LeadWhatsAppMessage.DoesNotExist:
+        return error_response('Not found', code='not_found', status_code=404)
+
+    denied = require_client_whatsapp_access(request.user, msg.client)
+    if denied:
+        return error_response('Not found', code=denied, status_code=404)
+
+    if not msg.attachment or not getattr(msg.attachment, 'name', None):
+        return error_response('No attachment', code='not_found', status_code=404)
+
+    filename = msg.original_filename or 'attachment'
+    stream = msg.attachment.open('rb')
+    resp = FileResponse(
+        stream,
+        as_attachment=False,
+        filename=filename,
+        content_type=msg.attachment_mime or 'application/octet-stream',
+    )
+    resp['Cache-Control'] = 'private, max-age=3600'
+    return resp
+
+
 # WhatsApp customer service window: ~24h after the user's last inbound message (session messages).
 _WHATSAPP_SESSION_HOURS = 24
 

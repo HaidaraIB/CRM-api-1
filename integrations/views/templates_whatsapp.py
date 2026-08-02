@@ -47,6 +47,23 @@ from ..policy import get_effective_integration_policy, get_plan_integration_acce
 logger = logging.getLogger(__name__)
 
 
+def _whatsapp_preview_label(kind: str | None, body: str | None) -> str:
+    """Conversation list snippet for text or media WhatsApp messages."""
+    labels = {
+        'image': 'Photo',
+        'video': 'Video',
+        'audio': 'Voice message',
+        'document': 'Document',
+    }
+    base = labels.get(kind or '', '')
+    cap = (body or '').strip().replace('\n', ' ')
+    if base and cap:
+        return f'{base}: {cap[:120]}'
+    if cap:
+        return cap[:160]
+    return base or ''
+
+
 def _integration_gate(company, platform: str):
     plan_gate = get_plan_integration_access(company, platform)
     if not plan_gate["enabled"]:
@@ -150,18 +167,39 @@ def whatsapp_conversations_list(request):
 
     # Last message preview per client (one query)
     last_bodies: dict[int, str] = {}
+    unread_by_id: dict[int, int] = {}
     if clients:
-        from django.db.models import OuterRef, Subquery
+        from django.db.models import Count, OuterRef, Subquery
 
         latest_body = (
             LeadWhatsAppMessage.objects.filter(client_id=OuterRef('pk'))
             .order_by('-created_at')
             .values('body')[:1]
         )
-        for row in Client.objects.filter(id__in=[c.id for c in clients]).annotate(
-            last_body=Subquery(latest_body)
-        ).values('id', 'last_body'):
-            last_bodies[row['id']] = (row['last_body'] or '')[:160]
+        latest_kind = (
+            LeadWhatsAppMessage.objects.filter(client_id=OuterRef('pk'))
+            .order_by('-created_at')
+            .values('attachment_kind')[:1]
+        )
+        client_id_list = [c.id for c in clients]
+        for row in Client.objects.filter(id__in=client_id_list).annotate(
+            last_body=Subquery(latest_body),
+            last_kind=Subquery(latest_kind),
+        ).values('id', 'last_body', 'last_kind'):
+            last_bodies[row['id']] = _whatsapp_preview_label(
+                row.get('last_kind'), row.get('last_body')
+            )
+
+        for row in (
+            LeadWhatsAppMessage.objects.filter(
+                client_id__in=client_id_list,
+                direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+                is_read=False,
+            )
+            .values('client_id')
+            .annotate(n=Count('id'))
+        ):
+            unread_by_id[row['client_id']] = row['n']
 
     return success_response(
         data=[
@@ -173,10 +211,96 @@ def whatsapp_conversations_list(request):
                 'last_message_at': last_at_by_id.get(c.id).isoformat() if last_at_by_id.get(c.id) else None,
                 'last_message_preview': last_bodies.get(c.id, ''),
                 'assigned_to_id': c.assigned_to_id,
+                'unread_count': unread_by_id.get(c.id, 0),
             }
             for c in clients
         ],
     )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_unread_count(request):
+    """
+    Total unread inbound WhatsApp messages in the caller's scope.
+    GET /api/integrations/whatsapp/unread-count/
+
+    Owners/admins (and other company-wide lead viewers): all company unread.
+    Employees/Doctors: only threads for leads assigned to them.
+    """
+    from integrations.whatsapp_access import filter_whatsapp_messages_queryset
+
+    company = request.user.company
+    blocked = _integration_gate(company, "whatsapp")
+    if blocked is not None:
+        return blocked
+
+    qs = LeadWhatsAppMessage.objects.filter(
+        client__company=company,
+        direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+        is_read=False,
+    )
+    qs = filter_whatsapp_messages_queryset(request.user, qs)
+    return success_response(data={'unread_count': qs.count()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_mark_conversation_read(request):
+    """
+    Mark all inbound WhatsApp messages in a thread as read (agent opened the chat).
+    POST /api/integrations/whatsapp/conversations/mark-read/
+    Body: { "client": <id> } or { "phone": "<digits>" }
+    """
+    from crm.models import Client
+    from integrations.whatsapp_access import (
+        resolve_accessible_client_by_phone,
+        user_can_access_client,
+    )
+
+    company = request.user.company
+    blocked = _integration_gate(company, "whatsapp")
+    if blocked is not None:
+        return blocked
+
+    client_id = request.data.get('client') or request.data.get('client_id')
+    phone = (request.data.get('phone') or '').strip()
+    client = None
+
+    if client_id is not None and str(client_id).isdigit():
+        try:
+            client = company.clients.get(id=int(client_id))
+        except Client.DoesNotExist:
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+        if not user_can_access_client(request.user, client):
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+    elif phone:
+        client, err = resolve_accessible_client_by_phone(request.user, phone)
+        if err:
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+        if not client:
+            return success_response(data={'marked': 0})
+    else:
+        return error_response('client or phone is required', code='bad_request')
+
+    updated = LeadWhatsAppMessage.objects.filter(
+        client=client,
+        direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+        is_read=False,
+    ).update(is_read=True)
+    return success_response(data={'marked': updated, 'client_id': client.id})
 
 
 @api_view(['GET'])

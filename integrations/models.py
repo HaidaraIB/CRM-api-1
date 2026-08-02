@@ -856,6 +856,52 @@ class LeadWhatsAppMessage(models.Model):
         blank=True,
         related_name="whatsapp_messages",
     )
+    # Agent-side read state for inbound messages (CRM UI unread badge).
+    # Not Meta delivery_status=read (that is the customer's receipt on outbound).
+    is_read = models.BooleanField(
+        default=True,
+        help_text="False for unread inbound messages until an agent opens the thread.",
+    )
+    # Session media (image/video/audio/document) — mirrors tenant_chat.ChatMessage attachment fields.
+    class AttachmentKind(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+        AUDIO = "audio", "Audio"
+        DOCUMENT = "document", "Document"
+
+    attachment = models.FileField(
+        upload_to="whatsapp_chat/%Y/%m/%d/",
+        max_length=500,
+        null=True,
+        blank=True,
+    )
+    attachment_kind = models.CharField(
+        max_length=16,
+        choices=AttachmentKind.choices,
+        null=True,
+        blank=True,
+    )
+    attachment_mime = models.CharField(max_length=128, blank=True, default="")
+    attachment_size = models.PositiveIntegerField(null=True, blank=True)
+    attachment_width = models.PositiveIntegerField(null=True, blank=True)
+    attachment_height = models.PositiveIntegerField(null=True, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True, default="")
+    attachment_object_key = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="Optional remote object path when using object storage.",
+    )
+    is_voice_note = models.BooleanField(
+        default=False,
+        help_text="True when outbound audio was sent as a WhatsApp voice note (voice:true).",
+    )
+    meta_media_id = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        help_text="Meta media id used for Cloud API send/download.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -865,6 +911,10 @@ class LeadWhatsAppMessage(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['client', 'created_at']),
+            models.Index(
+                fields=['client', 'is_read'],
+                name='lead_wa_client_is_read_idx',
+            ),
         ]
 
     def __str__(self):

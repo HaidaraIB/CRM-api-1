@@ -339,6 +339,7 @@ class SendLeadSMSSerializer(serializers.Serializer):
 class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
     """رسالة واتساب للعميل (للتايملاين ومركز المراسلات)."""
     created_by_username = serializers.SerializerMethodField(read_only=True)
+    attachment_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LeadWhatsAppMessage
@@ -351,16 +352,56 @@ class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
             'whatsapp_message_id',
             'delivery_status',
             'delivery_error',
+            'is_read',
             'created_by',
             'created_by_username',
             'created_at',
+            'attachment_kind',
+            'attachment_mime',
+            'attachment_size',
+            'attachment_width',
+            'attachment_height',
+            'original_filename',
+            'attachment_url',
+            'is_voice_note',
+            'meta_media_id',
         ]
-        read_only_fields = ['id', 'created_at', 'direction', 'whatsapp_message_id', 'delivery_status', 'delivery_error']
+        read_only_fields = [
+            'id',
+            'created_at',
+            'direction',
+            'whatsapp_message_id',
+            'delivery_status',
+            'delivery_error',
+            'is_read',
+            'attachment_kind',
+            'attachment_mime',
+            'attachment_size',
+            'attachment_width',
+            'attachment_height',
+            'original_filename',
+            'attachment_url',
+            'is_voice_note',
+            'meta_media_id',
+        ]
 
     def get_created_by_username(self, obj):
         if obj.created_by_id is None:
             return ''
         return getattr(obj.created_by, 'username', None) or ''
+
+    def get_attachment_url(self, obj):
+        has_file = bool(getattr(obj.attachment, 'name', None))
+        has_key = bool((getattr(obj, 'attachment_object_key', None) or '').strip())
+        if not has_file and not has_key:
+            return None
+        request = self.context.get('request')
+        if not request:
+            return None
+        from django.urls import reverse
+
+        path = reverse('whatsapp_message_attachment', kwargs={'pk': obj.id})
+        return request.build_absolute_uri(path)
 
 
 # --------------- Message Templates (WhatsApp / SMS) ---------------

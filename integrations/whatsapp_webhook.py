@@ -253,6 +253,11 @@ def process_whatsapp_message(message, phone_number_id):
     even if a WhatsAppAccount row incorrectly reuses the same phone_number_id.
     """
     from accounts.platform_whatsapp import effective_platform_phone_number_id
+    from integrations.services.whatsapp_media import (
+        apply_meta_media_to_message,
+        extract_meta_media_info,
+        media_body_from_meta_message,
+    )
 
     from_number = message.get('from')
     message_id = message.get('id')
@@ -261,7 +266,7 @@ def process_whatsapp_message(message, phone_number_id):
     if message_type == 'text':
         text_body = message.get('text', {}).get('body', '')
     else:
-        text_body = f"[{message_type} message]"
+        text_body = media_body_from_meta_message(message) or f"[{message_type} message]"
 
     if not from_number:
         logger.warning("No 'from' number in WhatsApp message")
@@ -335,13 +340,18 @@ def process_whatsapp_message(message, phone_number_id):
 
         from datetime import datetime, timezone as dt_timezone
 
-        row = LeadWhatsAppMessage.objects.create(
+        row = LeadWhatsAppMessage(
             client=client,
             phone_number=from_number,
             body=text_body,
             direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
             whatsapp_message_id=message_id,
+            is_read=False,
         )
+        access_token = wa_account.get_access_token()
+        if access_token and extract_meta_media_info(message):
+            apply_meta_media_to_message(row, message, access_token=access_token)
+        row.save()
         # Prefer Meta message timestamp for accurate 24h customer-service window.
         ts_raw = message.get('timestamp')
         if ts_raw:
@@ -618,6 +628,10 @@ def process_history_sync(value, waba_id=None):
         digits_only,
         extract_whatsapp_message_body,
     )
+    from integrations.services.whatsapp_media import (
+        apply_meta_media_to_message,
+        extract_meta_media_info,
+    )
 
     phone_number_id = (value.get('metadata') or {}).get('phone_number_id')
     display_phone = (value.get('metadata') or {}).get('display_phone_number')
@@ -713,6 +727,7 @@ def process_history_sync(value, waba_id=None):
                         else LeadWhatsAppMessage.DIRECTION_OUTBOUND
                     )
                 body = extract_whatsapp_message_body(message) or f"[{message.get('type') or 'message'}]"
+                # History import: treat as already read so reconnect does not flood the badge.
                 row = LeadWhatsAppMessage(
                     client=client,
                     phone_number=user_phone,
@@ -720,7 +735,11 @@ def process_history_sync(value, waba_id=None):
                     direction=direction,
                     whatsapp_message_id=message_id,
                     delivery_status=(message.get('history_context') or {}).get('status'),
+                    is_read=True,
                 )
+                access_token = wa_account.get_access_token()
+                if access_token and extract_meta_media_info(message):
+                    apply_meta_media_to_message(row, message, access_token=access_token)
                 row.save()
                 ts_raw = message.get('timestamp')
                 if ts_raw:
@@ -766,6 +785,10 @@ def process_smb_message_echoes(value, waba_id=None):
         touch_client_last_contacted,
     )
     from integrations.services.whatsapp_coexistence import extract_whatsapp_message_body
+    from integrations.services.whatsapp_media import (
+        apply_meta_media_to_message,
+        extract_meta_media_info,
+    )
 
     phone_number_id = (value.get('metadata') or {}).get('phone_number_id')
     wa_account = _resolve_wa_account(phone_number_id=phone_number_id, waba_id=waba_id)
@@ -798,7 +821,7 @@ def process_smb_message_echoes(value, waba_id=None):
         if not client:
             continue
         body = extract_whatsapp_message_body(echo) or f"[{echo.get('type') or 'message'}]"
-        LeadWhatsAppMessage.objects.create(
+        row = LeadWhatsAppMessage(
             client=client,
             phone_number=to_phone,
             body=body,
@@ -806,6 +829,10 @@ def process_smb_message_echoes(value, waba_id=None):
             whatsapp_message_id=message_id,
             delivery_status='sent',
         )
+        access_token = wa_account.get_access_token()
+        if access_token and extract_meta_media_info(echo):
+            apply_meta_media_to_message(row, echo, access_token=access_token)
+        row.save()
         touch_client_last_contacted(client)
         ClientEvent.objects.create(
             client=client,
