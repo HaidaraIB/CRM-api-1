@@ -888,6 +888,12 @@ class TestMissionBarSummary:
             reminder_date=yesterday,
             notes="Overdue",
         )
+        ClientTask.objects.create(
+            client=assigned,
+            reminder_date=yesterday,
+            reminder_completed_at=timezone.now(),
+            notes="Completed overdue — must not count",
+        )
 
         response = authenticated_admin.get("/api/v1/clients/mission-bar-summary/")
         assert response.status_code == status.HTTP_200_OK

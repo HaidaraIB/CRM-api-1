@@ -235,12 +235,14 @@ class ClientViewSet(viewsets.ModelViewSet):
 
         overdue_follow_ups = task_qs.filter(
             reminder_date__isnull=False,
+            reminder_completed_at__isnull=True,
             reminder_date__date__lt=today,
         ).count()
 
         contact_today = client_qs.filter(
             assigned_to__isnull=False,
             client_tasks__reminder_date__date=today,
+            client_tasks__reminder_completed_at__isnull=True,
         ).distinct().count()
 
         return Response({
