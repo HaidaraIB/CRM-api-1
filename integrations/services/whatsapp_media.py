@@ -1,8 +1,9 @@
 """
 WhatsApp Cloud API media upload/download + MIME policy.
 
-Voice notes require audio/ogg;codecs=opus. Browser webm recordings are converted
-via ffmpeg when available; otherwise outbound voice send fails with a clear error.
+Voice notes require audio/ogg;codecs=opus. Non-OGG browser recordings (webm, mp4,
+aac, …) are converted via ffmpeg when available; otherwise outbound voice send
+fails with a clear error.
 """
 from __future__ import annotations
 
@@ -20,6 +21,11 @@ from django.core.files.uploadedfile import UploadedFile
 from integrations.oauth_utils import META_GRAPH_API_BASE_URL
 
 logger = logging.getLogger(__name__)
+
+_VOICE_CONVERT_ERROR = (
+    "Voice notes require OGG/Opus. Install ffmpeg on the server "
+    "or record in a browser that supports audio/ogg."
+)
 
 # Cloud API practical limits (bytes) — see Meta media docs.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -139,7 +145,11 @@ def validate_whatsapp_upload(
             ".mp4": "video/mp4",
             ".webm": "audio/webm",
             ".ogg": "audio/ogg",
+            ".opus": "audio/ogg",
             ".mp3": "audio/mpeg",
+            ".m4a": "audio/mp4",
+            ".aac": "audio/aac",
+            ".amr": "audio/amr",
             ".pdf": "application/pdf",
         }
         ct = defaults.get(ext, ct)
@@ -147,8 +157,12 @@ def validate_whatsapp_upload(
         # Allow browser recordings labeled oddly
         if "webm" in ct or name.lower().endswith(".webm"):
             ct = "audio/webm"
-        elif "ogg" in ct:
+        elif "ogg" in ct or "opus" in ct:
             ct = "audio/ogg"
+        elif name.lower().endswith((".m4a", ".mp4")) or "mp4" in ct:
+            ct = "audio/mp4"
+        elif name.lower().endswith(".aac") or "aac" in ct:
+            ct = "audio/aac"
     if ct not in allowed and not (kind == KIND_AUDIO and ct.startswith("audio/")):
         raise ValueError(f"File type '{ct or raw_ct}' is not allowed for WhatsApp.")
     if want_voice and kind != KIND_AUDIO:
@@ -156,7 +170,32 @@ def validate_whatsapp_upload(
     return kind, ct or raw_ct or "application/octet-stream", size
 
 
-def convert_webm_to_ogg_opus(src_path: str) -> Optional[str]:
+def _temp_suffix_for_audio_mime(mime: str, filename: str) -> str:
+    """Pick a temp-file suffix so ffmpeg can sniff the container correctly."""
+    mime_l = (mime or "").split(";")[0].strip().lower()
+    name = (filename or "").lower()
+    if "webm" in mime_l or name.endswith(".webm"):
+        return ".webm"
+    if "ogg" in mime_l or "opus" in mime_l or name.endswith((".ogg", ".opus")):
+        return ".ogg"
+    if mime_l == "audio/aac" or name.endswith(".aac"):
+        return ".aac"
+    if "mpeg" in mime_l or name.endswith(".mp3"):
+        return ".mp3"
+    if "amr" in mime_l or name.endswith(".amr"):
+        return ".amr"
+    if "mp4" in mime_l or name.endswith((".m4a", ".mp4")):
+        return ".m4a"
+    ext = os.path.splitext(name)[1]
+    return ext if ext else ".bin"
+
+
+def _is_ogg_opus_mime(mime: str) -> bool:
+    mime_l = (mime or "").split(";")[0].strip().lower()
+    return "ogg" in mime_l or "opus" in mime_l
+
+
+def convert_audio_to_ogg_opus(src_path: str) -> Optional[str]:
     """Return path to a temp .ogg file, or None if ffmpeg is unavailable/fails."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -183,12 +222,17 @@ def convert_webm_to_ogg_opus(src_path: str) -> Optional[str]:
         if os.path.getsize(dest) > 0:
             return dest
     except (subprocess.SubprocessError, OSError) as e:
-        logger.warning("ffmpeg webm→ogg failed: %s", e)
+        logger.warning("ffmpeg audio→ogg failed: %s", e)
         try:
             os.unlink(dest)
         except OSError:
             pass
     return None
+
+
+# Backwards-compatible alias
+def convert_webm_to_ogg_opus(src_path: str) -> Optional[str]:
+    return convert_audio_to_ogg_opus(src_path)
 
 
 def prepare_bytes_for_meta(
@@ -199,40 +243,39 @@ def prepare_bytes_for_meta(
     is_voice_note: bool,
 ) -> tuple[bytes, str, str, bool]:
     """
-    Possibly convert webm → ogg for voice notes.
+    Convert non-OGG voice notes to OGG/Opus via ffmpeg.
     Returns (bytes, mime, filename, is_voice_note_effective).
     """
     mime_l = (mime or "").split(";")[0].strip().lower()
-    if is_voice_note and ("webm" in mime_l or filename.lower().endswith(".webm")):
-        fd, src = tempfile.mkstemp(suffix=".webm")
-        try:
-            os.write(fd, data)
-            os.close(fd)
-            fd = None
-            ogg_path = convert_webm_to_ogg_opus(src)
-            if not ogg_path:
-                raise ValueError(
-                    "Voice notes require OGG/Opus. Install ffmpeg on the server "
-                    "or record in a browser that supports audio/ogg."
-                )
-            with open(ogg_path, "rb") as f:
-                data = f.read()
-            os.unlink(ogg_path)
-            return data, "audio/ogg", filename.rsplit(".", 1)[0] + ".ogg", True
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+    if not is_voice_note:
+        return data, mime_l or mime, filename, False
+    if _is_ogg_opus_mime(mime_l):
+        return data, mime_l or "audio/ogg", filename, True
+
+    suffix = _temp_suffix_for_audio_mime(mime_l, filename)
+    fd, src = tempfile.mkstemp(suffix=suffix)
+    try:
+        os.write(fd, data)
+        os.close(fd)
+        fd = None
+        ogg_path = convert_audio_to_ogg_opus(src)
+        if not ogg_path:
+            raise ValueError(_VOICE_CONVERT_ERROR)
+        with open(ogg_path, "rb") as f:
+            data = f.read()
+        os.unlink(ogg_path)
+        base = filename.rsplit(".", 1)[0] if "." in (filename or "") else (filename or "voice")
+        return data, "audio/ogg", f"{base}.ogg", True
+    finally:
+        if fd is not None:
             try:
-                os.unlink(src)
+                os.close(fd)
             except OSError:
                 pass
-    if is_voice_note and "ogg" not in mime_l and "opus" not in mime_l:
-        # Non-ogg voice: send as regular audio without voice:true
-        return data, mime_l or mime, filename, False
-    return data, mime_l or mime, filename, is_voice_note
+        try:
+            os.unlink(src)
+        except OSError:
+            pass
 
 
 def upload_media_to_meta(

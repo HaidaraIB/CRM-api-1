@@ -17,6 +17,7 @@
 - pip
 - virtualenv (اختياري لكن موصى به)
 - Git
+- **ffmpeg** (with libopus) — required to convert browser voice notes to OGG/Opus for WhatsApp
 
 ## خطوات النشر
 
@@ -48,6 +49,24 @@ sudo systemctl enable nginx
 ```bash
 # سيتم تثبيته لاحقاً في virtualenv، لكن يمكن تثبيته عالمياً للتحقق
 pip3 install gunicorn
+```
+
+#### 1.5 تثبيت ffmpeg (مطلوب لملاحظات صوت واتساب)
+WhatsApp voice notes must be OGG/Opus. The API converts browser recordings (WebM, Safari MP4/M4A, AAC) with `ffmpeg` + `libopus`. Without it, sending a voice note returns: `Voice notes require OGG/Opus...`
+
+```bash
+sudo apt update
+sudo apt install ffmpeg -y
+
+# Verify ffmpeg is on PATH and Opus is available
+ffmpeg -version
+ffmpeg -encoders 2>/dev/null | grep -i opus
+```
+
+After install, restart the API process so it picks up PATH:
+
+```bash
+sudo systemctl restart crm-api
 ```
 
 ### الخطوة 2: رفع المشروع إلى الخادم
