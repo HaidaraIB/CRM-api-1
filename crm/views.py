@@ -803,7 +803,7 @@ class ClientCallViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset().select_related(
             "client", "client__company", "call_method", "created_by", "pbx_call_record",
-        )
+        ).prefetch_related("whatsapp_calls")
 
         if user.is_admin() or user.is_reception():
             queryset = queryset.filter(client__company=user.company)

@@ -660,6 +660,7 @@ class ClientTask(models.Model):
 class ClientCallSource(models.TextChoices):
     MANUAL = "manual", "Manual"
     PBX = "pbx", "PBX"
+    WHATSAPP = "whatsapp", "WhatsApp"
 
 
 class ClientCall(models.Model):
@@ -688,6 +689,15 @@ class ClientCall(models.Model):
         blank=True,
         null=True,
     )
+    dialed_phone_number = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="E.164 / digits dialed or remote party for this call",
+    )
+    recording_storage_key = models.CharField(max_length=512, blank=True, default="")
+    recording_status = models.CharField(max_length=16, blank=True, default="")
+    recording_duration_sec = models.PositiveIntegerField(blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
     call_datetime = models.DateTimeField(blank=True, null=True, help_text="Date and time when the call happened")
     follow_up_date = models.DateTimeField(blank=True, null=True, help_text="Next call date or follow up date")

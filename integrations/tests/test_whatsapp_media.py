@@ -76,7 +76,7 @@ def test_prepare_bytes_mp4_converts_when_ffmpeg_ok(mock_convert, tmp_path):
 
 @patch("integrations.services.whatsapp_media.convert_audio_to_ogg_opus", return_value=None)
 def test_prepare_bytes_webm_raises_without_ffmpeg(mock_convert):
-    with pytest.raises(ValueError, match="Voice notes require OGG/Opus"):
+    with pytest.raises(ValueError, match="Voice notes require OGG/Opus") as exc_info:
         wa_media.prepare_bytes_for_meta(
             data=b"fake-webm",
             mime="audio/webm",
@@ -84,11 +84,13 @@ def test_prepare_bytes_webm_raises_without_ffmpeg(mock_convert):
             is_voice_note=True,
         )
     mock_convert.assert_called_once()
+    assert wa_media.is_voice_note_convert_error(exc_info.value)
+    assert wa_media.VOICE_NOTE_CONVERT_ERROR_CODE == "whatsapp_voice_note_requires_ogg"
 
 
 @patch("integrations.services.whatsapp_media.convert_audio_to_ogg_opus", return_value=None)
 def test_prepare_bytes_mp4_raises_without_ffmpeg(mock_convert):
-    with pytest.raises(ValueError, match="Voice notes require OGG/Opus"):
+    with pytest.raises(ValueError, match="Voice notes require OGG/Opus") as exc_info:
         wa_media.prepare_bytes_for_meta(
             data=b"fake-m4a",
             mime="audio/mp4",
@@ -96,6 +98,7 @@ def test_prepare_bytes_mp4_raises_without_ffmpeg(mock_convert):
             is_voice_note=True,
         )
     mock_convert.assert_called_once()
+    assert wa_media.is_voice_note_convert_error(exc_info.value)
 
 
 def test_temp_suffix_for_audio_mime():

@@ -134,6 +134,12 @@ def whatsapp_webhook(request):
                             process_smb_message_echoes(value, waba_id=waba_id)
                         elif field == 'account_update':
                             process_account_update(value, waba_id=waba_id)
+                        elif field == 'calls':
+                            from integrations.services.whatsapp_calling import (
+                                process_calls_webhook_value,
+                            )
+
+                            process_calls_webhook_value(value, waba_id=waba_id)
                         elif field == 'messages' or (
                             not field and ('messages' in value or 'statuses' in value)
                         ):
@@ -638,9 +644,44 @@ def process_history_sync(value, waba_id=None):
     business_digits = digits_only(display_phone)
 
     # Media asset follow-up webhooks under field=history may use messages[] instead of history[].
+    # Same wamid as the earlier media_placeholder row — hydrate that row; do not create a duplicate.
     if 'messages' in value and 'history' not in value:
+        from integrations.services.whatsapp_media import (
+            extract_meta_media_info,
+            hydrate_existing_message_media,
+        )
+
+        wa_account = _resolve_wa_account(phone_number_id=phone_number_id, waba_id=waba_id)
+        access_token = wa_account.get_access_token() if wa_account else None
         for message in value.get('messages') or []:
+            if not isinstance(message, dict):
+                continue
             try:
+                message_id = message.get('id')
+                if (
+                    message_id
+                    and extract_meta_media_info(message)
+                    and access_token
+                ):
+                    row = LeadWhatsAppMessage.objects.filter(
+                        whatsapp_message_id=message_id
+                    ).first()
+                    if row:
+                        if hydrate_existing_message_media(
+                            row, message, access_token=access_token
+                        ):
+                            logger.info(
+                                "history media hydrated wamid=%s kind=%s",
+                                message_id,
+                                row.attachment_kind,
+                            )
+                        else:
+                            logger.warning(
+                                "history media hydrate failed wamid=%s",
+                                message_id,
+                            )
+                        continue
+                # No existing placeholder (or not a media payload): treat as normal inbound.
                 process_whatsapp_message(message, phone_number_id)
             except Exception as e:
                 logger.error("history media message error: %s", e, exc_info=True)

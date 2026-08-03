@@ -24,7 +24,6 @@ def test_pbx_settings_get_returns_disabled_stub_when_gated(api_client, company, 
     payload = response.json()
     data = payload["data"] if isinstance(payload, dict) and "data" in payload else payload
     assert data["is_enabled"] is False
-    assert data["softphone_enabled"] is False
     assert data["screen_pop_enabled"] is False
 
 

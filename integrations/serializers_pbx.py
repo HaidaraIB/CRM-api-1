@@ -7,13 +7,11 @@ from rest_framework import serializers
 
 from accounts.models import User
 from crm.models import Client
-from integrations.encryption import decrypt_token, encrypt_token
+from integrations.encryption import encrypt_token
 from integrations.models import (
     PbxDialCommand,
     PbxSettings,
-    SoftphonePlatform,
     UserPbxExtension,
-    UserSoftphoneDevice,
 )
 from integrations.pbx_connector_meta import get_pbx_connector_version
 
@@ -42,13 +40,6 @@ class PbxSettingsSerializer(serializers.ModelSerializer):
             "is_enabled",
             "auto_log_calls",
             "screen_pop_enabled",
-            "softphone_enabled",
-            "sip_domain",
-            "sip_port",
-            "sip_transport",
-            "wss_uri",
-            "stun_server",
-            "turn_server",
             "connector_last_seen_at",
             "connector_online",
             "created_at",
@@ -106,7 +97,6 @@ class UserPbxExtensionSerializer(serializers.ModelSerializer):
         source="user", queryset=User.objects.all()
     )
     username = serializers.CharField(source="user.username", read_only=True)
-    sip_password_masked = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = UserPbxExtension
@@ -115,21 +105,10 @@ class UserPbxExtensionSerializer(serializers.ModelSerializer):
             "user_id",
             "username",
             "extension",
-            "sip_password",
-            "sip_password_masked",
-            "softphone_enabled",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
-        extra_kwargs = {
-            "sip_password": {"write_only": True, "required": False},
-        }
-
-    def get_sip_password_masked(self, obj):
-        if obj.sip_password:
-            return "••••••••••••••••"
-        return None
 
     def validate_user(self, user):
         request = self.context.get("request")
@@ -167,29 +146,6 @@ class UserPbxExtensionSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
-
-    def create(self, validated_data):
-        pwd = validated_data.pop("sip_password", None)
-        obj = super().create(validated_data)
-        if pwd:
-            obj.sip_password = encrypt_token(pwd)
-            obj.save(update_fields=["sip_password", "updated_at"])
-        return obj
-
-    def update(self, instance, validated_data):
-        pwd = validated_data.pop("sip_password", None)
-        obj = super().update(instance, validated_data)
-        if pwd:
-            obj.sip_password = encrypt_token(pwd)
-            obj.save(update_fields=["sip_password", "updated_at"])
-        return obj
-
-
-class SoftphoneDeviceSerializer(serializers.Serializer):
-    platform = serializers.ChoiceField(choices=SoftphonePlatform.choices)
-    device_id = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
-    fcm_token = serializers.CharField(max_length=512, required=False, allow_blank=True, default="")
-    voip_token = serializers.CharField(max_length=512, required=False, allow_blank=True, default="")
 
 
 class PbxDialRequestSerializer(serializers.Serializer):

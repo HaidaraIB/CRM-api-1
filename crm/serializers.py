@@ -1294,8 +1294,11 @@ class ClientCallSerializer(serializers.ModelSerializer):
     pbx_direction = serializers.SerializerMethodField(read_only=True)
     pbx_disposition = serializers.SerializerMethodField(read_only=True)
     pbx_duration_sec = serializers.SerializerMethodField(read_only=True)
-    pbx_recording_url = serializers.SerializerMethodField(read_only=True)
-    pbx_recording_status = serializers.SerializerMethodField(read_only=True)
+    whatsapp_direction = serializers.SerializerMethodField(read_only=True)
+    whatsapp_call_status = serializers.SerializerMethodField(read_only=True)
+    whatsapp_duration_sec = serializers.SerializerMethodField(read_only=True)
+    whatsapp_recording_url = serializers.SerializerMethodField(read_only=True)
+    whatsapp_recording_status = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClientCall
@@ -1310,8 +1313,11 @@ class ClientCallSerializer(serializers.ModelSerializer):
             "pbx_direction",
             "pbx_disposition",
             "pbx_duration_sec",
-            "pbx_recording_url",
-            "pbx_recording_status",
+            "whatsapp_direction",
+            "whatsapp_call_status",
+            "whatsapp_duration_sec",
+            "whatsapp_recording_url",
+            "whatsapp_recording_status",
             "notes",
             "call_datetime",
             "follow_up_date",
@@ -1325,6 +1331,15 @@ class ClientCallSerializer(serializers.ModelSerializer):
 
     def _pbx_record(self, obj):
         return getattr(obj, "pbx_call_record", None)
+
+    def _wa_call(self, obj):
+        related = getattr(obj, "whatsapp_calls", None)
+        if related is None:
+            return None
+        try:
+            return related.first()
+        except Exception:
+            return None
 
     def get_pbx_direction(self, obj):
         rec = self._pbx_record(obj)
@@ -1340,17 +1355,29 @@ class ClientCallSerializer(serializers.ModelSerializer):
             return None
         return rec.billsec or rec.duration_sec or None
 
-    def get_pbx_recording_url(self, obj):
-        rec = self._pbx_record(obj)
-        if not rec:
+    def get_whatsapp_direction(self, obj):
+        wa = self._wa_call(obj)
+        return wa.direction if wa else None
+
+    def get_whatsapp_call_status(self, obj):
+        wa = self._wa_call(obj)
+        return wa.status if wa else None
+
+    def get_whatsapp_duration_sec(self, obj):
+        wa = self._wa_call(obj)
+        return wa.duration_sec if wa else None
+
+    def get_whatsapp_recording_url(self, obj):
+        wa = self._wa_call(obj)
+        if not wa:
             return None
-        from integrations.services.pbx_recording_service import get_playback_url
+        from integrations.services.whatsapp_calling import get_wa_playback_url
 
-        return get_playback_url(rec, self.context.get("request"))
+        return get_wa_playback_url(wa, self.context.get("request"))
 
-    def get_pbx_recording_status(self, obj):
-        rec = self._pbx_record(obj)
-        return rec.recording_status if rec else None
+    def get_whatsapp_recording_status(self, obj):
+        wa = self._wa_call(obj)
+        return wa.recording_status if wa else None
 
     def validate_call_method(self, value):
         """Ensure call_method belongs to the same company as the client"""
@@ -1666,8 +1693,11 @@ class ClientCallListSerializer(serializers.ModelSerializer):
     pbx_direction = serializers.SerializerMethodField(read_only=True)
     pbx_disposition = serializers.SerializerMethodField(read_only=True)
     pbx_duration_sec = serializers.SerializerMethodField(read_only=True)
-    pbx_recording_url = serializers.SerializerMethodField(read_only=True)
-    pbx_recording_status = serializers.SerializerMethodField(read_only=True)
+    whatsapp_direction = serializers.SerializerMethodField(read_only=True)
+    whatsapp_call_status = serializers.SerializerMethodField(read_only=True)
+    whatsapp_duration_sec = serializers.SerializerMethodField(read_only=True)
+    whatsapp_recording_url = serializers.SerializerMethodField(read_only=True)
+    whatsapp_recording_status = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ClientCall
@@ -1682,8 +1712,11 @@ class ClientCallListSerializer(serializers.ModelSerializer):
             "pbx_direction",
             "pbx_disposition",
             "pbx_duration_sec",
-            "pbx_recording_url",
-            "pbx_recording_status",
+            "whatsapp_direction",
+            "whatsapp_call_status",
+            "whatsapp_duration_sec",
+            "whatsapp_recording_url",
+            "whatsapp_recording_status",
             "notes",
             "call_datetime",
             "follow_up_date",
@@ -1695,6 +1728,15 @@ class ClientCallListSerializer(serializers.ModelSerializer):
 
     def _pbx_record(self, obj):
         return getattr(obj, "pbx_call_record", None)
+
+    def _wa_call(self, obj):
+        related = getattr(obj, "whatsapp_calls", None)
+        if related is None:
+            return None
+        try:
+            return related.first()
+        except Exception:
+            return None
 
     def get_pbx_direction(self, obj):
         rec = self._pbx_record(obj)
@@ -1710,14 +1752,26 @@ class ClientCallListSerializer(serializers.ModelSerializer):
             return None
         return rec.billsec or rec.duration_sec or None
 
-    def get_pbx_recording_url(self, obj):
-        rec = self._pbx_record(obj)
-        if not rec:
+    def get_whatsapp_direction(self, obj):
+        wa = self._wa_call(obj)
+        return wa.direction if wa else None
+
+    def get_whatsapp_call_status(self, obj):
+        wa = self._wa_call(obj)
+        return wa.status if wa else None
+
+    def get_whatsapp_duration_sec(self, obj):
+        wa = self._wa_call(obj)
+        return wa.duration_sec if wa else None
+
+    def get_whatsapp_recording_url(self, obj):
+        wa = self._wa_call(obj)
+        if not wa:
             return None
-        from integrations.services.pbx_recording_service import get_playback_url
+        from integrations.services.whatsapp_calling import get_wa_playback_url
 
-        return get_playback_url(rec, self.context.get("request"))
+        return get_wa_playback_url(wa, self.context.get("request"))
 
-    def get_pbx_recording_status(self, obj):
-        rec = self._pbx_record(obj)
-        return rec.recording_status if rec else None
+    def get_whatsapp_recording_status(self, obj):
+        wa = self._wa_call(obj)
+        return wa.recording_status if wa else None

@@ -34,10 +34,17 @@ def _backend_name() -> str:
     return (getattr(settings, "RECORDING_STORAGE_BACKEND", "local") or "local").strip().lower()
 
 
-def build_storage_key(company_id: int, linkedid: str, original_name: str) -> str:
+def build_storage_key(
+    company_id: int,
+    linkedid: str,
+    original_name: str,
+    *,
+    prefix: str = "pbx",
+) -> str:
     ext = Path(original_name).suffix.lower() or ".wav"
     safe_linked = "".join(c if c.isalnum() or c in ".-_" else "_" for c in linkedid)[:64]
-    return f"pbx/{company_id}/{safe_linked}/{uuid.uuid4().hex}{ext}"
+    safe_prefix = "".join(c if c.isalnum() or c in ".-_" else "_" for c in (prefix or "pbx"))[:32]
+    return f"{safe_prefix}/{company_id}/{safe_linked}/{uuid.uuid4().hex}{ext}"
 
 
 def save_recording(
@@ -46,9 +53,12 @@ def save_recording(
     linkedid: str,
     file_bytes: bytes,
     original_filename: str,
+    prefix: str = "pbx",
 ) -> str:
     """Persist recording bytes; returns opaque storage key."""
-    key = build_storage_key(company_id, linkedid, original_filename)
+    key = build_storage_key(
+        company_id, linkedid, original_filename, prefix=prefix
+    )
     backend = _backend_name()
 
     if backend in ("s3", "r2"):
@@ -115,4 +125,10 @@ def _guess_content_type(key: str) -> str:
         return "audio/x-gsm"
     if ext == ".mp3":
         return "audio/mpeg"
+    if ext in (".webm",):
+        return "audio/webm"
+    if ext in (".ogg", ".oga"):
+        return "audio/ogg"
+    if ext == ".m4a":
+        return "audio/mp4"
     return "application/octet-stream"

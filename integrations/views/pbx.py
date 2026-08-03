@@ -8,10 +8,8 @@ import json
 import logging
 import secrets
 
-from django.core import signing
-
 from django.db import OperationalError
-from django.http import FileResponse, Http404, HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -25,18 +23,8 @@ from integrations.models import (
     PbxCallRecord,
     PbxDialCommand,
     PbxDialCommandStatus,
-    PbxRecordingStatus,
     PbxSettings,
-    SoftphonePlatform,
     UserPbxExtension,
-    UserSoftphoneDevice,
-)
-from integrations.services.pbx_recording_service import (
-    finalize_recording_upload,
-    list_pending_recording_jobs,
-    mark_recording_failed,
-    stream_recording_for_user,
-    verify_playback_token,
 )
 from integrations.views.twilio_sms import _integration_gate
 from integrations.services.pbx_connector_package import build_connector_zip
@@ -44,14 +32,8 @@ from integrations.serializers_pbx import (
     PbxDialCommandSerializer,
     PbxDialRequestSerializer,
     PbxSettingsSerializer,
-    SoftphoneDeviceSerializer,
     UserPbxExtensionSerializer,
 )
-from integrations.services.softphone_config import (
-    build_softphone_config,
-    user_softphone_ready,
-)
-from integrations.services.softphone_offboarding import offboard_softphone_user
 from integrations.services.pbx_handler import log_incoming_zycoo_push, process_pbx_payload
 from integrations.pbx_connector_meta import get_pbx_connector_version
 
@@ -121,7 +103,6 @@ def _pbx_unavailable_settings_payload() -> dict:
     """Feature-detection stub when plan/policy blocks PBX (avoid HTTP 403 log spam)."""
     return {
         "is_enabled": False,
-        "softphone_enabled": False,
         "screen_pop_enabled": False,
         "auto_log_calls": False,
         "integration_available": False,
@@ -236,18 +217,11 @@ def pbx_extensions_view(request):
     defaults = {
         "company": company,
         "extension": serializer.validated_data["extension"],
-        "softphone_enabled": serializer.validated_data.get("softphone_enabled", True),
     }
     obj, created = UserPbxExtension.objects.update_or_create(
         user=user,
         defaults=defaults,
     )
-    sip_password = request.data.get("sip_password")
-    if sip_password:
-        from integrations.encryption import encrypt_token
-
-        obj.sip_password = encrypt_token(str(sip_password))
-        obj.save(update_fields=["sip_password", "updated_at"])
     return success_response(
         UserPbxExtensionSerializer(obj).data,
         status_code=201 if created else 200,
@@ -268,12 +242,9 @@ def pbx_extension_detail_view(request, pk: int):
         return error_response("Not found.", status_code=404)
 
     if request.method == "DELETE":
-        offboard_softphone_user(obj.user, clear_sip_password=True, mapping=obj)
         obj.delete()
         return success_response({"deleted": True})
 
-    prev_user_id = obj.user_id
-    prev_softphone_enabled = obj.softphone_enabled
     serializer = UserPbxExtensionSerializer(
         obj,
         data=request.data,
@@ -283,16 +254,6 @@ def pbx_extension_detail_view(request, pk: int):
     if not serializer.is_valid():
         return validation_error_response(serializer.errors)
     obj = serializer.save()
-    if prev_user_id != obj.user_id:
-        from accounts.models import User
-
-        try:
-            prev_user = User.objects.get(pk=prev_user_id)
-            offboard_softphone_user(prev_user, clear_sip_password=True)
-        except User.DoesNotExist:
-            pass
-    if prev_softphone_enabled and not obj.softphone_enabled:
-        offboard_softphone_user(obj.user, mapping=obj)
     return success_response(UserPbxExtensionSerializer(obj).data)
 
 
@@ -376,27 +337,6 @@ def pbx_health_view(request):
     ami_configured = bool((settings.ami_username or "").strip())
     webhook_url = serialized.get("webhook_url") or ""
 
-    recording_pending = PbxCallRecord.objects.filter(
-        company=company,
-        recording_status__in=(
-            PbxRecordingStatus.PENDING,
-            PbxRecordingStatus.PROCESSING,
-        ),
-    ).count()
-    recording_failed = PbxCallRecord.objects.filter(
-        company=company,
-        recording_status=PbxRecordingStatus.FAILED,
-    ).count()
-    last_recording_ready_at = (
-        PbxCallRecord.objects.filter(
-            company=company,
-            recording_status=PbxRecordingStatus.READY,
-        )
-        .order_by("-updated_at")
-        .values_list("updated_at", flat=True)
-        .first()
-    )
-
     checks = {
         "integration_enabled": bool(settings.is_enabled),
         "pbx_host_configured": pbx_host_configured,
@@ -404,7 +344,6 @@ def pbx_health_view(request):
         "connector_online": bool(serialized.get("connector_online")),
         "extensions_mapped": extensions_count > 0,
         "events_received": last_event_at is not None,
-        "recordings_clear": recording_pending == 0 and recording_failed == 0,
     }
 
     return success_response(
@@ -421,11 +360,6 @@ def pbx_health_view(request):
             "webhook_url": webhook_url,
             "push_event_url_hint": webhook_url or "http://<connector-pc-ip>:8787",
             "push_event_connector_hint": "http://<connector-pc-ip>:8787",
-            "recordings": {
-                "pending": recording_pending,
-                "failed": recording_failed,
-                "last_ready_at": last_recording_ready_at,
-            },
             "checks": checks,
         }
     )
@@ -566,96 +500,6 @@ def pbx_connector_command_ack_view(request, command_id: int):
 
 
 @api_view(["GET"])
-@authentication_classes([])
-@permission_classes([AllowAny])
-def pbx_connector_recording_jobs_view(request):
-    settings = _get_settings_by_connector_key(_extract_connector_key(request))
-    if not settings:
-        return error_response(
-            "Invalid connector API key.",
-            code="invalid_connector_key",
-            status_code=401,
-        )
-    settings.connector_last_seen_at = timezone.now()
-    settings.save(update_fields=["connector_last_seen_at", "updated_at"])
-    jobs = list_pending_recording_jobs(settings.company_id)
-    return success_response({"jobs": jobs})
-
-
-@api_view(["POST"])
-@authentication_classes([])
-@permission_classes([AllowAny])
-def pbx_connector_recording_upload_view(request, record_id: int):
-    settings = _get_settings_by_connector_key(_extract_connector_key(request))
-    if not settings:
-        return error_response(
-            "Invalid connector API key.",
-            code="invalid_connector_key",
-            status_code=401,
-        )
-    try:
-        record = PbxCallRecord.objects.get(pk=record_id, company=settings.company)
-    except PbxCallRecord.DoesNotExist:
-        return error_response("Not found.", status_code=404)
-
-    upload = request.FILES.get("file")
-    if not upload:
-        mark_recording_failed(record_id, company_id=settings.company_id)
-        return error_response("Missing file.", code="missing_file", status_code=400)
-
-    try:
-        finalize_recording_upload(
-            record_id=record.id,
-            company_id=settings.company_id,
-            file_bytes=upload.read(),
-            original_filename=upload.name or "recording.wav",
-        )
-    except Exception:
-        logger.exception("Recording upload failed record_id=%s", record_id)
-        mark_recording_failed(record_id, company_id=settings.company_id)
-        return error_response("Upload failed.", status_code=500)
-
-    return success_response({"ok": True, "record_id": record.id, "status": "ready"})
-
-
-@api_view(["GET"])
-@authentication_classes([])
-@permission_classes([AllowAny])
-def pbx_recording_play_view(request, record_id: int):
-    token = (request.query_params.get("token") or "").strip()
-    company_id = None
-    if token:
-        try:
-            rid, company_id = verify_playback_token(token)
-            if rid != record_id:
-                return error_response("Invalid token.", code="invalid_token", status_code=403)
-        except (signing.BadSignature, signing.SignatureExpired):
-            return error_response("Invalid or expired token.", code="invalid_token", status_code=403)
-    elif request.user.is_authenticated and getattr(request.user, "company_id", None):
-        company_id = request.user.company_id
-    else:
-        return error_response("Authentication required.", status_code=401)
-
-    try:
-        record = PbxCallRecord.objects.get(pk=record_id, company_id=company_id)
-    except PbxCallRecord.DoesNotExist:
-        raise Http404 from None
-
-    if record.recording_status != PbxRecordingStatus.READY:
-        return error_response("Recording not ready.", code="not_ready", status_code=404)
-
-    try:
-        blob = stream_recording_for_user(record)
-    except FileNotFoundError:
-        return error_response("Recording file missing.", code="missing_file", status_code=404)
-
-    filename = record.recording_path.split("/")[-1] if record.recording_path else "recording.wav"
-    response = FileResponse(blob, content_type="audio/wav")
-    response["Content-Disposition"] = f'inline; filename="{filename}"'
-    return response
-
-
-@api_view(["GET"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def pbx_reports_summary_view(request):
     from django.db.models import Avg, Count, Q
@@ -738,100 +582,3 @@ def pbx_reports_agents_view(request):
             }
         )
     return success_response({"agents": agents})
-
-
-def _get_user_pbx_extension(user) -> UserPbxExtension | None:
-    try:
-        return UserPbxExtension.objects.select_related("user").get(user=user)
-    except UserPbxExtension.DoesNotExist:
-        return None
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
-def pbx_softphone_config_view(request):
-    company = request.user.company
-    gate = _integration_gate(company, "pbx")
-    if gate:
-        return error_response(
-            "Softphone is not configured for your user.",
-            code="softphone_not_configured",
-            status_code=400,
-        )
-
-    settings = _ensure_pbx_settings(company)
-    mapping = _get_user_pbx_extension(request.user)
-    if mapping is None:
-        return error_response(
-            "No PBX extension mapped for your user.",
-            code="no_extension",
-            status_code=400,
-        )
-    if not user_softphone_ready(settings, mapping):
-        return error_response(
-            "Softphone is not configured for your user.",
-            code="softphone_not_configured",
-            status_code=400,
-        )
-
-    platform = (request.query_params.get("platform") or "web").lower()
-    if platform not in SoftphonePlatform.values:
-        platform = SoftphonePlatform.WEB
-
-    config = build_softphone_config(settings, mapping, platform=platform)
-    config["softphone_enabled"] = True
-    config["expires_in"] = 300
-    return success_response(config)
-
-
-@api_view(["POST", "DELETE"])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
-def pbx_softphone_devices_view(request):
-    company = request.user.company
-    gate = _integration_gate(company, "pbx")
-    if gate:
-        return gate
-
-    settings = _ensure_pbx_settings(company)
-    if not settings.softphone_enabled:
-        return error_response(
-            "Softphone is not enabled for your company.",
-            code="softphone_disabled",
-            status_code=400,
-        )
-
-    if request.method == "DELETE":
-        platform = (request.query_params.get("platform") or "").lower()
-        device_id = (request.query_params.get("device_id") or "").strip()
-        qs = UserSoftphoneDevice.objects.filter(user=request.user, company=company)
-        if platform:
-            qs = qs.filter(platform=platform)
-        if device_id:
-            qs = qs.filter(device_id=device_id)
-        deleted, _ = qs.delete()
-        return success_response({"deleted": deleted})
-
-    serializer = SoftphoneDeviceSerializer(data=request.data)
-    if not serializer.is_valid():
-        return validation_error_response(serializer.errors)
-
-    data = serializer.validated_data
-    device, _ = UserSoftphoneDevice.objects.update_or_create(
-        user=request.user,
-        platform=data["platform"],
-        device_id=data.get("device_id") or "",
-        defaults={
-            "company": company,
-            "fcm_token": data.get("fcm_token") or "",
-            "voip_token": data.get("voip_token") or "",
-        },
-    )
-    return success_response(
-        {
-            "id": device.id,
-            "platform": device.platform,
-            "device_id": device.device_id,
-            "last_registered_at": device.last_registered_at,
-        },
-        status_code=201,
-    )

@@ -438,7 +438,12 @@ def whatsapp_send_media(request):
             is_voice_note=is_voice_note and kind == wa_media.KIND_AUDIO,
         )
     except ValueError as e:
-        return error_response(str(e), code='bad_request')
+        code = (
+            wa_media.VOICE_NOTE_CONVERT_ERROR_CODE
+            if wa_media.is_voice_note_convert_error(e)
+            else "bad_request"
+        )
+        return error_response(str(e), code=code)
 
     try:
         meta_media_id = wa_media.upload_media_to_meta(

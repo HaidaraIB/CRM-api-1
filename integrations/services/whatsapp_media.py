@@ -22,10 +22,16 @@ from integrations.oauth_utils import META_GRAPH_API_BASE_URL
 
 logger = logging.getLogger(__name__)
 
+VOICE_NOTE_CONVERT_ERROR_CODE = "whatsapp_voice_note_requires_ogg"
 _VOICE_CONVERT_ERROR = (
     "Voice notes require OGG/Opus. Install ffmpeg on the server "
     "or record in a browser that supports audio/ogg."
 )
+
+
+def is_voice_note_convert_error(exc: BaseException) -> bool:
+    return isinstance(exc, ValueError) and str(exc) == _VOICE_CONVERT_ERROR
+
 
 # Cloud API practical limits (bytes) — see Meta media docs.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -417,6 +423,51 @@ def apply_meta_media_to_message(msg, message: dict, *, access_token: str) -> boo
     if kind == KIND_AUDIO and media.get("voice") is True:
         msg.is_voice_note = True
     save_bytes_to_message_attachment(msg, data, filename, mime)
+    return True
+
+
+_PLACEHOLDER_BODY_RE = (
+    "[media message]",
+    "[image message]",
+    "[video message]",
+    "[audio message]",
+    "[document message]",
+    "[sticker message]",
+)
+
+
+def caption_or_empty_from_meta_message(message: dict) -> str:
+    """Caption text for media, or empty (avoid keeping '[image message]' under rendered media)."""
+    info = extract_meta_media_info(message)
+    if not info:
+        return ""
+    _kind, media = info
+    return (media.get("caption") or "").strip()
+
+
+def hydrate_existing_message_media(
+    msg,
+    message: dict,
+    *,
+    access_token: str,
+) -> bool:
+    """
+    Attach Meta media to an already-saved LeadWhatsAppMessage (history media follow-up).
+    Updates body when it was a placeholder. Saves the row. Returns True on success.
+    """
+    if getattr(msg, "attachment_kind", None) and getattr(msg, "attachment", None):
+        try:
+            if msg.attachment and msg.attachment.name:
+                return True
+        except Exception:
+            pass
+    if not apply_meta_media_to_message(msg, message, access_token=access_token):
+        return False
+    caption = caption_or_empty_from_meta_message(message)
+    body = (msg.body or "").strip()
+    if not body or body.lower() in _PLACEHOLDER_BODY_RE or body.startswith("["):
+        msg.body = caption
+    msg.save()
     return True
 
 

@@ -10,6 +10,7 @@ from .models import (
     PbxSettings,
     PbxCallRecord,
     UserPbxExtension,
+    WhatsAppCall,
 )
 
 
@@ -68,12 +69,33 @@ class WhatsAppAccountAdmin(admin.ModelAdmin):
         'phone_number_id',
         'waba_id',
         'status',
+        'calling_enabled',
         'created_at',
     ]
-    list_filter = ['status', 'company']
+    list_filter = ['status', 'calling_enabled', 'company']
     search_fields = ['phone_number_id', 'waba_id', 'company__name', 'display_phone_number']
     readonly_fields = ['created_at', 'updated_at']
     raw_id_fields = ['company', 'integration_account']
+
+
+@admin.register(WhatsAppCall)
+class WhatsAppCallAdmin(admin.ModelAdmin):
+    list_display = [
+        'id',
+        'company',
+        'meta_call_id',
+        'direction',
+        'status',
+        'peer_phone',
+        'agent',
+        'duration_sec',
+        'recording_status',
+        'created_at',
+    ]
+    list_filter = ['status', 'direction', 'recording_status', 'company']
+    search_fields = ['meta_call_id', 'peer_phone', 'peer_name']
+    raw_id_fields = ['company', 'whatsapp_account', 'client', 'agent', 'client_call']
+    readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(IntegrationLog)

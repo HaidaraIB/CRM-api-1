@@ -770,6 +770,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'phone_number_id': wa.phone_number_id,
                 'display_phone_number': wa.display_phone_number,
                 'waba_id': wa.waba_id,
+                'calling_enabled': wa.calling_enabled,
             },
         )
     

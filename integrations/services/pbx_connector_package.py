@@ -41,10 +41,6 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "listen_host": "0.0.0.0",
         "listen_port": 8787,
         "poll_interval_sec": 3,
-        "recording_poll_interval_sec": 5,
-        "recording_fetch_timeout_sec": 60,
-        "pbx_http_user": "",
-        "pbx_http_password": "",
         "ssl_verify": True,
         "x_api_key": "",
     }
@@ -90,11 +86,8 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "5. ZYCOO Push Event URL (choose one):\n"
             "   A) Direct to CRM (recommended): paste Webhook URL from CRM PBX settings.\n"
             "   B) Via this PC: http://<this-pc-ip>:8787 (connector forwards events).\n"
-            "6. Call recordings: enable Cdr in ZYCOO Push Events. Connector downloads each\n"
-            "   recording via HTTP from the PBX (http://<pbx>/monitor/recording/...).\n"
-            "   Verify that URL works from this PC. Optional: pbx_http_user/password in config.\n"
-            "7. In CRM: Integrations → PBX — confirm Connector status is Online.\n"
-            "8. Click-to-dial: map each CRM user to their ZYCOO extension (same number as\n"
+            "6. In CRM: Integrations → PBX — confirm Connector status is Online.\n"
+            "7. Click-to-dial: map each CRM user to their ZYCOO extension (same number as\n"
             "   Telephony → Extensions). Desk phone or mobile SIP app must register to that\n"
             "   extension. AMI login alone does not ring phones — Originate uses PJSIP/{ext}.\n\n"
             f"API base URL: {config['api_base_url']}\n"

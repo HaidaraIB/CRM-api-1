@@ -160,6 +160,79 @@ def test_history_sync_stores_threads(whatsapp_setup):
 
 
 @pytest.mark.django_db
+@patch("integrations.services.whatsapp_media.download_media_from_meta")
+def test_history_media_followup_hydrates_placeholder(mock_download, whatsapp_setup):
+    """Meta sends media_placeholder first, then a messages[] follow-up with the same wamid."""
+    _account, wa = whatsapp_setup
+    mock_download.return_value = (b"\xff\xd8\xfffakejpeg", "image/jpeg")
+
+    process_history_sync(
+        {
+            "messaging_product": "whatsapp",
+            "metadata": {
+                "display_phone_number": "15550783881",
+                "phone_number_id": wa.phone_number_id,
+            },
+            "history": [
+                {
+                    "metadata": {"phase": 0, "chunk_order": 1, "progress": 50},
+                    "threads": [
+                        {
+                            "id": "16505551234",
+                            "messages": [
+                                {
+                                    "from": "15550783881",
+                                    "id": "wamid.hist.media1",
+                                    "timestamp": "1739230970",
+                                    "type": "media_placeholder",
+                                    "history_context": {"status": "PLAYED"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        waba_id=wa.waba_id,
+    )
+    row = LeadWhatsAppMessage.objects.get(whatsapp_message_id="wamid.hist.media1")
+    assert row.body == "[media message]"
+    assert not row.attachment_kind
+
+    process_history_sync(
+        {
+            "messaging_product": "whatsapp",
+            "metadata": {
+                "display_phone_number": "15550783881",
+                "phone_number_id": wa.phone_number_id,
+            },
+            "messages": [
+                {
+                    "from": "16505551234",
+                    "id": "wamid.hist.media1",
+                    "timestamp": "1738796547",
+                    "type": "image",
+                    "image": {
+                        "caption": "Black Prince echeveria",
+                        "mime_type": "image/jpeg",
+                        "id": "24230790383178626",
+                    },
+                }
+            ],
+        },
+        waba_id=wa.waba_id,
+    )
+
+    row.refresh_from_db()
+    assert LeadWhatsAppMessage.objects.filter(whatsapp_message_id="wamid.hist.media1").count() == 1
+    assert row.attachment_kind == "image"
+    assert row.meta_media_id == "24230790383178626"
+    assert row.body == "Black Prince echeveria"
+    assert row.attachment
+    mock_download.assert_called_once()
+
+
+@pytest.mark.django_db
 def test_history_sync_declined(whatsapp_setup):
     account, wa = whatsapp_setup
     process_history_sync(

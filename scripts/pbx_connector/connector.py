@@ -6,7 +6,6 @@ Run on a machine on the same network as the PBX.
 """
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import socket
@@ -19,7 +18,6 @@ from pathlib import Path
 from typing import Any
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("pbx_connector")
@@ -355,129 +353,6 @@ def forward_event(cfg: dict, raw_body: bytes, content_type: str) -> None:
         raise
 
 
-def _pbx_http_headers(cfg: dict) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    user = (cfg.get("pbx_http_user") or "").strip()
-    if user:
-        password = cfg.get("pbx_http_password") or ""
-        creds = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
-        headers["Authorization"] = f"Basic {creds}"
-    return headers
-
-
-def fetch_recording_bytes(cfg: dict, download_url: str) -> bytes:
-    """Download a recording WAV from the PBX HTTP endpoint."""
-    timeout = int(cfg.get("recording_fetch_timeout_sec", 60))
-    req = urlrequest.Request(
-        download_url,
-        headers=_pbx_http_headers(cfg),
-        method="GET",
-    )
-    # PBX is on LAN — do not use CRM API SSL settings for this fetch.
-    with urlrequest.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
-
-
-def upload_recording_bytes(
-    cfg: dict, record_id: int, file_bytes: bytes, filename: str
-) -> None:
-    """Upload recording bytes to CRM storage."""
-    url = build_api_url(cfg, f"/integrations/pbx/connector/recordings/{record_id}/upload/")
-    boundary = f"----LoopPbx{int(time.time() * 1000)}"
-    body = b"".join(
-        [
-            f"--{boundary}\r\n".encode(),
-            (
-                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-                "Content-Type: audio/wav\r\n\r\n"
-            ).encode(),
-            file_bytes,
-            f"\r\n--{boundary}--\r\n".encode(),
-        ]
-    )
-    headers = _request_headers(
-        cfg,
-        {
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-    )
-    req = urlrequest.Request(url, data=body, headers=headers, method="POST")
-    try:
-        with _urlopen(cfg, req, timeout=120) as resp:
-            logger.info(
-                "Uploaded recording record_id=%s (%s bytes): %s",
-                record_id,
-                len(file_bytes),
-                resp.read().decode()[:200],
-            )
-    except HTTPError as e:
-        _log_http_error("POST", url, e)
-        raise
-
-
-def _recording_filename_from_job(job: dict[str, Any]) -> str:
-    download_url = (job.get("download_url") or "").strip()
-    if download_url:
-        name = Path(urlparse(download_url).path).name
-        if name:
-            return name
-    path_str = (job.get("file") or "").strip()
-    if path_str:
-        return Path(path_str).name
-    return "recording.wav"
-
-
-def process_recording_job(cfg: dict, job: dict[str, Any]) -> None:
-    record_id = job.get("record_id")
-    download_url = (job.get("download_url") or "").strip()
-    if not record_id or not download_url:
-        return
-    if not download_url.startswith(("http://", "https://")):
-        logger.warning(
-            "Recording job missing HTTP download_url record_id=%s", record_id
-        )
-        return
-    filename = _recording_filename_from_job(job)
-    try:
-        file_bytes = fetch_recording_bytes(cfg, download_url)
-        if not file_bytes:
-            logger.warning(
-                "Recording fetch returned empty body record_id=%s url=%s",
-                record_id,
-                download_url[:120],
-            )
-            return
-        upload_recording_bytes(cfg, int(record_id), file_bytes, filename)
-    except HTTPError as exc:
-        if exc.code == 404:
-            logger.info(
-                "Recording not ready yet (404) record_id=%s url=%s",
-                record_id,
-                download_url[:120],
-            )
-            return
-        logger.exception(
-            "Recording HTTP fetch failed record_id=%s status=%s",
-            record_id,
-            exc.code,
-        )
-    except Exception:
-        logger.exception("Recording upload failed record_id=%s", record_id)
-
-
-def poll_recordings(cfg: dict) -> None:
-    interval = float(cfg.get("recording_poll_interval_sec", 5))
-    while True:
-        try:
-            resp = api_request(cfg, "GET", "/integrations/pbx/connector/recording-jobs/")
-            data = resp.get("data") or resp
-            for job in data.get("jobs") or []:
-                process_recording_job(cfg, job)
-        except Exception:
-            logger.exception("Recording poll error")
-        time.sleep(interval)
-
-
 def poll_commands(cfg: dict, ami: AmiClient) -> None:
     while True:
         try:
@@ -623,8 +498,6 @@ def main() -> None:
 
     poll_thread = threading.Thread(target=poll_commands, args=(cfg, ami), daemon=True)
     poll_thread.start()
-    recording_thread = threading.Thread(target=poll_recordings, args=(cfg,), daemon=True)
-    recording_thread.start()
 
     host = cfg.get("listen_host", "0.0.0.0")
     port = int(cfg.get("listen_port", 8787))
