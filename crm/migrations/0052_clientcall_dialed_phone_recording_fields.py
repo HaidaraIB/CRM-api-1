@@ -39,8 +39,8 @@ class Migration(migrations.Migration):
                 ),
             ],
             database_operations=[
-                # Add only if missing (SQLite / Postgres safe-ish via RunSQL no-op on duplicate).
-                # Prefer state sync; existing envs already have these columns.
+                # Intentionally empty: columns already existed on some envs.
+                # Actual ADD for missing DBs is in 0053_clientcall_ensure_*.
             ],
         ),
     ]
