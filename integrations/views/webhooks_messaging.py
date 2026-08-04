@@ -159,6 +159,7 @@ _META_GRAPH_ERROR_CODES = {
     131037: 'whatsapp_display_name_not_approved',
     131026: 'whatsapp_recipient_not_deliverable',
     131047: 'whatsapp_outside_session_use_template',
+    131049: 'whatsapp_ecosystem_engagement_limit',
     132000: 'whatsapp_template_parameter_count',
     # Meta: template does not exist in the specified language or is not approved
     132001: 'whatsapp_template_not_found_or_language',
@@ -688,12 +689,24 @@ def _resolve_whatsapp_client(company, client_id, to_phone, integration_account=N
 
 def _template_outbound_log_body(template, param_values=None) -> str:
     """Human-readable body for chat history after sending a Meta template."""
+    from .templates_whatsapp import _find_placeholders_in_order
+
     meta_name = meta_slug_template_name(template.name, template.id)
     content = (template.content or '').strip()
     if content.lower().startswith('(imported from meta:'):
         content = ''
     if param_values and content:
         out = content
+        matches = _find_placeholders_in_order(out)
+        if matches:
+            parts = []
+            last = 0
+            for i, (start, end, _sample, _getter) in enumerate(matches):
+                parts.append(out[last:start])
+                parts.append(str(param_values[i]) if i < len(param_values) else '-')
+                last = end
+            parts.append(out[last:])
+            out = ''.join(parts)
         for i, val in enumerate(param_values, start=1):
             out = re.sub(rf'\{{\{{\s*{i}\s*\}}\}}', str(val), out)
         return out[:65535]
