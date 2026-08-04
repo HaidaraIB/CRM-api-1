@@ -1061,7 +1061,6 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         updated = 0
         linked = 0
         imported = 0
-        demoted = 0
         seen_meta_ids: set[str] = set()
         seen_names: set[str] = set()
 
@@ -1153,21 +1152,22 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             )
             imported += 1
 
-        # Templates approved under a previous WABA (e.g. Meta 555 test) must not stay
-        # "APPROVED" when the connected phone is on a different WABA.
+        # Templates that lived on a previous WABA (e.g. Meta 555 test) cannot be
+        # sent from the current phone — remove them from CRM so lists stay clean.
+        removed = 0
         for tpl in wa_templates:
             mid = str(tpl.meta_template_id or '').strip()
             slug = meta_slug_template_name(tpl.name, tpl.id)
             on_current = (mid and mid in seen_meta_ids) or (slug and slug in seen_names)
             if on_current:
                 continue
-            if (tpl.meta_status or '').upper() in ('', 'PENDING'):
+            # Keep local drafts (never submitted / no Meta id).
+            if not mid and (tpl.meta_status or '').upper() in ('', 'PENDING'):
                 continue
             if not mid and not (tpl.meta_status or '').strip():
                 continue
-            tpl.meta_status = 'NOT_ON_WABA'
-            tpl.save(update_fields=['meta_status', 'updated_at'])
-            demoted += 1
+            tpl.delete()
+            removed += 1
 
         return success_response(
             data={
@@ -1175,7 +1175,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 'updated': updated,
                 'linked': linked,
                 'imported': imported,
-                'demoted': demoted,
+                'removed': removed,
                 'waba_id': wa.waba_id,
                 'total_meta': len(meta_list),
             },
