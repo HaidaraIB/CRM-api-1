@@ -2,11 +2,15 @@
 Resolve WhatsAppAccount rows for outbound messaging.
 
 The UI shows IntegrationAccount (platform=whatsapp) as "Connected", but send/webhook
-paths use WhatsAppAccount (phone_number_id + token). Rows are created during OAuth
-when Meta returns WABA/phone data — if that step fails, IntegrationAccount can still
-look connected while sends fail. This module syncs on demand.
+paths use WhatsAppAccount (phone_number_id + token).
+
+Product rule: each WhatsApp IntegrationAccount has at most one connected phone —
+the number chosen in Meta Embedded Signup (stored as metadata.phone_number_id).
+Graph may list other WABA phones (e.g. leftover Meta 555 test numbers); those must
+not stay connected or become the default sender.
 """
 import logging
+import re
 from typing import Optional
 
 import requests
@@ -49,6 +53,28 @@ def disconnect_whatsapp_accounts_for_integration(account: IntegrationAccount) ->
     return count
 
 
+def _digits_only(value: Optional[str]) -> str:
+    return re.sub(r'\D', '', value or '')
+
+
+def is_meta_provided_test_number(
+    *,
+    display_phone_number: Optional[str] = None,
+    phone_number_id: Optional[str] = None,
+) -> bool:
+    """Meta Embedded Signup test / display-name-only lines (typically +1 555-…)."""
+    pid = str(phone_number_id or '')
+    if pid.startswith('seed_'):
+        return True
+    digits = _digits_only(display_phone_number)
+    # E.164 US test numbers Meta issues: +1 555-xxx-xxxx → 1555…
+    if digits.startswith('1555') and len(digits) >= 11:
+        return True
+    if digits.startswith('555') and len(digits) >= 10:
+        return True
+    return False
+
+
 def _apply_display_name_metadata(meta: dict, *, name_status=None, verified_name=None) -> dict:
     """Write ChatsPage display-name banner keys from Meta name_status."""
     out = dict(meta or {})
@@ -65,21 +91,45 @@ def _apply_display_name_metadata(meta: dict, *, name_status=None, verified_name=
     return out
 
 
-def upsert_whatsapp_account_from_embedded_signup(
+def disconnect_extra_whatsapp_phones_for_integration(
     account: IntegrationAccount,
-    access_token: str,
-    *,
-    waba_id: str,
-    phone_number_id: str,
-    business_id: Optional[str] = None,
-) -> WhatsAppAccount:
+    keep_phone_number_id: str,
+) -> int:
     """
-    Create/update WhatsAppAccount using IDs returned by Meta Embedded Signup (WA_EMBEDDED_SIGNUP).
-    Required for Meta-provided 555 / display-name-only numbers where Graph list APIs may lag.
+    Ensure only keep_phone_number_id stays connected for this integration.
+    Other WhatsAppAccount rows linked to the same IntegrationAccount are disconnected.
     """
-    display = None
-    verified_name = None
-    name_status = None
+    keep = str(keep_phone_number_id or '').strip()
+    if not keep or getattr(account, 'platform', None) != 'whatsapp':
+        return 0
+    extras = WhatsAppAccount.objects.filter(
+        company_id=account.company_id,
+        integration_account=account,
+        status='connected',
+    ).exclude(phone_number_id=keep)
+    count = 0
+    for wa in extras:
+        wa.set_access_token(None)
+        wa.status = 'disconnected'
+        wa.save(update_fields=['access_token', 'status', 'updated_at'])
+        count += 1
+    if count:
+        logger.info(
+            'Disconnected %s extra WhatsApp phone(s) for integration %s; kept phone_number_id=%s',
+            count,
+            account.id,
+            keep,
+        )
+    return count
+
+
+def _fetch_phone_profile(access_token: str, phone_number_id: str) -> dict:
+    """Graph fields for a single phone_number_id."""
+    out = {
+        'display': None,
+        'verified_name': None,
+        'name_status': None,
+    }
     try:
         resp = requests.get(
             f'{META_GRAPH_API_BASE_URL}/{phone_number_id}',
@@ -91,14 +141,68 @@ def upsert_whatsapp_account_from_embedded_signup(
         )
         if resp.status_code == 200:
             j = resp.json()
-            display = (j.get('display_phone_number') or '').strip() or None
-            verified_name = (j.get('verified_name') or '').strip() or None
-            name_status = (j.get('name_status') or '').strip() or None
+            out['display'] = (j.get('display_phone_number') or '').strip() or None
+            out['verified_name'] = (j.get('verified_name') or '').strip() or None
+            out['name_status'] = (j.get('name_status') or '').strip() or None
     except Exception as e:
         logger.debug('Could not fetch phone_number fields for %s: %s', phone_number_id, e)
+    return out
+
+
+def _find_phone_in_waba_list(waba_list: list, phone_number_id: str):
+    """Return (waba_id, business_id, phone_dict) or (None, None, None)."""
+    want = str(phone_number_id)
+    for item in waba_list or []:
+        for ph in item.get('phone_numbers') or []:
+            if str(ph.get('id') or '') == want:
+                return item.get('waba_id'), item.get('business_id'), ph
+    return None, None, None
+
+
+def _pick_bootstrap_phone(waba_list: list):
+    """
+    When metadata has no phone_number_id yet, choose one production-like number.
+    Prefer non-Meta-555 numbers; otherwise first Graph phone.
+    """
+    candidates = []
+    for item in waba_list or []:
+        for ph in item.get('phone_numbers') or []:
+            pid = ph.get('id')
+            if not pid:
+                continue
+            candidates.append((item, ph))
+    if not candidates:
+        return None, None, None
+    for item, ph in candidates:
+        display = (ph.get('display_phone_number') or '').strip()
+        if not is_meta_provided_test_number(
+            display_phone_number=display, phone_number_id=ph.get('id')
+        ):
+            return item.get('waba_id'), item.get('business_id'), ph
+    item, ph = candidates[0]
+    return item.get('waba_id'), item.get('business_id'), ph
+
+
+def upsert_whatsapp_account_from_embedded_signup(
+    account: IntegrationAccount,
+    access_token: str,
+    *,
+    waba_id: str,
+    phone_number_id: str,
+    business_id: Optional[str] = None,
+) -> WhatsAppAccount:
+    """
+    Create/update the single WhatsAppAccount for the phone chosen in Embedded Signup.
+    Disconnects any other connected phones on this integration.
+    """
+    phone_number_id = str(phone_number_id).strip()
+    profile = _fetch_phone_profile(access_token, phone_number_id)
+    display = profile['display']
+    verified_name = profile['verified_name']
+    name_status = profile['name_status']
 
     wa_account, _created = WhatsAppAccount.objects.update_or_create(
-        phone_number_id=str(phone_number_id),
+        phone_number_id=phone_number_id,
         defaults={
             'company': account.company,
             'waba_id': str(waba_id),
@@ -113,7 +217,7 @@ def upsert_whatsapp_account_from_embedded_signup(
 
     meta = dict(account.metadata or {})
     meta['waba_id'] = str(waba_id)
-    meta['phone_number_id'] = str(phone_number_id)
+    meta['phone_number_id'] = phone_number_id
     if business_id:
         meta['business_id'] = str(business_id)
     meta = _apply_display_name_metadata(meta, name_status=name_status, verified_name=verified_name)
@@ -121,6 +225,7 @@ def upsert_whatsapp_account_from_embedded_signup(
     if display and (not account.name or account.name.strip().lower() == 'whatsapp'):
         account.name = display
 
+    disconnect_extra_whatsapp_phones_for_integration(account, phone_number_id)
     return wa_account
 
 
@@ -129,8 +234,11 @@ def sync_whatsapp_accounts_from_integration(
     access_token: Optional[str] = None,
 ) -> int:
     """
-    Fetch WABA + phone numbers from Meta and upsert WhatsAppAccount rows.
-    Returns the number of phone numbers synced.
+    Refresh the single selected WhatsApp phone for this integration from Meta.
+
+    Uses metadata.phone_number_id (Embedded Signup pick). If missing, bootstraps one
+    non-test number from Graph and pins it in metadata. Never keeps multiple phones
+    connected on the same IntegrationAccount.
     """
     if account.platform != 'whatsapp':
         return 0
@@ -156,64 +264,74 @@ def sync_whatsapp_accounts_from_integration(
             account.id,
         )
 
-    synced = 0
-    first_display = None
-    first_name_status = None
-    first_verified_name = None
-    for item in waba_list:
-        waba_id = item.get('waba_id')
-        business_id = item.get('business_id')
-        for ph in item.get('phone_numbers') or []:
-            phone_number_id = ph.get('id')
-            if not phone_number_id:
-                continue
-            display = (ph.get('display_phone_number') or '').strip()
-            name_status = (ph.get('name_status') or '').strip() or None
-            verified_name = (ph.get('verified_name') or '').strip() or None
-            wa_account, _created = WhatsAppAccount.objects.update_or_create(
-                phone_number_id=str(phone_number_id),
-                defaults={
-                    'company': account.company,
-                    'waba_id': str(waba_id or ''),
-                    'business_id': business_id or '',
-                    'display_phone_number': display or None,
-                    'status': 'connected',
-                    'integration_account': account,
-                },
+    meta = dict(account.metadata or {})
+    preferred_pid = str(meta.get('phone_number_id') or '').strip()
+    preferred_waba = str(meta.get('waba_id') or '').strip() or None
+    preferred_business = str(meta.get('business_id') or '').strip() or None
+
+    waba_id = preferred_waba
+    business_id = preferred_business
+    ph = None
+    if preferred_pid:
+        waba_id, business_id, ph = _find_phone_in_waba_list(waba_list, preferred_pid)
+        if not ph:
+            # Wizard phone may lag in list APIs; still pin it via direct Graph GET.
+            waba_id = preferred_waba
+            business_id = preferred_business
+            ph = {'id': preferred_pid}
+    else:
+        waba_id, business_id, ph = _pick_bootstrap_phone(waba_list)
+        if ph and ph.get('id'):
+            preferred_pid = str(ph.get('id'))
+            logger.info(
+                'Bootstrapped WhatsApp phone_number_id=%s for integration %s (no wizard metadata)',
+                preferred_pid,
+                account.id,
             )
-            wa_account.set_access_token(token)
-            wa_account.save()
-            synced += 1
-            if first_display is None and display:
-                first_display = display
-            if first_name_status is None and name_status:
-                first_name_status = name_status
-            if first_verified_name is None and verified_name:
-                first_verified_name = verified_name
 
-    if waba_list and synced:
-        meta = dict(account.metadata or {})
-        first_waba = waba_list[0]
-        first_phones = first_waba.get('phone_numbers') or []
-        if first_waba.get('waba_id'):
-            meta['waba_id'] = first_waba.get('waba_id')
-        if first_phones and first_phones[0].get('id'):
-            meta['phone_number_id'] = first_phones[0].get('id')
-            if not first_name_status:
-                first_name_status = (first_phones[0].get('name_status') or '').strip() or None
-            if not first_verified_name:
-                first_verified_name = (first_phones[0].get('verified_name') or '').strip() or None
-        meta = _apply_display_name_metadata(
-            meta, name_status=first_name_status, verified_name=first_verified_name
-        )
-        account.metadata = meta
-        if first_display and (
-            not account.name or account.name.strip().lower() == 'whatsapp'
-        ):
-            account.name = first_display
-        account.save(update_fields=['metadata', 'name', 'updated_at'])
+    if not preferred_pid or not ph:
+        return 0
 
-    return synced
+    display = (ph.get('display_phone_number') or '').strip() or None
+    name_status = (ph.get('name_status') or '').strip() or None
+    verified_name = (ph.get('verified_name') or '').strip() or None
+    # Always refresh profile for the pinned number (list payloads may omit name_status).
+    profile = _fetch_phone_profile(token, preferred_pid)
+    display = profile['display'] or display
+    name_status = profile['name_status'] or name_status
+    verified_name = profile['verified_name'] or verified_name
+
+    if not waba_id:
+        # Keep existing row waba if Graph list didn't include this phone.
+        existing = WhatsAppAccount.objects.filter(phone_number_id=preferred_pid).first()
+        waba_id = (existing.waba_id if existing else '') or preferred_waba or ''
+
+    wa_account, _created = WhatsAppAccount.objects.update_or_create(
+        phone_number_id=preferred_pid,
+        defaults={
+            'company': account.company,
+            'waba_id': str(waba_id or ''),
+            'business_id': business_id or '',
+            'display_phone_number': display or None,
+            'status': 'connected',
+            'integration_account': account,
+        },
+    )
+    wa_account.set_access_token(token)
+    wa_account.save()
+
+    meta['waba_id'] = str(waba_id or meta.get('waba_id') or '')
+    meta['phone_number_id'] = preferred_pid
+    if business_id:
+        meta['business_id'] = str(business_id)
+    meta = _apply_display_name_metadata(meta, name_status=name_status, verified_name=verified_name)
+    account.metadata = meta
+    if display and (not account.name or account.name.strip().lower() == 'whatsapp'):
+        account.name = display
+    account.save(update_fields=['metadata', 'name', 'updated_at'])
+
+    disconnect_extra_whatsapp_phones_for_integration(account, preferred_pid)
+    return 1
 
 
 def _whatsapp_account_from_integration_metadata(
@@ -237,22 +355,51 @@ def _whatsapp_account_from_integration_metadata(
     if token:
         wa_account.set_access_token(token)
         wa_account.save()
+    disconnect_extra_whatsapp_phones_for_integration(account, str(pid))
     return wa_account
+
+
+def _preferred_phone_number_id_for_company(company) -> Optional[str]:
+    acc = (
+        IntegrationAccount.objects.filter(
+            company=company,
+            platform='whatsapp',
+            status='connected',
+        )
+        .order_by('-updated_at')
+        .first()
+    )
+    if not acc:
+        return None
+    pid = str((acc.metadata or {}).get('phone_number_id') or '').strip()
+    return pid or None
 
 
 def get_connected_whatsapp_account(company, phone_number_id=None) -> Optional[WhatsAppAccount]:
     """
     Return a connected WhatsAppAccount with a usable access token for Graph API sends.
-    Attempts lazy sync from connected IntegrationAccount rows when needed.
+    Prefers the Embedded Signup phone in IntegrationAccount.metadata.
     """
     pid_filter = str(phone_number_id).strip() if phone_number_id else None
 
     def _query():
         qs = WhatsAppAccount.objects.filter(company=company, status='connected')
         if pid_filter:
-            qs = qs.filter(phone_number_id=pid_filter)
-            return qs.first()
-        # Prefer real Cloud API phone IDs over local seed/demo rows.
+            return qs.filter(phone_number_id=pid_filter).first()
+
+        preferred = _preferred_phone_number_id_for_company(company)
+        if preferred:
+            wa = qs.filter(phone_number_id=preferred).first()
+            if wa:
+                return wa
+
+        # Prefer production numbers over Meta 555 test lines / seed rows.
+        for wa in qs.exclude(phone_number_id__startswith='seed_').order_by('-updated_at'):
+            if not is_meta_provided_test_number(
+                display_phone_number=wa.display_phone_number,
+                phone_number_id=wa.phone_number_id,
+            ):
+                return wa
         real = qs.exclude(phone_number_id__startswith='seed_').order_by('-updated_at').first()
         if real:
             return real

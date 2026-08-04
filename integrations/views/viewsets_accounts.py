@@ -745,11 +745,22 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             )
 
         synced = sync_whatsapp_accounts_from_integration(account, token)
-        wa = WhatsAppAccount.objects.filter(
-            company=account.company,
-            status='connected',
-            integration_account=account,
-        ).first()
+        account.refresh_from_db()
+        preferred = str((account.metadata or {}).get('phone_number_id') or '').strip()
+        wa = None
+        if preferred:
+            wa = WhatsAppAccount.objects.filter(
+                company=account.company,
+                status='connected',
+                integration_account=account,
+                phone_number_id=preferred,
+            ).first()
+        if not wa:
+            wa = WhatsAppAccount.objects.filter(
+                company=account.company,
+                status='connected',
+                integration_account=account,
+            ).first()
         if not wa:
             wa = WhatsAppAccount.objects.filter(
                 company=account.company,
@@ -778,6 +789,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 },
             )
 
+        connected_count = WhatsAppAccount.objects.filter(
+            company=account.company,
+            status='connected',
+            integration_account=account,
+        ).count()
+
         return success_response(
             data={
                 'synced': synced,
@@ -785,6 +802,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 'display_phone_number': wa.display_phone_number,
                 'waba_id': wa.waba_id,
                 'calling_enabled': wa.calling_enabled,
+                'connected_phone_count': connected_count,
             },
         )
     
