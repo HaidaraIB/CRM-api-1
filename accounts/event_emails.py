@@ -198,6 +198,36 @@ def send_support_ticket_new_admin_notifications(creator_user, ticket):
     return sent
 
 
+def send_integration_token_invalid_email(
+    user,
+    *,
+    account,
+    platform_label: str,
+    account_name: str,
+    reason: str = "",
+    language: str = "en",
+):
+    """Notify company owner that a Meta/WhatsApp integration token needs reconnect."""
+    from accounts.utils import _get_frontend_base_url
+
+    lang = language if language in EMAIL_LANGUAGES else "en"
+    platform_slug = (getattr(account, "platform", None) or "meta").strip().lower()
+    reconnect_url = f"{_get_frontend_base_url()}/{platform_slug}"
+    if lang == "ar":
+        subject = f"يلزم إعادة ربط {platform_label} - LOOP CRM"
+    else:
+        subject = f"Reconnect {platform_label} in LOOP CRM"
+    context = {
+        "greeting_name": user.first_name or user.username or ("مرحباً" if lang == "ar" else "there"),
+        "platform_label": platform_label,
+        "account_name": account_name,
+        "reason": (reason or "").strip(),
+        "reconnect_url": reconnect_url,
+        "support_email": SMTPSettings.get_settings().from_email,
+    }
+    return _send_event_email(user, subject, "integration_token_invalid", context, lang)
+
+
 def send_followup_reminder_email(
     user,
     *,

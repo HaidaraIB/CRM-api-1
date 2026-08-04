@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        body { background-color: #f4effc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 32px 16px; color: #1f1f2e; }
+        .wrapper { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 24px; box-shadow: 0 20px 50px rgba(66, 21, 170, 0.15); overflow: hidden; border: 1px solid rgba(66, 21, 170, 0.08); }
+        .header { background: linear-gradient(135deg, #d97706, #b45309); padding: 32px; color: #fff; text-align: center; }
+        .header h1 { margin: 0; font-size: 22px; font-weight: 700; }
+        .content { padding: 32px; line-height: 1.65; }
+        .cta { display: inline-block; margin-top: 16px; padding: 12px 20px; background: #6d28d9; color: #fff !important; text-decoration: none; border-radius: 10px; font-weight: 600; }
+        .footer { padding: 24px 32px; font-size: 12px; color: #78738c; background: #fafafc; }
+        .muted { color: #6b7280; font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="header"><h1>{{ platform_label }} connection expired</h1></div>
+        <div class="content">
+            <p>Hi {{ greeting_name }},</p>
+            <p>The access token for <strong>{{ account_name }}</strong> ({{ platform_label }}) is no longer valid. New leads or messages may stop until you reconnect.</p>
+            {% if reason %}
+            <p class="muted">Details: {{ reason }}</p>
+            {% endif %}
+            <p>Open Integrations, then click <strong>Reconnect</strong> and approve access again. Meta tokens last about 60 days and cannot be made permanent via standard login.</p>
+            <p><a class="cta" href="{{ reconnect_url }}">Reconnect now</a></p>
+        </div>
+        <div class="footer">Sent by LOOP CRM · Need help? Reply to: {{ support_email }}</div>
+    </div>
+</body>
+</html>

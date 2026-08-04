@@ -106,3 +106,12 @@
 
 # 18. حذف الليدات التي بقيت في حالة معينة أكثر من المدة المحددة - كل ساعة
 0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py delete_leads_stale_in_status >> /var/log/crm-api-lead-stale-status-delete.log 2>&1
+
+# ============================================
+# تكاملات Meta / WhatsApp (Integration tokens)
+# ============================================
+
+# 19. تجديد توكنات التكامل والتحقق من صلاحية Meta - يومياً في 7 صباحاً و 7 مساءً
+#    - يعيد تبادل long-lived tokens قبل انتهائها (~60 يوماً)
+#    - يتحقق debug_token ويُعلّم الحساب منتهياً + يرسل إيميل للمالك عند الحاجة
+0 7,19 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py refresh_integration_tokens >> /var/log/crm-api-integration-tokens.log 2>&1

@@ -136,15 +136,29 @@ class MetaOAuth(OAuthBase):
         response = requests.post(self.token_url, params=params)
         response.raise_for_status()
         data = response.json()
-        
-        return {
+
+        token_data = {
             'access_token': data.get('access_token'),
             'token_type': data.get('token_type', 'Bearer'),
             'expires_in': data.get('expires_in', 5184000),  # 60 يوم افتراضي
         }
+        # Short-lived user tokens (~1–2h) must be exchanged for long-lived (~60d).
+        if token_data.get('access_token'):
+            try:
+                long_lived = self.refresh_token(token_data['access_token'])
+                if long_lived.get('access_token'):
+                    token_data['access_token'] = long_lived['access_token']
+                    if long_lived.get('expires_in'):
+                        token_data['expires_in'] = long_lived['expires_in']
+            except Exception as exc:
+                logger.warning(
+                    "Meta fb_exchange_token after code exchange failed: %s",
+                    _safe_graph_error(exc),
+                )
+        return token_data
     
     def refresh_token(self, access_token):
-        """تجديد access token لـ Meta"""
+        """تجديد access token لـ Meta عبر fb_exchange_token (long-lived ~60 يوم)."""
         # Meta تستخدم long-lived tokens
         url = f"{self.graph_api_url}/oauth/access_token"
         params = {
@@ -481,11 +495,24 @@ class WhatsAppOAuth(OAuthBase):
         response = requests.post(self.token_url, params=params)
         response.raise_for_status()
         data = response.json()
-        return {
+        token_data = {
             'access_token': data.get('access_token'),
             'token_type': data.get('token_type', 'Bearer'),
             'expires_in': data.get('expires_in', 5184000),
         }
+        if token_data.get('access_token'):
+            try:
+                long_lived = self.refresh_token(token_data['access_token'])
+                if long_lived.get('access_token'):
+                    token_data['access_token'] = long_lived['access_token']
+                    if long_lived.get('expires_in'):
+                        token_data['expires_in'] = long_lived['expires_in']
+            except Exception as exc:
+                logger.warning(
+                    "WhatsApp fb_exchange_token after code exchange failed: %s",
+                    _safe_graph_error(exc),
+                )
+        return token_data
     
     def refresh_token(self, access_token):
         url = f"{self.graph_api_url}/oauth/access_token"

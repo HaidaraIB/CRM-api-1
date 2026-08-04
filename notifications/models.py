@@ -68,6 +68,7 @@ class NotificationType(models.TextChoices):
     SUBSCRIPTION_EXPIRING = 'subscription_expiring', 'Subscription Expiring'
     PAYMENT_FAILED = 'payment_failed', 'Payment Failed'
     SUBSCRIPTION_EXPIRED = 'subscription_expired', 'Subscription Expired'
+    INTEGRATION_TOKEN_EXPIRED = 'integration_token_expired', 'Integration Token Expired'
     
     # General
     GENERAL = 'general', 'General'

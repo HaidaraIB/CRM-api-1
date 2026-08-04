@@ -140,10 +140,13 @@ class IntegrationAccount(models.Model):
         return timezone.now() >= self.token_expires_at
     
     def refresh_access_token_if_needed(self):
-        """تجديد Access Token إذا انتهت صلاحيته"""
-        if self.is_token_expired() and self.refresh_token:
-            # TODO: تنفيذ منطق تجديد Token حسب المنصة
-            pass
+        """تجديد Access Token إذا انتهت صلاحيته (Meta/WhatsApp: fb_exchange_token)."""
+        if not self.is_token_expired():
+            return False
+        from .services.token_lifecycle import refresh_account_token
+
+        refresh_account_token(self)
+        return True
     
     def get_access_token(self):
         """الحصول على Access Token (مفكوك التشفير)"""

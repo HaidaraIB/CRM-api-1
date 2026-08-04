@@ -134,7 +134,10 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
     signup_event from Meta WA_EMBEDDED_SIGNUP postMessage (required for display-name-only / 555 numbers).
     Coexistence numbers must NOT be registered via Cloud API /register — they are already registered.
     """
+    from ..services.token_lifecycle import upgrade_token_data_to_long_lived
+
     oauth_handler = get_oauth_handler(account.platform)
+    token_data = upgrade_token_data_to_long_lived(account.platform, token_data)
     account.set_access_token(token_data['access_token'])
     if 'refresh_token' in token_data:
         account.set_refresh_token(token_data['refresh_token'])
@@ -148,13 +151,28 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
         account.name = display_name
     account.status = 'connected'
     account.error_message = None
+    # Preserve prior selection metadata where useful; drop stale token-alert flag.
+    prev_meta = dict(account.metadata or {}) if isinstance(account.metadata, dict) else {}
     account.metadata = {
         'user_info': user_info,
         'token_type': token_data.get('token_type', 'Bearer'),
     }
+    for keep_key in (
+        'selected_page_id',
+        'selected_form_id',
+        'form_campaign_mapping',
+        'pixel_id',
+        'conversion_leads_enabled',
+    ):
+        if keep_key in prev_meta and prev_meta.get(keep_key) not in (None, ''):
+            account.metadata[keep_key] = prev_meta[keep_key]
     if account.platform == 'meta':
         # Enforce single-page policy: page selection happens later via select_lead_form.
-        account.metadata['pages'] = []
+        # Keep existing pages if reconnecting so leadgen keeps working until re-select.
+        if prev_meta.get('pages'):
+            account.metadata['pages'] = prev_meta.get('pages')
+        else:
+            account.metadata['pages'] = []
 
     if account.platform == 'whatsapp':
         token = token_data['access_token']
@@ -368,6 +386,32 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                     + 'Phone not registered for Cloud API (Graph 133010). '
                     'Reconnect or run whatsapp_repair_subscriptions --register --pin=XXXXXX.'
                 ).strip()
+
+    # After Meta reconnect, refresh page tokens so leadgen fetch works immediately.
+    if account.platform == 'meta' and account.status == 'connected':
+        try:
+            pages = oauth_handler.get_pages(token_data['access_token'])
+            if pages:
+                selected_page_id = str((account.metadata or {}).get('selected_page_id') or '').strip()
+                if selected_page_id:
+                    pages = [
+                        p for p in pages
+                        if str((p or {}).get('id') or '').strip() == selected_page_id
+                    ] or pages[:1]
+                account.metadata = {
+                    **(account.metadata or {}),
+                    'pages': [
+                        {
+                            'id': str(p.get('id') or ''),
+                            'name': p.get('name') or '',
+                            'access_token': p.get('access_token') or '',
+                        }
+                        for p in pages
+                        if p.get('id')
+                    ],
+                }
+        except Exception as e:
+            logger.warning("Meta get_pages after connect failed: %s", e)
 
     account.save()
     IntegrationLog.objects.create(
@@ -978,26 +1022,32 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         if cached_result is not None:
             return success_response(data=cached_result)
 
+        from ..services.token_lifecycle import mark_account_token_invalid
+
         try:
             meta_oauth = MetaOAuth()
             debug_data = meta_oauth.debug_token(access_token)
         except Exception as e:
             logger.warning("test_connection debug_token failed: %s", e)
-            account.status = 'expired'
-            account.error_message = str(e)[:500]
-            account.save()
-            data = {'valid': False, 'message': f'Connection check failed: {e}'}
+            mark_account_token_invalid(account, error_message=str(e)[:500], notify=True)
+            self._meta_cache_invalidate(account.id, scopes=['test_connection', 'meta_health'])
+            data = {
+                'valid': False,
+                'message_key': 'connectionInvalidPleaseReconnect',
+                'message': 'Token is no longer valid. Please reconnect Meta.',
+            }
             self._meta_cache_set(account.id, 'test_connection', data)
             return success_response(data=data)
 
         is_valid = debug_data.get('is_valid') is True
         if not is_valid:
-            account.status = 'expired'
-            account.error_message = debug_data.get('error', {}).get('message', 'Token is no longer valid')
-            account.save()
+            err_msg = debug_data.get('error', {}).get('message', 'Token is no longer valid')
+            mark_account_token_invalid(account, error_message=err_msg, notify=True)
+            self._meta_cache_invalidate(account.id, scopes=['test_connection', 'meta_health'])
             data = {
                 'valid': False,
-                'message': 'Token is no longer valid. Please disconnect and connect again.',
+                'message_key': 'connectionInvalidPleaseReconnect',
+                'message': 'Token is no longer valid. Please reconnect Meta.',
             }
             self._meta_cache_set(account.id, 'test_connection', data)
             return success_response(data=data)
@@ -1011,6 +1061,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
 
         data = {
             'valid': True,
+            'message_key': 'connectionValid',
             'message': 'Connection is valid.',
             'expires_at': debug_data.get('expires_at'),
         }
@@ -1045,31 +1096,16 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             return error_response('Account is not connected', code='bad_request')
         
         if account.is_token_expired():
-            # محاولة تجديد Token
+            from ..services.token_lifecycle import mark_account_token_invalid, refresh_account_token
+
             try:
-                oauth_handler = get_oauth_handler(account.platform)
-                refresh_token = account.get_refresh_token()
-                if refresh_token:
-                    token_data = oauth_handler.refresh_token(refresh_token)
-                    account.set_access_token(token_data['access_token'])
-                    if 'refresh_token' in token_data:
-                        account.set_refresh_token(token_data['refresh_token'])
-                    expires_in = token_data.get('expires_in', 0)
-                    if expires_in:
-                        account.token_expires_at = timezone.now() + timedelta(seconds=expires_in)
-                    account.save()
-                else:
-                    return error_response(
-                        'Token expired and no refresh token available',
-                        code='bad_request',
-                    )
+                refresh_account_token(account)
             except Exception as e:
-                account.status = 'expired'
-                account.error_message = str(e)
-                account.save()
+                mark_account_token_invalid(account, error_message=str(e)[:500], notify=True)
                 return error_response(
-                    f'Failed to refresh token: {str(e)}',
-                    code='bad_request',
+                    'Token expired. Please reconnect the account.',
+                    code='token_expired_reconnect',
+                    status_code=status.HTTP_400_BAD_REQUEST,
                 )
         
         # مزامنة حسب المنصة (TikTok = Lead Gen فقط، لا sync OAuth)
@@ -1434,19 +1470,41 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             if cached_health is not None:
                 return success_response(data=cached_health)
 
+        from ..services.token_lifecycle import mark_account_token_invalid
+
         token_data = {'valid': False}
         token = account.get_access_token()
         if token:
             try:
                 debug_data = meta_oauth.debug_token(token)
+                token_valid = debug_data.get('is_valid') is True
                 token_data = {
-                    'valid': debug_data.get('is_valid') is True,
+                    'valid': token_valid,
                     'expires_at': debug_data.get('expires_at'),
                     'scopes': debug_data.get('scopes') or [],
                     'user_id': debug_data.get('user_id'),
+                    'error': None if token_valid else (
+                        (debug_data.get('error') or {}).get('message')
+                        or 'Token is no longer valid'
+                    ),
+                    'error_key': None if token_valid else 'metaTokenSessionInvalidated',
                 }
+                if not token_valid and account.status == 'connected':
+                    mark_account_token_invalid(
+                        account,
+                        error_message=token_data['error'],
+                        notify=True,
+                    )
+                    account.refresh_from_db(fields=['status', 'error_message'])
             except Exception as e:
-                token_data = {'valid': False, 'error': str(e)}
+                token_data = {
+                    'valid': False,
+                    'error': str(e),
+                    'error_key': 'metaTokenSessionInvalidated',
+                }
+                if account.status == 'connected':
+                    mark_account_token_invalid(account, error_message=str(e)[:500], notify=True)
+                    account.refresh_from_db(fields=['status', 'error_message'])
 
         pages = metadata.get('pages', []) or []
         page_rows = []

@@ -1,94 +1,142 @@
 """
 Background tasks for integrations
 """
-from django.utils import timezone
-from datetime import timedelta
-from .models import IntegrationAccount, IntegrationLog
-from .oauth_utils import get_oauth_handler
 import logging
+from datetime import timedelta
+
+from django.db.models import Q
+from django.utils import timezone
+
+from .models import IntegrationAccount, IntegrationLog
+from .oauth_utils import MetaOAuth
+from .services.token_lifecycle import (
+    META_LIKE_PLATFORMS,
+    REFRESH_BEFORE_EXPIRY,
+    mark_account_token_invalid,
+    refresh_account_token,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def refresh_expired_tokens():
     """
-    تجديد Access Tokens المنتهية الصلاحية تلقائياً
-    
-    يجب استدعاء هذه المهمة بشكل دوري (مثلاً كل ساعة)
-    يمكن استخدام Django Q2 أو Celery
+    Proactively re-exchange Meta/WhatsApp long-lived tokens before they expire,
+    and refresh other platforms that have a classic refresh_token.
+
+    Schedule daily (django-q / cron):
+        python manage.py refresh_integration_tokens
     """
-    # البحث عن Tokens التي ستنتهي خلال 24 ساعة
-    expiry_threshold = timezone.now() + timedelta(hours=24)
-    
+    now = timezone.now()
+    expiry_threshold = now + REFRESH_BEFORE_EXPIRY
+
     accounts_to_refresh = IntegrationAccount.objects.filter(
-        status='connected',
+        status="connected",
         token_expires_at__lte=expiry_threshold,
-        token_expires_at__isnull=False
-    )
-    
+        token_expires_at__isnull=False,
+        is_active=True,
+    ).select_related("company", "company__owner")
+
     refreshed_count = 0
     failed_count = 0
-    
+    skipped_count = 0
+
     for account in accounts_to_refresh:
         try:
-            refresh_token = account.get_refresh_token()
-            
-            if not refresh_token:
-                logger.warning(f"No refresh token for account {account.id}")
+            if account.platform in META_LIKE_PLATFORMS:
+                if not account.get_access_token():
+                    skipped_count += 1
+                    logger.warning("No access token for Meta-like account %s", account.id)
+                    continue
+            elif not account.get_refresh_token():
+                skipped_count += 1
+                logger.warning("No refresh token for account %s", account.id)
                 continue
-            
-            # تجديد Token
-            oauth_handler = get_oauth_handler(account.platform)
-            token_data = oauth_handler.refresh_token(refresh_token)
-            
-            # تحديث Account
-            account.set_access_token(token_data['access_token'])
-            if 'refresh_token' in token_data:
-                account.set_refresh_token(token_data['refresh_token'])
-            
-            expires_in = token_data.get('expires_in', 0)
-            if expires_in:
-                account.token_expires_at = timezone.now() + timedelta(seconds=expires_in)
-            
-            account.status = 'connected'
-            account.error_message = None
-            account.save()
-            
+
+            refresh_account_token(account)
             refreshed_count += 1
-            
-            # تسجيل العملية
+
             IntegrationLog.objects.create(
                 account=account,
-                action='auto_refresh_token',
-                status='success',
-                message='Token refreshed automatically',
+                action="auto_refresh_token",
+                status="success",
+                message="Token refreshed automatically",
             )
-            
-            logger.info(f"Successfully refreshed token for account {account.id}")
-            
+            logger.info("Successfully refreshed token for account %s", account.id)
+
         except Exception as e:
             failed_count += 1
-            account.status = 'expired'
-            account.error_message = str(e)
-            account.save()
-            
+            mark_account_token_invalid(
+                account,
+                error_message=str(e)[:500],
+                notify=True,
+            )
             IntegrationLog.objects.create(
                 account=account,
-                action='auto_refresh_token',
-                status='error',
-                message='Failed to refresh token automatically',
-                error_details=str(e),
+                action="auto_refresh_token",
+                status="error",
+                message="Failed to refresh token automatically",
+                error_details=str(e)[:1000],
             )
-            
-            logger.error(f"Failed to refresh token for account {account.id}: {str(e)}")
-    
-    logger.info(f"Token refresh completed: {refreshed_count} succeeded, {failed_count} failed")
-    
+            logger.error("Failed to refresh token for account %s: %s", account.id, e)
+
+    # Also validate connected Meta accounts that may already be dead
+    # (password change / security revoke) even if expires_at is still in the future.
+    invalidated = validate_meta_tokens()
+
+    logger.info(
+        "Token refresh completed: refreshed=%s failed=%s skipped=%s invalidated=%s",
+        refreshed_count,
+        failed_count,
+        skipped_count,
+        invalidated.get("invalidated", 0),
+    )
+
     return {
-        'refreshed': refreshed_count,
-        'failed': failed_count,
-        'total': accounts_to_refresh.count()
+        "refreshed": refreshed_count,
+        "failed": failed_count,
+        "skipped": skipped_count,
+        "total": accounts_to_refresh.count(),
+        **invalidated,
     }
 
 
+def validate_meta_tokens():
+    """
+    Call Graph debug_token for connected Meta accounts and mark/notify invalid ones.
+    """
+    meta_oauth = MetaOAuth()
+    accounts = IntegrationAccount.objects.filter(
+        platform="meta",
+        status="connected",
+        is_active=True,
+    ).filter(
+        Q(access_token__isnull=False) & ~Q(access_token="")
+    ).select_related("company", "company__owner")
 
+    checked = 0
+    invalidated = 0
+
+    for account in accounts:
+        token = account.get_access_token()
+        if not token:
+            continue
+        checked += 1
+        try:
+            debug_data = meta_oauth.debug_token(token)
+        except Exception as e:
+            mark_account_token_invalid(account, error_message=str(e)[:500], notify=True)
+            invalidated += 1
+            continue
+
+        if debug_data.get("is_valid") is True:
+            continue
+
+        err_msg = (
+            (debug_data.get("error") or {}).get("message")
+            or "Token is no longer valid"
+        )
+        mark_account_token_invalid(account, error_message=err_msg, notify=True)
+        invalidated += 1
+
+    return {"checked": checked, "invalidated": invalidated}
