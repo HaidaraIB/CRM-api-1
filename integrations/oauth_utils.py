@@ -553,7 +553,7 @@ class WhatsAppOAuth(OAuthBase):
                 f"{graph}/{waba_id}/phone_numbers",
                 params={
                     'access_token': access_token,
-                    'fields': 'id,display_phone_number,verified_name',
+                    'fields': 'id,display_phone_number,verified_name,name_status',
                 },
                 timeout=15,
             )
@@ -575,6 +575,8 @@ class WhatsAppOAuth(OAuthBase):
                 {
                     'id': p.get('id'),
                     'display_phone_number': p.get('display_phone_number') or '',
+                    'verified_name': p.get('verified_name') or '',
+                    'name_status': p.get('name_status') or '',
                 }
                 for p in phones if p.get('id')
             ],
@@ -590,24 +592,33 @@ class WhatsAppOAuth(OAuthBase):
                 if str(ph.get('id')) == pid:
                     return
         display = ''
+        name_status = ''
+        verified_name = ''
         try:
             resp = requests.get(
                 f"{self.graph_api_url}/{pid}",
                 params={
                     'access_token': access_token,
-                    'fields': 'id,display_phone_number,verified_name',
+                    'fields': 'id,display_phone_number,verified_name,name_status',
                 },
                 timeout=10,
             )
             if resp.status_code == 200:
                 j = resp.json()
                 display = (j.get('display_phone_number') or '').strip()
+                name_status = (j.get('name_status') or '').strip()
+                verified_name = (j.get('verified_name') or '').strip()
         except Exception:
             pass
         out.append({
             'waba_id': waba_id,
             'business_id': None,
-            'phone_numbers': [{'id': pid, 'display_phone_number': display}],
+            'phone_numbers': [{
+                'id': pid,
+                'display_phone_number': display,
+                'verified_name': verified_name,
+                'name_status': name_status,
+            }],
         })
 
     def get_waba_and_phone_numbers(self, access_token):

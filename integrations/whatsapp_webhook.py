@@ -352,6 +352,7 @@ def process_whatsapp_message(message, phone_number_id):
             body=text_body,
             direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
             whatsapp_message_id=message_id,
+            phone_number_id=str(phone_number_id) if phone_number_id else None,
             is_read=False,
         )
         access_token = wa_account.get_access_token()
@@ -775,6 +776,7 @@ def process_history_sync(value, waba_id=None):
                     body=body,
                     direction=direction,
                     whatsapp_message_id=message_id,
+                    phone_number_id=str(phone_number_id) if phone_number_id else None,
                     delivery_status=(message.get('history_context') or {}).get('status'),
                     is_read=True,
                 )
@@ -868,6 +870,7 @@ def process_smb_message_echoes(value, waba_id=None):
             body=body,
             direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
             whatsapp_message_id=message_id,
+            phone_number_id=str(phone_number_id) if phone_number_id else None,
             delivery_status='sent',
         )
         access_token = wa_account.get_access_token()

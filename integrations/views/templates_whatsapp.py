@@ -383,13 +383,19 @@ def _format_template_parameter_value(client, getter, sample: str) -> str:
 
 
 def _positional_parameter_values_for_client(content: str, client) -> list:
-    """Fill {{1}}..{{n}} for Meta-imported bodies that have no [Bracket] markers."""
+    """Fill {{1}}..{{n}} for Meta-imported bodies that have no [Bracket] markers.
+
+    Order matches Messaging Center preview: customer name, company, phone, lead company.
+    """
     n = _positional_variable_count(content)
     if n <= 0:
         return []
+    phone = (getattr(client, 'phone_number', None) or '').strip()
     pool = [
-        _tenant_company_name(client),
         _client_customer_name(client),
+        _tenant_company_name(client) or _client_lead_company_name(client),
+        phone,
+        _client_lead_company_name(client),
         '' if getattr(client, 'budget', None) is None else str(client.budget).strip(),
         (getattr(client, 'invoice_number', None) or '').strip(),
     ]
@@ -397,11 +403,84 @@ def _positional_parameter_values_for_client(content: str, client) -> list:
     for i in range(n):
         v = pool[i] if i < len(pool) else ''
         if not v and i == 0:
-            v = _company_placeholder_value(client) or _client_customer_name(client)
+            v = _client_customer_name(client) or _company_placeholder_value(client)
         elif not v:
             v = _client_customer_name(client) or _tenant_company_name(client)
         values.append((v or '-')[:1024])
     return values
+
+
+def whatsapp_template_header_parameter_values_for_client(header_text: str, client) -> list:
+    """Text header {{n}} / bracket values for Cloud API template send."""
+    return whatsapp_template_body_parameter_values_for_client(header_text or '', client)
+
+
+def whatsapp_template_button_url_parameter_values(buttons, client) -> list:
+    """
+    Dynamic URL button suffix values (one text param per URL button that contains {{n}}).
+    Returns list of (button_index, values) for Meta BUTTON components.
+    """
+    out = []
+    if not isinstance(buttons, list):
+        return out
+    for idx, btn in enumerate(buttons):
+        if not isinstance(btn, dict):
+            continue
+        if (btn.get('type') or '').lower() != 'url':
+            continue
+        url = btn.get('url') or ''
+        n = _positional_variable_count(url)
+        if n <= 0:
+            continue
+        values = whatsapp_template_body_parameter_values_for_client(url, client)
+        # Meta expects a single suffix param for dynamic URL buttons typically
+        if values:
+            out.append((idx, values[:n]))
+    return out
+
+
+def build_whatsapp_template_components_for_client(template, client, body_param_values=None) -> list:
+    """
+    Build Meta template `components` array: header (text vars), body, dynamic URL buttons.
+    """
+    components = []
+    header_type = (getattr(template, 'header_type', None) or '').strip().lower()
+    header_text = (getattr(template, 'header_text', None) or '').strip()
+    if header_type == 'text' and header_text:
+        header_vals = whatsapp_template_header_parameter_values_for_client(header_text, client)
+        if header_vals:
+            components.append(
+                {
+                    'type': 'header',
+                    'parameters': [{'type': 'text', 'text': p[:1024]} for p in header_vals],
+                }
+            )
+
+    body_vals = body_param_values
+    if body_vals is None:
+        body_vals = whatsapp_template_body_parameter_values_for_client(
+            getattr(template, 'content', None) or '', client
+        )
+    if body_vals:
+        components.append(
+            {
+                'type': 'body',
+                'parameters': [{'type': 'text', 'text': p[:1024]} for p in body_vals],
+            }
+        )
+
+    for btn_index, vals in whatsapp_template_button_url_parameter_values(
+        getattr(template, 'buttons', None) or [], client
+    ):
+        components.append(
+            {
+                'type': 'button',
+                'sub_type': 'url',
+                'index': str(btn_index),
+                'parameters': [{'type': 'text', 'text': p[:1024]} for p in vals],
+            }
+        )
+    return components
 
 
 _PLACEHOLDER_DEFS = [
@@ -996,17 +1075,54 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
 
             if existing:
                 changed = False
+                update_fields = []
                 if not str(existing.meta_template_id or '').strip():
                     existing.meta_template_id = mid
                     by_meta_id[mid] = existing
                     changed = True
                     linked += 1
+                    update_fields.append('meta_template_id')
                 if (existing.meta_status or '') != new_status:
                     existing.meta_status = new_status
                     changed = True
                     updated += 1
-                if changed:
-                    existing.save(update_fields=['meta_template_id', 'meta_status'])
+                    update_fields.append('meta_status')
+                # Keep CRM copy aligned with Meta so send language/params match Graph.
+                body, header_type, header_text, footer, buttons = _parse_meta_template_components(
+                    meta_tpl.get('components')
+                )
+                new_lang = (meta_tpl.get('language') or 'en_US').strip() or 'en_US'
+                if body and (existing.content or '') != body:
+                    existing.content = body
+                    update_fields.append('content')
+                    changed = True
+                if (existing.language or '') != new_lang:
+                    existing.language = new_lang
+                    update_fields.append('language')
+                    changed = True
+                if (existing.header_type or '') != (header_type or 'none'):
+                    existing.header_type = header_type or 'none'
+                    update_fields.append('header_type')
+                    changed = True
+                if (existing.header_text or '') != (header_text or ''):
+                    existing.header_text = header_text or ''
+                    update_fields.append('header_text')
+                    changed = True
+                if (existing.footer or '') != (footer or ''):
+                    existing.footer = footer or ''
+                    update_fields.append('footer')
+                    changed = True
+                if buttons is not None and list(existing.buttons or []) != list(buttons):
+                    existing.buttons = buttons
+                    update_fields.append('buttons')
+                    changed = True
+                if mname and (existing.name or '') != mname:
+                    # Keep Meta template name exact (slug already lowercase from Meta).
+                    existing.name = mname
+                    update_fields.append('name')
+                    changed = True
+                if changed and update_fields:
+                    existing.save(update_fields=list(dict.fromkeys(update_fields)))
                 continue
 
             body, header_type, header_text, footer, buttons = _parse_meta_template_components(

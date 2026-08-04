@@ -49,6 +49,22 @@ def disconnect_whatsapp_accounts_for_integration(account: IntegrationAccount) ->
     return count
 
 
+def _apply_display_name_metadata(meta: dict, *, name_status=None, verified_name=None) -> dict:
+    """Write ChatsPage display-name banner keys from Meta name_status."""
+    out = dict(meta or {})
+    status = (name_status or '').strip().upper() or None
+    if status:
+        out['display_name_status'] = status
+        out['name_status'] = status
+        out['display_name_approved'] = status in (
+            'APPROVED',
+            'AVAILABLE_WITHOUT_REVIEW',
+        )
+    if verified_name:
+        out['verified_name'] = verified_name
+    return out
+
+
 def upsert_whatsapp_account_from_embedded_signup(
     account: IntegrationAccount,
     access_token: str,
@@ -63,6 +79,7 @@ def upsert_whatsapp_account_from_embedded_signup(
     """
     display = None
     verified_name = None
+    name_status = None
     try:
         resp = requests.get(
             f'{META_GRAPH_API_BASE_URL}/{phone_number_id}',
@@ -76,6 +93,7 @@ def upsert_whatsapp_account_from_embedded_signup(
             j = resp.json()
             display = (j.get('display_phone_number') or '').strip() or None
             verified_name = (j.get('verified_name') or '').strip() or None
+            name_status = (j.get('name_status') or '').strip() or None
     except Exception as e:
         logger.debug('Could not fetch phone_number fields for %s: %s', phone_number_id, e)
 
@@ -98,8 +116,7 @@ def upsert_whatsapp_account_from_embedded_signup(
     meta['phone_number_id'] = str(phone_number_id)
     if business_id:
         meta['business_id'] = str(business_id)
-    if verified_name:
-        meta['verified_name'] = verified_name
+    meta = _apply_display_name_metadata(meta, name_status=name_status, verified_name=verified_name)
     account.metadata = meta
     if display and (not account.name or account.name.strip().lower() == 'whatsapp'):
         account.name = display
@@ -141,6 +158,8 @@ def sync_whatsapp_accounts_from_integration(
 
     synced = 0
     first_display = None
+    first_name_status = None
+    first_verified_name = None
     for item in waba_list:
         waba_id = item.get('waba_id')
         business_id = item.get('business_id')
@@ -149,6 +168,8 @@ def sync_whatsapp_accounts_from_integration(
             if not phone_number_id:
                 continue
             display = (ph.get('display_phone_number') or '').strip()
+            name_status = (ph.get('name_status') or '').strip() or None
+            verified_name = (ph.get('verified_name') or '').strip() or None
             wa_account, _created = WhatsAppAccount.objects.update_or_create(
                 phone_number_id=str(phone_number_id),
                 defaults={
@@ -165,6 +186,10 @@ def sync_whatsapp_accounts_from_integration(
             synced += 1
             if first_display is None and display:
                 first_display = display
+            if first_name_status is None and name_status:
+                first_name_status = name_status
+            if first_verified_name is None and verified_name:
+                first_verified_name = verified_name
 
     if waba_list and synced:
         meta = dict(account.metadata or {})
@@ -174,6 +199,13 @@ def sync_whatsapp_accounts_from_integration(
             meta['waba_id'] = first_waba.get('waba_id')
         if first_phones and first_phones[0].get('id'):
             meta['phone_number_id'] = first_phones[0].get('id')
+            if not first_name_status:
+                first_name_status = (first_phones[0].get('name_status') or '').strip() or None
+            if not first_verified_name:
+                first_verified_name = (first_phones[0].get('verified_name') or '').strip() or None
+        meta = _apply_display_name_metadata(
+            meta, name_status=first_name_status, verified_name=first_verified_name
+        )
         account.metadata = meta
         if first_display and (
             not account.name or account.name.strip().lower() == 'whatsapp'

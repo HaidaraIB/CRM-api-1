@@ -211,6 +211,13 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
             meta['is_on_biz_app'] = first_fields.get('is_on_biz_app')
             meta['platform_type'] = first_fields.get('platform_type')
             meta['phone_registration_fields'] = phone_fields_by_id
+            from integrations.whatsapp_account_sync import _apply_display_name_metadata
+
+            meta = _apply_display_name_metadata(
+                meta,
+                name_status=first_fields.get('name_status'),
+                verified_name=first_fields.get('verified_name'),
+            )
         account.metadata = meta
 
         # Subscribe app to each WABA so webhooks are delivered (hard requirement).
@@ -338,6 +345,13 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                 meta['platform_type'] = first_fields.get('platform_type')
                 meta['is_on_biz_app'] = first_fields.get('is_on_biz_app')
                 meta['phone_registration_fields'] = phone_fields_by_id
+                from integrations.whatsapp_account_sync import _apply_display_name_metadata
+
+                meta = _apply_display_name_metadata(
+                    meta,
+                    name_status=first_fields.get('name_status'),
+                    verified_name=first_fields.get('verified_name'),
+                )
             account.metadata = meta
             IntegrationLog.objects.create(
                 account=account,

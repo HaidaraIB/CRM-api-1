@@ -828,6 +828,12 @@ class LeadWhatsAppMessage(models.Model):
         null=True,
         help_text="معرف الرسالة من WhatsApp Cloud API",
     )
+    phone_number_id = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="Meta business phone_number_id that received/sent this message (for CS-window routing).",
+    )
     delivery_status = models.CharField(
         max_length=20,
         blank=True,

@@ -36,6 +36,7 @@ from settings.models import SystemSettings
 from ..oauth_utils import MetaOAuth, META_GRAPH_API_BASE_URL
 from ..whatsapp_account_sync import resolve_whatsapp_account_for_api
 from .templates_whatsapp import (
+    build_whatsapp_template_components_for_client,
     count_template_body_placeholders,
     meta_slug_template_name,
     whatsapp_template_body_parameter_values_for_client,
@@ -105,12 +106,62 @@ def _redact_phone_e164(phone: str) -> str:
     return f'...{p[-4:]}'
 
 
+def _normalize_whatsapp_to_digits(phone: str) -> str:
+    """Normalize recipient for Cloud API: Iraq 07… → 964…, strip +, spaces."""
+    from integrations.services.twilio_phone import normalize_phone_to_e164
+    from integrations.services.phone_match import digits_only
+
+    raw = (phone or '').strip()
+    if not raw:
+        return ''
+    return digits_only(normalize_phone_to_e164(raw))
+
+
+def _resolve_outbound_whatsapp_routing(company, client_id, to_phone: str, phone_number_id=None):
+    """
+    Prefer conversation WhatsApp `from` and inbound business phone_number_id when known.
+    Returns (normalized_to, resolved_phone_number_id).
+    """
+    to = _normalize_whatsapp_to_digits(to_phone)
+    resolved_pid = (str(phone_number_id).strip() if phone_number_id else '') or None
+    client = None
+    if client_id is not None:
+        try:
+            client = company.clients.get(id=int(client_id))
+        except Exception:
+            client = None
+    if client is None and to:
+        from integrations.services.phone_match import find_client_by_phone
+
+        client = find_client_by_phone(company, to)
+
+    if client is not None:
+        last_in = (
+            LeadWhatsAppMessage.objects.filter(
+                client_id=client.id,
+                direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+            )
+            .order_by('-created_at')
+            .only('phone_number', 'phone_number_id')
+            .first()
+        )
+        if last_in:
+            inbound_digits = _normalize_whatsapp_to_digits(last_in.phone_number or '')
+            if inbound_digits and len(inbound_digits) >= 7:
+                to = inbound_digits
+            if not resolved_pid and (last_in.phone_number_id or '').strip():
+                resolved_pid = str(last_in.phone_number_id).strip()
+
+    return to, resolved_pid
+
+
 _META_GRAPH_ERROR_CODES = {
     131037: 'whatsapp_display_name_not_approved',
     131026: 'whatsapp_recipient_not_deliverable',
     131047: 'whatsapp_outside_session_use_template',
     132000: 'whatsapp_template_parameter_count',
-    132001: 'whatsapp_template_parameter_mismatch',
+    # Meta: template does not exist in the specified language or is not approved
+    132001: 'whatsapp_template_not_found_or_language',
     133010: 'whatsapp_account_not_registered',
 }
 
@@ -122,8 +173,12 @@ def _api_code_from_graph_error(err_body) -> str:
     err = err_body.get('error')
     if isinstance(err, dict):
         code = err.get('code')
-        if isinstance(code, int) and code in _META_GRAPH_ERROR_CODES:
-            return _META_GRAPH_ERROR_CODES[code]
+        try:
+            code_int = int(code) if code is not None else None
+        except (TypeError, ValueError):
+            code_int = None
+        if code_int is not None and code_int in _META_GRAPH_ERROR_CODES:
+            return _META_GRAPH_ERROR_CODES[code_int]
     return 'bad_request'
 
 
@@ -161,9 +216,10 @@ def whatsapp_send_message(request):
             'to and message are required',
             code='bad_request',
         )
-    # تطبيع رقم المستلم (إزالة + وفراغات)
-    to = str(to).replace(' ', '').replace('+', '').strip()
-    if not to.isdigit():
+    to, phone_number_id = _resolve_outbound_whatsapp_routing(
+        company, client_id, to, phone_number_id
+    )
+    if not to or not to.isdigit():
         return error_response(
             'Invalid "to" phone number',
             code='bad_request',
@@ -319,6 +375,7 @@ def whatsapp_send_message(request):
                 body=(message or '')[:65535],
                 direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
                 whatsapp_message_id=wam_id,
+                phone_number_id=wa_account.phone_number_id,
                 delivery_status='sent',
                 created_by=request.user,
                 send_source=send_source,
@@ -369,8 +426,10 @@ def whatsapp_send_media(request):
     if not uploaded or not to:
         return error_response('to and file are required', code='bad_request')
 
-    to = str(to).replace(' ', '').replace('+', '').strip()
-    if not to.isdigit():
+    to, phone_number_id = _resolve_outbound_whatsapp_routing(
+        company, client_id, to, phone_number_id
+    )
+    if not to or not to.isdigit():
         return error_response('Invalid "to" phone number', code='bad_request')
 
     try:
@@ -548,6 +607,7 @@ def whatsapp_send_media(request):
                 body=(caption or '')[:65535],
                 direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
                 whatsapp_message_id=wam_id,
+                phone_number_id=wa_account.phone_number_id,
                 delivery_status='sent',
                 created_by=request.user,
                 attachment_kind=kind,
@@ -794,8 +854,10 @@ def whatsapp_send_template(request):
         template_id = int(template_id)
     except (TypeError, ValueError):
         return error_response('template_id must be an integer', code='bad_request')
-    to = str(to).replace(' ', '').replace('+', '').strip()
-    if not to.isdigit():
+    to, phone_number_id = _resolve_outbound_whatsapp_routing(
+        company, client_id, to, phone_number_id
+    )
+    if not to or not to.isdigit():
         return error_response('Invalid "to" phone number', code='bad_request')
 
     from integrations.whatsapp_access import (
@@ -844,7 +906,19 @@ def whatsapp_send_template(request):
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
+    fill_client = None
+    if client_id:
+        try:
+            fill_client = company.clients.select_related('company').get(id=int(client_id))
+        except Exception:
+            fill_client = None
+    if fill_client is None:
+        fill_client = _resolve_whatsapp_client(company, None, to)
+        if fill_client:
+            fill_client = company.clients.select_related('company').get(pk=fill_client.pk)
+
     n_placeholders = count_template_body_placeholders(template.content or '')
+    header_needs = count_template_body_placeholders(getattr(template, 'header_text', None) or '')
     body_parameters = request.data.get('body_parameters')
     if body_parameters is not None:
         if not isinstance(body_parameters, list) or not all(
@@ -863,28 +937,20 @@ def whatsapp_send_template(request):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
     else:
-        if n_placeholders > 0:
-            client = None
-            if client_id:
-                try:
-                    client = company.clients.select_related('company').get(id=int(client_id))
-                except Exception:
-                    return error_response('Client not found', code='not_found', status_code=status.HTTP_404_NOT_FOUND)
-            else:
-                client = _resolve_whatsapp_client(company, None, to)
-                if client:
-                    client = company.clients.select_related('company').get(pk=client.pk)
-            if not client:
+        if n_placeholders > 0 or header_needs > 0:
+            if not fill_client:
                 return error_response(
                     'client_id or a matching lead phone is required for templates with placeholders '
                     '(or pass body_parameters).',
                     code='bad_request',
                 )
-            param_values = whatsapp_template_body_parameter_values_for_client(template.content or '', client)
-            if len(param_values) != n_placeholders:
+            param_values = whatsapp_template_body_parameter_values_for_client(
+                template.content or '', fill_client
+            )
+            if n_placeholders > 0 and len(param_values) != n_placeholders:
                 return error_response(
                     'Could not resolve template placeholders for this client.',
-                    code='whatsapp_template_parameter_mismatch',
+                    code='whatsapp_template_parameter_count',
                     status_code=status.HTTP_400_BAD_REQUEST,
                 )
         else:
@@ -918,7 +984,13 @@ def whatsapp_send_template(request):
         'name': meta_name,
         'language': {'code': language},
     }
-    if param_values:
+    if fill_client is not None:
+        components = build_whatsapp_template_components_for_client(
+            template, fill_client, body_param_values=param_values if param_values else None
+        )
+        if components:
+            template_block['components'] = components
+    elif param_values:
         template_block['components'] = [
             {
                 'type': 'body',
@@ -1031,6 +1103,7 @@ def whatsapp_send_template(request):
                 body=preview[:65535],
                 direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
                 whatsapp_message_id=wam_id,
+                phone_number_id=wa_account.phone_number_id,
                 delivery_status='sent',
                 created_by=request.user,
                 send_source=send_source,
