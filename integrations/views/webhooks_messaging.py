@@ -1025,8 +1025,9 @@ def whatsapp_send_template(request):
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
     except requests.RequestException as e:
         logger.warning(
-            "WhatsApp template send request error: phone_number_id=%s to=%s error=%s",
+            "WhatsApp template send request error: phone_number_id=%s waba_id=%s to=%s error=%s",
             wa_account.phone_number_id,
+            wa_account.waba_id,
             redacted_to,
             e,
         )
@@ -1044,12 +1045,20 @@ def whatsapp_send_template(request):
             err_body = {'error': getattr(resp, 'text', '') or str(resp)}
         if isinstance(err_body, dict):
             err_body['graph_http_status'] = graph_status
+            err_body['crm_template_name'] = meta_name
+            err_body['crm_template_language'] = language
+            err_body['crm_waba_id'] = wa_account.waba_id
+            err_body['crm_phone_number_id'] = wa_account.phone_number_id
         else:
             err_body = {'error': str(err_body), 'graph_http_status': graph_status}
         logger.warning(
-            "WhatsApp template send failed: graph_status=%s phone_number_id=%s to=%s body=%s",
+            "WhatsApp template send failed: graph_status=%s phone_number_id=%s waba_id=%s "
+            "template=%s language=%s to=%s body=%s",
             graph_status,
             wa_account.phone_number_id,
+            wa_account.waba_id,
+            meta_name,
+            language,
             redacted_to,
             err_body,
         )

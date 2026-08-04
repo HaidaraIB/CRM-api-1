@@ -1061,6 +1061,9 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         updated = 0
         linked = 0
         imported = 0
+        demoted = 0
+        seen_meta_ids: set[str] = set()
+        seen_names: set[str] = set()
 
         for meta_tpl in meta_list:
             mid = str(meta_tpl.get('id') or '').strip()
@@ -1068,6 +1071,9 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 continue
             mname = (meta_tpl.get('name') or '').strip()
             new_status = _meta_status_normalize(meta_tpl.get('status'))
+            seen_meta_ids.add(mid)
+            if mname:
+                seen_names.add(mname.lower())
 
             existing = by_meta_id.get(mid)
             if not existing and mname:
@@ -1076,11 +1082,14 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             if existing:
                 changed = False
                 update_fields = []
-                if not str(existing.meta_template_id or '').strip():
+                prev_mid = str(existing.meta_template_id or '').strip()
+                if prev_mid != mid:
+                    # Re-link when matching by name after switching WABA (old Meta id ≠ current).
                     existing.meta_template_id = mid
                     by_meta_id[mid] = existing
                     changed = True
-                    linked += 1
+                    if not prev_mid:
+                        linked += 1
                     update_fields.append('meta_template_id')
                 if (existing.meta_status or '') != new_status:
                     existing.meta_status = new_status
@@ -1144,12 +1153,30 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             )
             imported += 1
 
+        # Templates approved under a previous WABA (e.g. Meta 555 test) must not stay
+        # "APPROVED" when the connected phone is on a different WABA.
+        for tpl in wa_templates:
+            mid = str(tpl.meta_template_id or '').strip()
+            slug = meta_slug_template_name(tpl.name, tpl.id)
+            on_current = (mid and mid in seen_meta_ids) or (slug and slug in seen_names)
+            if on_current:
+                continue
+            if (tpl.meta_status or '').upper() in ('', 'PENDING'):
+                continue
+            if not mid and not (tpl.meta_status or '').strip():
+                continue
+            tpl.meta_status = 'NOT_ON_WABA'
+            tpl.save(update_fields=['meta_status', 'updated_at'])
+            demoted += 1
+
         return success_response(
             data={
                 'message': 'Templates synced.',
                 'updated': updated,
                 'linked': linked,
                 'imported': imported,
+                'demoted': demoted,
+                'waba_id': wa.waba_id,
                 'total_meta': len(meta_list),
             },
         )
