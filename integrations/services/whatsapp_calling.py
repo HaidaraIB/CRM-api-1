@@ -109,8 +109,23 @@ def _graph_get(account: WhatsAppAccount, path: str, params: dict | None = None) 
     return body if isinstance(body, dict) else {"data": body}
 
 
+def is_seed_whatsapp_account(account: WhatsAppAccount) -> bool:
+    """Local UI-review seed rows must never hit Meta Graph."""
+    pid = (account.phone_number_id or "").strip()
+    if pid.startswith("seed_"):
+        return True
+    token = (account.get_access_token() or "").strip()
+    return token.startswith("seed-fake")
+
+
 def enable_calling_on_account(account: WhatsAppAccount) -> dict:
     """POST /{phone-number-id}/settings — enable Cloud Calling."""
+    if is_seed_whatsapp_account(account):
+        if not account.calling_enabled:
+            account.calling_enabled = True
+            account.save(update_fields=["calling_enabled", "updated_at"])
+        return {"success": True, "seed": True, "calling": {"status": "ENABLED"}}
+
     body = _graph_post(
         account,
         f"{account.phone_number_id}/settings",

@@ -53,17 +53,49 @@ def _calling_error_response(exc: WhatsAppCallingError):
     trigger JWT refresh / session wipe. Remap them to 502 with an explicit code.
     """
     graph_status = exc.status_code or 400
+    body = exc.body if isinstance(exc.body, dict) else {}
+    nested = body.get("error") if isinstance(body.get("error"), dict) else {}
+    meta_code = nested.get("code")
+    meta_msg = (nested.get("message") or str(exc) or "").strip()
+
     if graph_status in (401, 403):
         return error_response(
-            str(exc)
+            meta_msg
             or "WhatsApp access token is invalid. Reconnect WhatsApp in Integrations.",
             code="whatsapp_token_invalid",
             details=exc.body,
             status_code=502,
         )
+
+    # Meta Calling / Cloud API phone eligibility
+    if meta_code == 141000:
+        return error_response(
+            meta_msg
+            or "This WhatsApp number is not eligible for Cloud Calling "
+            "(often a coexistence / Business-app number, or not fully Cloud-API registered).",
+            code="whatsapp_not_cloud_api_number",
+            details=exc.body,
+            status_code=400,
+        )
+    if meta_code == 138015:
+        return error_response(
+            meta_msg
+            or "Calling cannot be enabled for this phone number (messaging limit / eligibility).",
+            code="whatsapp_calling_not_eligible",
+            details=exc.body,
+            status_code=400,
+        )
+    if meta_code == 138000:
+        return error_response(
+            meta_msg or "Calling is not enabled for this phone number.",
+            code="whatsapp_calling_disabled",
+            details=exc.body,
+            status_code=400,
+        )
+
     client_status = graph_status if 400 <= graph_status < 500 else 502
     return error_response(
-        str(exc) or "WhatsApp calling request failed",
+        meta_msg or "WhatsApp calling request failed",
         code="whatsapp_calling_error",
         details=exc.body,
         status_code=client_status,
@@ -558,6 +590,28 @@ def whatsapp_calling_enable(request):
     wa, err = _resolve_account(request.user, request.data.get("whatsapp_account_id"))
     if not wa:
         return error_response(err or "No connected WhatsApp account", status_code=400)
+
+    # Cloud Calling requires a Cloud-API-only number. Coexistence (Business app + API)
+    # keeps voice/video on the app only — Meta rejects enable with #141000.
+    integ_meta = {}
+    if wa.integration_account_id and isinstance(
+        getattr(wa.integration_account, "metadata", None), dict
+    ):
+        integ_meta = wa.integration_account.metadata or {}
+    if integ_meta.get("coexistence") or integ_meta.get("is_on_biz_app") is True:
+        return error_response(
+            "WhatsApp Cloud Calling is not available on coexistence numbers "
+            "(Business app + Cloud API). Meta keeps voice/video on the Business app only. "
+            "Use a Cloud-API-only number to enable calling in the CRM.",
+            code="whatsapp_calling_coexistence_unsupported",
+            details={
+                "coexistence": True,
+                "display_phone_number": wa.display_phone_number,
+                "phone_number_id": wa.phone_number_id,
+            },
+            status_code=400,
+        )
+
     try:
         body = enable_calling_on_account(wa)
     except WhatsAppCallingError as exc:

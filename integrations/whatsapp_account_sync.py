@@ -219,7 +219,12 @@ def get_connected_whatsapp_account(company, phone_number_id=None) -> Optional[Wh
         qs = WhatsAppAccount.objects.filter(company=company, status='connected')
         if pid_filter:
             qs = qs.filter(phone_number_id=pid_filter)
-        return qs.first()
+            return qs.first()
+        # Prefer real Cloud API phone IDs over local seed/demo rows.
+        real = qs.exclude(phone_number_id__startswith='seed_').order_by('-updated_at').first()
+        if real:
+            return real
+        return qs.order_by('-updated_at').first()
 
     # No connected IntegrationAccount → clear orphan phone rows left by DELETE + SET_NULL
     # so outbound send cannot succeed while the UI shows Disconnected.
