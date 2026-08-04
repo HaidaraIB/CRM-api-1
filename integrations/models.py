@@ -435,6 +435,18 @@ class TwilioSettings(models.Model):
             "[lead_company_name], [profession], [status], [company_name], [budget], [priority], [type], [source]."
         ),
     )
+    lead_created_whatsapp_enabled = models.BooleanField(
+        default=False,
+        help_text="Send an automated WhatsApp template when a new lead (Client) is created.",
+    )
+    lead_created_whatsapp_template = models.ForeignKey(
+        "MessageTemplate",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        help_text="Approved WhatsApp MessageTemplate used for new-lead auto welcome.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

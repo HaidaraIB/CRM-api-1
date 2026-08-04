@@ -195,6 +195,11 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
     """Per-company SMS settings (Twilio or OTPIQ). Secrets are write-only with masked read fields."""
     auth_token_masked = serializers.SerializerMethodField(read_only=True)
     otpiq_api_key_masked = serializers.SerializerMethodField(read_only=True)
+    lead_created_whatsapp_template = serializers.PrimaryKeyRelatedField(
+        queryset=MessageTemplate.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = TwilioSettings
@@ -212,6 +217,8 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
             'is_enabled',
             'lead_created_sms_enabled',
             'lead_created_sms_template',
+            'lead_created_whatsapp_enabled',
+            'lead_created_whatsapp_template',
             'created_at',
             'updated_at',
         ]
@@ -219,6 +226,18 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
             'auth_token': {'write_only': True, 'required': False},
             'otpiq_api_key': {'write_only': True, 'required': False},
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        company = None
+        if self.instance is not None:
+            company = getattr(self.instance, 'company', None)
+        elif self.context.get('request') is not None:
+            company = getattr(self.context['request'].user, 'company', None)
+        if company is not None:
+            self.fields['lead_created_whatsapp_template'].queryset = MessageTemplate.objects.filter(
+                company=company
+            )
 
     def get_auth_token_masked(self, obj):
         if obj.auth_token:
@@ -263,6 +282,49 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
                         raise serializers.ValidationError(
                             'OTPIQ requires an API key when enabled.'
                         )
+
+        if 'lead_created_whatsapp_enabled' in attrs:
+            wa_enabled = bool(attrs['lead_created_whatsapp_enabled'])
+        elif instance:
+            wa_enabled = bool(instance.lead_created_whatsapp_enabled)
+        else:
+            wa_enabled = False
+
+        if wa_enabled:
+            tpl = attrs.get('lead_created_whatsapp_template', None)
+            if 'lead_created_whatsapp_template' not in attrs and instance:
+                tpl = instance.lead_created_whatsapp_template
+            if tpl is None:
+                raise serializers.ValidationError(
+                    {
+                        'lead_created_whatsapp_template': [
+                            'An approved WhatsApp template is required when WhatsApp welcome is enabled.'
+                        ]
+                    }
+                )
+            company = None
+            if instance is not None:
+                company = instance.company
+            elif self.context.get('request') is not None:
+                company = getattr(self.context['request'].user, 'company', None)
+            if company is not None and getattr(tpl, 'company_id', None) != company.id:
+                raise serializers.ValidationError(
+                    {'lead_created_whatsapp_template': ['Template must belong to this company.']}
+                )
+            ch = (getattr(tpl, 'channel_type', None) or '').lower()
+            if ch not in ('whatsapp', 'whatsapp_api'):
+                raise serializers.ValidationError(
+                    {'lead_created_whatsapp_template': ['Only WhatsApp templates can be used.']}
+                )
+            meta_st = (getattr(tpl, 'meta_status', None) or '').upper()
+            if meta_st != 'APPROVED':
+                raise serializers.ValidationError(
+                    {
+                        'lead_created_whatsapp_template': [
+                            'Template must be APPROVED in Meta before use.'
+                        ]
+                    }
+                )
         return attrs
 
     def create(self, validated_data):
@@ -357,6 +419,7 @@ class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
             'created_by',
             'created_by_username',
             'created_at',
+            'send_source',
             'attachment_kind',
             'attachment_mime',
             'attachment_size',
@@ -376,6 +439,7 @@ class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
             'delivery_status',
             'delivery_error',
             'is_read',
+            'send_source',
             'attachment_kind',
             'attachment_mime',
             'attachment_size',

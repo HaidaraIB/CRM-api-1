@@ -109,6 +109,8 @@ def twilio_settings_view(request):
                     'is_enabled': False,
                     'lead_created_sms_enabled': False,
                     'lead_created_sms_template': "Hello [first_name], we'll contact you soon!",
+                    'lead_created_whatsapp_enabled': False,
+                    'lead_created_whatsapp_template': None,
                 },
             )
         serializer = TwilioSettingsSerializer(twilio_settings)

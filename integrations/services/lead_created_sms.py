@@ -5,8 +5,6 @@ Runs after transaction commit so ClientPhoneNumber rows exist.
 from __future__ import annotations
 
 import logging
-import re
-from decimal import Decimal
 
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
@@ -15,66 +13,23 @@ from crm.models import Client, ClientPhoneNumber
 from integrations.models import LeadSMSMessage, MessageSendSource, SmsProvider, TwilioSettings
 from integrations.policy import is_integration_allowed
 from integrations.services.company_sms import send_company_sms
+from integrations.services.message_placeholders import (
+    build_message_placeholder_values,
+    render_message_placeholders,
+)
 from subscriptions.entitlements import increment_monthly_usage, require_monthly_usage
 
 logger = logging.getLogger(__name__)
 
-_PLACEHOLDER_RE = re.compile(r"\[([^\]]+)\]")
-
-
-def _first_name_from_client_name(name: str) -> str:
-    name = (name or "").strip()
-    if not name:
-        return ""
-    return name.split()[0]
-
 
 def build_lead_sms_placeholder_values(client: Client) -> dict[str, str]:
-    """Lowercase keys for case-insensitive [placeholder] lookup."""
-    name = (client.name or "").strip()
-    phone = resolve_client_sms_phone(client) or ""
-    status_name = (client.status.name or "").strip() if client.status_id and client.status else ""
-    company_name = (client.company.name or "").strip() if client.company_id and client.company else ""
-    budget_s = ""
-    if client.budget is not None or getattr(client, "budget_max", None) is not None:
-        try:
-            lo = client.budget
-            hi = getattr(client, "budget_max", None)
-            if lo is not None and hi is not None and hi != lo:
-                lo_s = str(lo.normalize()) if isinstance(lo, Decimal) else str(lo)
-                hi_s = str(hi.normalize()) if isinstance(hi, Decimal) else str(hi)
-                budget_s = f"{lo_s}–{hi_s}"
-            elif lo is not None:
-                budget_s = str(lo.normalize()) if isinstance(lo, Decimal) else str(lo)
-            elif hi is not None:
-                budget_s = str(hi.normalize()) if isinstance(hi, Decimal) else str(hi)
-        except Exception:
-            budget_s = str(client.budget or client.budget_max or "")
-    return {
-        "name": name,
-        "first_name": _first_name_from_client_name(name) or name,
-        "phone": phone,
-        "lead_company_name": (client.lead_company_name or "").strip(),
-        "profession": (client.profession or "").strip(),
-        "status": status_name,
-        "company_name": company_name,
-        "budget": budget_s,
-        "priority": (client.priority or "").strip(),
-        "type": (client.type or "").strip(),
-        "source": (client.source or "").strip(),
-    }
+    """Lowercase / alias keys for [placeholder] and { placeholder } lookup."""
+    return build_message_placeholder_values(client)
 
 
 def render_lead_created_sms_template(template: str, client: Client) -> str:
     values = build_lead_sms_placeholder_values(client)
-
-    def repl(match: re.Match) -> str:
-        key = (match.group(1) or "").strip().lower()
-        if key in values:
-            return values[key]
-        return match.group(0)
-
-    return _PLACEHOLDER_RE.sub(repl, template or "")
+    return render_message_placeholders(template or "", values)
 
 
 def resolve_client_sms_phone(client: Client) -> str | None:
@@ -105,7 +60,12 @@ def send_lead_created_welcome_sms(client_id: int) -> None:
 
 def _send_lead_created_welcome_sms_impl(client_id: int) -> None:
     client = (
-        Client.objects.select_related("company", "status")
+        Client.objects.select_related(
+            "company",
+            "status",
+            "communication_way",
+            "assigned_to",
+        )
         .filter(pk=client_id)
         .first()
     )

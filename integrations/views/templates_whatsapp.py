@@ -385,28 +385,38 @@ def _format_template_parameter_value(client, getter, sample: str) -> str:
 def _positional_parameter_values_for_client(content: str, client) -> list:
     """Fill {{1}}..{{n}} for Meta-imported bodies that have no [Bracket] markers.
 
-    Order matches Messaging Center preview: customer name, company, phone, lead company.
+    Order: customer, company, phone, employee, date, time, status, stage, channel, visit, profession…
     """
+    from integrations.services.message_placeholders import build_message_placeholder_values
+
     n = _positional_variable_count(content)
     if n <= 0:
         return []
-    phone = (getattr(client, 'phone_number', None) or '').strip()
+    vals = build_message_placeholder_values(client)
     pool = [
-        _client_customer_name(client),
-        _tenant_company_name(client) or _client_lead_company_name(client),
-        phone,
-        _client_lead_company_name(client),
-        '' if getattr(client, 'budget', None) is None else str(client.budget).strip(),
-        (getattr(client, 'invoice_number', None) or '').strip(),
+        vals.get("customer_name") or "",
+        vals.get("company_name") or "",
+        vals.get("phone") or "",
+        vals.get("employee_name") or "",
+        vals.get("current_date") or "",
+        vals.get("current_time") or "",
+        vals.get("status") or "",
+        vals.get("stage") or "",
+        vals.get("channel") or "",
+        vals.get("visit_type") or "",
+        vals.get("profession") or "",
+        vals.get("lead_company_name") or "",
+        vals.get("amount") or "",
+        vals.get("invoice_number") or "",
     ]
     values = []
     for i in range(n):
-        v = pool[i] if i < len(pool) else ''
+        v = pool[i] if i < len(pool) else ""
         if not v and i == 0:
-            v = _client_customer_name(client) or _company_placeholder_value(client)
+            v = vals.get("customer_name") or vals.get("company_name") or ""
         elif not v:
-            v = _client_customer_name(client) or _tenant_company_name(client)
-        values.append((v or '-')[:1024])
+            v = vals.get("customer_name") or vals.get("company_name") or ""
+        values.append((v or "-")[:1024])
     return values
 
 
@@ -483,35 +493,32 @@ def build_whatsapp_template_components_for_client(template, client, body_param_v
     return components
 
 
-_PLACEHOLDER_DEFS = [
-    (
-        r'\[\s*Customer Name\s*\]|\[\s*اسم_العميل\s*\]|\[\s*اسم العميل\s*\]',
-        'Customer',
-        _client_customer_name,
-    ),
-    (
-        r'\[\s*Company\s*\]|\[\s*الشركة\s*\]|\[\s*شركة\s*\]',
-        'Company',
-        _company_placeholder_value,
-    ),
-    (
-        r'\[\s*Amount\s*\]|\[\s*المبلغ\s*\]',
-        '100',
-        lambda c: '' if getattr(c, 'budget', None) is None else str(c.budget).strip(),
-    ),
-    (
-        r'\[\s*Invoice Number\s*\]|\[\s*رقم_الفاتورة\s*\]|\[\s*رقم الفاتورة\s*\]',
-        'INV-001',
-        lambda c: (getattr(c, 'invoice_number', None) or '').strip(),
-    ),
-]
+_PLACEHOLDER_DEFS = None  # lazy — see _get_placeholder_defs()
+
+
+def _get_placeholder_defs():
+    """Named CRM placeholders ([alias] / { alias }) used for Meta {{n}} conversion."""
+    global _PLACEHOLDER_DEFS
+    if _PLACEHOLDER_DEFS is None:
+        from integrations.services.message_placeholders import META_PLACEHOLDER_DEFS
+
+        _PLACEHOLDER_DEFS = META_PLACEHOLDER_DEFS
+    return _PLACEHOLDER_DEFS
 
 
 def _find_placeholders_in_order(content: str):
-    """Bracket placeholders in left-to-right order (Meta requires {{1}}, {{2}}, ... by appearance)."""
+    """Bracket/curly placeholders in left-to-right order (Meta requires {{1}}, {{2}}, ... by appearance)."""
     matches = []
-    for pattern, sample, getter in _PLACEHOLDER_DEFS:
+    seen_spans = set()
+    for pattern, sample, getter in _get_placeholder_defs():
         for m in re.finditer(pattern, content or '', re.IGNORECASE):
+            span = (m.start(), m.end())
+            if span in seen_spans:
+                continue
+            # Skip overlaps with an already-captured token
+            if any(not (span[1] <= s or span[0] >= e) for s, e in seen_spans):
+                continue
+            seen_spans.add(span)
             matches.append((m.start(), m.end(), sample, getter))
     matches.sort(key=lambda x: x[0])
     return matches

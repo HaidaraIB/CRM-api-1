@@ -473,14 +473,16 @@ def notify_deal_closed(sender, instance, **kwargs):
 
 @receiver(post_save, sender=Client)
 def schedule_welcome_sms_on_new_client(sender, instance, created, **kwargs):
-    """Queue automated welcome SMS after DB commit (phones may be added in the same request)."""
+    """Queue automated welcome SMS / WhatsApp after DB commit (phones may be added in the same request)."""
     if not created:
         return
     if not instance.company_id:
         return
     from integrations.services.lead_created_sms import schedule_lead_created_welcome_sms
+    from integrations.services.lead_created_whatsapp import schedule_lead_created_welcome_whatsapp
 
     schedule_lead_created_welcome_sms(instance.pk)
+    schedule_lead_created_welcome_whatsapp(instance.pk)
 
 
 @receiver(post_save, sender=ClientEvent)
