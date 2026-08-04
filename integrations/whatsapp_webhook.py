@@ -451,7 +451,7 @@ def process_whatsapp_status_update(status_obj, phone_number_id=None):
         whatsapp_message_id=message_id,
         direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
     )
-    msg_row = qs.only('id', 'delivery_status').first()
+    msg_row = qs.only('id', 'delivery_status', 'phone_number_id').first()
     updated = 0
     if msg_row:
         current = (msg_row.delivery_status or '').strip().lower() or 'pending'
@@ -459,12 +459,18 @@ def process_whatsapp_status_update(status_obj, phone_number_id=None):
         cur_rank = _WA_STATUS_RANK.get(current, -1)
         # Always apply failed; otherwise only advance forward.
         if status == 'failed' or new_rank >= cur_rank:
-            updated = qs.filter(pk=msg_row.pk).update(
-                delivery_status=status,
-                delivery_error=error_text if status == 'failed' else None,
-            )
+            update_fields = {
+                'delivery_status': status,
+                'delivery_error': error_text if status == 'failed' else None,
+            }
+            # Backfill business phone when older rows were stored without it.
+            if phone_number_id and not (msg_row.phone_number_id or '').strip():
+                update_fields['phone_number_id'] = str(phone_number_id)
+            updated = qs.filter(pk=msg_row.pk).update(**update_fields)
         else:
             updated = 0
+            if phone_number_id and not (msg_row.phone_number_id or '').strip():
+                qs.filter(pk=msg_row.pk).update(phone_number_id=str(phone_number_id))
             logger.debug(
                 "WhatsApp status ignored (no downgrade): wam_id=%s current=%s incoming=%s",
                 message_id,

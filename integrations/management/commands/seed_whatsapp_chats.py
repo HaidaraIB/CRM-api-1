@@ -498,6 +498,7 @@ class Command(BaseCommand):
                     else LeadWhatsAppMessage.DIRECTION_INBOUND
                 ),
                 whatsapp_message_id=f"seed_wamid_{client.id}_{idx}",
+                phone_number_id=FAKE_PHONE_NUMBER_ID,
                 delivery_status=delivery_status if is_out else None,
                 delivery_error=(
                     "Message failed to send (seeded for UI review)"
