@@ -8,6 +8,7 @@ from .views import (
     tiktok_leadgen_webhook,
     whatsapp_send_message,
     whatsapp_send_media,
+    whatsapp_send_location,
     whatsapp_message_attachment,
     whatsapp_send_template,
     whatsapp_session_window,
@@ -96,6 +97,7 @@ urlpatterns = [
     path('campaign-batches/<int:batch_id>/failures/', record_campaign_failure, name='campaign_batches_failure'),
     path('whatsapp/send/', whatsapp_send_message, name='whatsapp_send'),
     path('whatsapp/send-media/', whatsapp_send_media, name='whatsapp_send_media'),
+    path('whatsapp/send-location/', whatsapp_send_location, name='whatsapp_send_location'),
     path(
         'whatsapp/messages/<int:pk>/attachment/',
         whatsapp_message_attachment,

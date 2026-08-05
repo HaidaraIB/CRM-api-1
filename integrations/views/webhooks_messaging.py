@@ -630,6 +630,222 @@ def whatsapp_send_media(request):
     return success_response(data=out)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_send_location(request):
+    """
+    Send a WhatsApp session location pin.
+    POST /api/integrations/whatsapp/send-location/
+    Body: to, latitude, longitude, optional name/address/client_id/phone_number_id
+    """
+    from decimal import Decimal, InvalidOperation
+
+    from integrations.services.whatsapp_coexistence import extract_whatsapp_message_body
+
+    company = request.user.company
+    gate = _integration_gate(company, "whatsapp")
+    if not gate["enabled"]:
+        return error_response(gate["message"], code="integration_disabled", status_code=403)
+
+    from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
+
+    require_monthly_usage(
+        company,
+        "monthly_whatsapp_messages",
+        requested_delta=1,
+        message="You have reached your monthly WhatsApp messages limit. Please upgrade your plan.",
+        error_key="plan_usage_monthly_whatsapp_exceeded",
+    )
+
+    to = request.data.get('to')
+    client_id = request.data.get('client_id') or request.data.get('client')
+    phone_number_id = request.data.get('phone_number_id') or request.data.get('whatsapp_account_id')
+    name = (request.data.get('name') or '').strip()[:255]
+    address = (request.data.get('address') or '').strip()[:512]
+
+    try:
+        lat = Decimal(str(request.data.get('latitude')))
+        lng = Decimal(str(request.data.get('longitude')))
+    except (InvalidOperation, TypeError, ValueError):
+        return error_response('latitude and longitude are required', code='bad_request')
+
+    if not (-90 <= float(lat) <= 90) or not (-180 <= float(lng) <= 180):
+        return error_response('Invalid latitude or longitude', code='bad_request')
+
+    if not to:
+        return error_response('to is required', code='bad_request')
+
+    to, phone_number_id = _resolve_outbound_whatsapp_routing(
+        company, client_id, to, phone_number_id
+    )
+    if not to or not to.isdigit():
+        return error_response('Invalid "to" phone number', code='bad_request')
+
+    from integrations.whatsapp_access import (
+        require_client_whatsapp_access,
+        resolve_accessible_client_by_phone,
+        user_is_whatsapp_staff_scoped,
+    )
+
+    access_client = None
+    if client_id is not None:
+        try:
+            access_client = company.clients.get(id=int(client_id))
+        except Exception:
+            access_client = None
+        if access_client is None:
+            return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
+        denied = require_client_whatsapp_access(request.user, access_client)
+        if denied:
+            return error_response('Contact not found', code=denied, status_code=404)
+    else:
+        access_client, err = resolve_accessible_client_by_phone(request.user, to)
+        if err:
+            return error_response('Contact not found', code=err, status_code=404)
+        if access_client is None and user_is_whatsapp_staff_scoped(request.user):
+            return error_response(
+                'Contact not found',
+                code='whatsapp_contact_not_found',
+                status_code=404,
+            )
+
+    wa_account, wa_err = resolve_whatsapp_account_for_api(company, phone_number_id)
+    if not wa_account:
+        if wa_err == 'whatsapp_phone_numbers_not_synced':
+            return error_response(
+                'WhatsApp is connected but your phone number could not be loaded from Meta. '
+                'Disconnect and reconnect the account, or check Meta permissions '
+                '(whatsapp_business_management, whatsapp_business_messaging).',
+                code=wa_err,
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        return error_response(
+            'No connected WhatsApp number for this company',
+            code=wa_err or 'no_connected_whatsapp_number',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    access_token = wa_account.get_access_token()
+    if not access_token:
+        return error_response(
+            'WhatsApp account has no access token',
+            code='whatsapp_no_access_token',
+        )
+
+    location_obj = {
+        "latitude": float(lat),
+        "longitude": float(lng),
+    }
+    if name:
+        location_obj["name"] = name
+    if address:
+        location_obj["address"] = address
+
+    url = f"{META_GRAPH_API_BASE_URL}/{wa_account.phone_number_id}/messages"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "location",
+        "location": location_obj,
+    }
+    redacted_to = _redact_phone_e164(to)
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+    except requests.RequestException as e:
+        logger.warning(
+            "WhatsApp send-location request error: phone_number_id=%s to=%s error=%s",
+            wa_account.phone_number_id,
+            redacted_to,
+            e,
+        )
+        return error_response(
+            "WhatsApp API request failed.",
+            code="bad_request",
+            details={"error": str(e)},
+        )
+
+    graph_status = resp.status_code
+    if graph_status >= 400:
+        try:
+            err_body = resp.json()
+        except Exception:
+            err_body = {'error': getattr(resp, 'text', '') or str(resp)}
+        if isinstance(err_body, dict):
+            err_body['graph_http_status'] = graph_status
+        logger.warning(
+            "WhatsApp send-location failed: graph_status=%s phone_number_id=%s to=%s body=%s",
+            graph_status,
+            wa_account.phone_number_id,
+            redacted_to,
+            err_body,
+        )
+        return error_response(
+            "WhatsApp API request failed.",
+            code=_api_code_from_graph_error(err_body if isinstance(err_body, dict) else {}),
+            details=err_body if isinstance(err_body, dict) else {"error": str(err_body)},
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return error_response(
+            "WhatsApp API returned invalid JSON.",
+            code="bad_request",
+            details={"graph_http_status": graph_status},
+        )
+
+    wam_id = (data.get('messages') or [{}])[0].get('id') if isinstance(data.get('messages'), list) else None
+    increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
+
+    if wa_account.integration_account_id:
+        IntegrationLog.objects.create(
+            account_id=wa_account.integration_account_id,
+            action='whatsapp_location_sent',
+            status='success',
+            message=f'Location sent to {to}',
+            response_data=data,
+        )
+
+    preview_body = extract_whatsapp_message_body(
+        {"type": "location", "location": location_obj}
+    ) or "[location message]"
+
+    client = _resolve_whatsapp_client(
+        company,
+        client_id,
+        to,
+        integration_account=wa_account.integration_account,
+        create_if_missing=True,
+    )
+    serialized = None
+    if client:
+        try:
+            row = LeadWhatsAppMessage.objects.create(
+                client=client,
+                phone_number=to,
+                body=preview_body[:65535],
+                direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+                whatsapp_message_id=wam_id,
+                phone_number_id=wa_account.phone_number_id,
+                delivery_status='sent',
+                created_by=request.user,
+                attachment_kind=LeadWhatsAppMessage.AttachmentKind.LOCATION,
+                location_latitude=lat,
+                location_longitude=lng,
+                location_name=name,
+                location_address=address,
+            )
+            serialized = LeadWhatsAppMessageSerializer(row, context={'request': request}).data
+        except Exception:
+            logger.exception("Failed to persist outbound WhatsApp location client_id=%s", client.id)
+
+    out = dict(data) if isinstance(data, dict) else {'graph': data}
+    if serialized:
+        out['message'] = serialized
+    return success_response(data=out)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_message_attachment(request, pk):

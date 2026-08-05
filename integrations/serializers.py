@@ -429,6 +429,10 @@ class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
             'attachment_url',
             'is_voice_note',
             'meta_media_id',
+            'location_latitude',
+            'location_longitude',
+            'location_name',
+            'location_address',
         ]
         read_only_fields = [
             'id',
@@ -449,6 +453,10 @@ class LeadWhatsAppMessageSerializer(serializers.ModelSerializer):
             'attachment_url',
             'is_voice_note',
             'meta_media_id',
+            'location_latitude',
+            'location_longitude',
+            'location_name',
+            'location_address',
         ]
 
     def get_created_by_username(self, obj):

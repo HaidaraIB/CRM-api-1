@@ -726,6 +726,8 @@ def _meta_button_to_crm(btn: dict):
         return {'type': 'url', 'button_text': text, 'url': (btn.get('url') or '')[:2000]}
     if btype in ('PHONE_NUMBER', 'CALL'):
         return {'type': 'phone', 'button_text': text, 'phone': (btn.get('phone_number') or '')[:20]}
+    if btype in ('CALL_PERMISSION_REQUEST', 'VOICE_CALL'):
+        return {'type': 'call_permission_request', 'button_text': text or 'Call permission'}
     return None
 
 
@@ -736,6 +738,7 @@ def _parse_meta_template_components(components):
     header_text = ''
     footer = ''
     buttons = []
+    has_call_permission_request = False
     for comp in components or []:
         if not isinstance(comp, dict):
             continue
@@ -757,11 +760,18 @@ def _parse_meta_template_components(components):
                 header_type = 'location'
         elif ctype == 'FOOTER':
             footer = comp.get('text') or ''
+        elif ctype == 'CALL_PERMISSION_REQUEST':
+            has_call_permission_request = True
         elif ctype == 'BUTTONS':
             for btn in comp.get('buttons') or []:
                 mapped = _meta_button_to_crm(btn) if isinstance(btn, dict) else None
                 if mapped:
                     buttons.append(mapped)
+    if has_call_permission_request and not any(
+        isinstance(b, dict) and (b.get('type') or '') == 'call_permission_request'
+        for b in buttons
+    ):
+        buttons.append({'type': 'call_permission_request', 'button_text': 'Call permission'})
     return body, header_type, header_text, footer, buttons
 
 
@@ -884,9 +894,19 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         footer = (getattr(template, 'footer', None) or '').strip()
         if footer:
             components.append({'type': 'FOOTER', 'text': footer[:60]})
-        # BUTTONS (optional): phone -> CALL, url -> URL, reply -> QUICK_REPLY
+        # BUTTONS or call_permission_request (Meta: CPR cannot combine with other interactive components)
         buttons_data = getattr(template, 'buttons', None) or []
-        if isinstance(buttons_data, list) and buttons_data:
+        has_cpr = False
+        if isinstance(buttons_data, list):
+            has_cpr = any(
+                isinstance(b, dict)
+                and (b.get('type') or '').lower().replace(' ', '_')
+                in ('call_permission_request', 'call_permission')
+                for b in buttons_data
+            )
+        if has_cpr:
+            components.append({'type': 'CALL_PERMISSION_REQUEST'})
+        elif isinstance(buttons_data, list) and buttons_data:
             meta_buttons = []
             for b in buttons_data[:10]:  # Meta allows up to 10 buttons
                 if not isinstance(b, dict):

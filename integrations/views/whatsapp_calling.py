@@ -25,12 +25,14 @@ from integrations.services.whatsapp_calling import (
     call_permission_allows_start,
     enable_calling_on_account,
     ensure_client_call_for_whatsapp_call,
+    find_call_permission_template,
     get_call_permissions,
     get_wa_playback_url,
     graph_call_action,
     mark_call_answered,
     mark_call_rejected,
     send_call_permission_request,
+    send_call_permission_request_interactive,
     store_call_recording,
     stream_wa_recording,
     verify_wa_playback_token,
@@ -525,6 +527,7 @@ def whatsapp_call_permission_request(request):
     template_id = request.data.get("template_id")
     template_name = (request.data.get("template_name") or "").strip()
     language = (request.data.get("language") or "en").strip() or "en"
+    body_text = (request.data.get("body") or request.data.get("body_text") or "").strip()
     account_id = request.data.get("whatsapp_account_id")
 
     if not to:
@@ -534,25 +537,94 @@ def whatsapp_call_permission_request(request):
     if not wa:
         return error_response(err or "No connected WhatsApp account", status_code=400)
 
+    company = request.user.company
+    mode = "template"
+    resolved_template_id = None
+
     if template_id:
-        tmpl = MessageTemplate.objects.filter(
-            company=request.user.company, pk=template_id
-        ).first()
+        tmpl = MessageTemplate.objects.filter(company=company, pk=template_id).first()
         if not tmpl:
             return error_response("Template not found", status_code=404)
-        template_name = tmpl.meta_template_name or tmpl.name
-        language = tmpl.language or language
+        from integrations.views.templates_whatsapp import meta_slug_template_name
 
-    if not template_name:
+        template_name = meta_slug_template_name(tmpl.name, tmpl.id)
+        language = (tmpl.language or language or "en").strip() or "en"
+        resolved_template_id = tmpl.id
+    elif not template_name:
+        # Auto-resolve: open session → free-form interactive; else approved CPR template.
+        from datetime import timedelta
+
+        from django.db.models import Max, Q
+
+        from integrations.models import LeadWhatsAppMessage
+        from integrations.services.phone_match import phone_match_keys
+
+        to_digits = "".join(c for c in to if c.isdigit())
+        keys = phone_match_keys(to_digits) if to_digits else []
+        phone_q = Q()
+        for k in keys:
+            if len(k) >= 7:
+                phone_q |= Q(phone_number=k) | Q(phone_number__endswith=k[-10:])
+        msg_filter = Q(
+            client__company=company,
+            direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+        )
+        if phone_q:
+            msg_filter &= phone_q
+        else:
+            msg_filter &= Q(pk__in=[])
+        last_inbound = (
+            LeadWhatsAppMessage.objects.filter(msg_filter).aggregate(m=Max("created_at"))["m"]
+        )
+        in_session = bool(
+            last_inbound and timezone.now() < last_inbound + timedelta(hours=24)
+        )
+
+        if in_session:
+            mode = "interactive"
+        else:
+            tmpl = find_call_permission_template(company)
+            if not tmpl:
+                return error_response(
+                    "No approved WhatsApp call permission template found. "
+                    "Create a UTILITY/MARKETING template with a call permission request "
+                    "in Meta (or Template Management), sync it, then try again. "
+                    "If the contact messaged you recently, open the chat and retry — "
+                    "a free-form permission request can be sent inside the 24h window.",
+                    status_code=400,
+                    code="whatsapp_call_permission_template_missing",
+                )
+            from integrations.views.templates_whatsapp import meta_slug_template_name
+
+            template_name = meta_slug_template_name(tmpl.name, tmpl.id)
+            language = (tmpl.language or language or "en").strip() or "en"
+            resolved_template_id = tmpl.id
+
+    if mode != "interactive" and not template_name:
         return validation_error_response({"template_name": ["Required"]})
 
     try:
-        body = send_call_permission_request(
-            wa, to=to, template_name=template_name, language_code=language
-        )
+        if mode == "interactive":
+            body = send_call_permission_request_interactive(
+                wa,
+                to=to,
+                body_text=body_text
+                or "We would like to call you on WhatsApp. Please allow calls from our business.",
+            )
+        else:
+            body = send_call_permission_request(
+                wa, to=to, template_name=template_name, language_code=language
+            )
     except WhatsAppCallingError as exc:
         return _calling_error_response(exc)
-    return success_response({"graph": body})
+    return success_response(
+        {
+            "graph": body,
+            "mode": mode,
+            "template_id": resolved_template_id,
+            "template_name": template_name or None,
+        }
+    )
 
 
 @api_view(["GET"])

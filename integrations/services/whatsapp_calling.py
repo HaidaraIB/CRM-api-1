@@ -214,19 +214,98 @@ def send_call_permission_request(
     to: str,
     template_name: str,
     language_code: str = "en",
+    components: list | None = None,
 ) -> dict:
     """Send a Meta call_permission_request template message."""
     to_digits = "".join(c for c in to if c.isdigit())
+    template_block: dict[str, Any] = {
+        "name": template_name,
+        "language": {"code": language_code},
+    }
+    if components:
+        template_block["components"] = components
     payload = {
         "messaging_product": "whatsapp",
         "to": to_digits,
         "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {"code": language_code},
-        },
+        "template": template_block,
     }
     return _graph_post(account, f"{account.phone_number_id}/messages", payload)
+
+
+def send_call_permission_request_interactive(
+    account: WhatsAppAccount,
+    *,
+    to: str,
+    body_text: str | None = None,
+) -> dict:
+    """
+    Free-form interactive call permission request (requires open customer service window).
+    """
+    to_digits = "".join(c for c in to if c.isdigit())
+    interactive: dict[str, Any] = {
+        "type": "call_permission_request",
+        "action": {"name": "call_permission_request"},
+    }
+    text = (body_text or "").strip()
+    if text:
+        interactive["body"] = {"text": text[:1024]}
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_digits,
+        "type": "interactive",
+        "interactive": interactive,
+    }
+    return _graph_post(account, f"{account.phone_number_id}/messages", payload)
+
+
+def template_has_call_permission_request(template) -> bool:
+    """True if CRM template includes Meta call_permission_request (buttons or name heuristic)."""
+    buttons = getattr(template, "buttons", None) or []
+    if isinstance(buttons, list):
+        for btn in buttons:
+            if not isinstance(btn, dict):
+                continue
+            btype = (btn.get("type") or "").lower().replace(" ", "_")
+            if btype in ("call_permission_request", "call_permission"):
+                return True
+    name = (getattr(template, "name", None) or "").lower()
+    return "call_permission" in name
+
+
+def find_call_permission_template(company):
+    """
+    Pick an APPROVED WhatsApp template suitable for call permission requests.
+    Prefers templates with an explicit call_permission_request marker and no body vars.
+    """
+    from integrations.models import MessageTemplate
+    from integrations.views.templates_whatsapp import count_template_body_placeholders
+
+    qs = MessageTemplate.objects.filter(
+        company=company,
+        channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+        meta_status__iexact="APPROVED",
+    ).order_by("-updated_at")
+
+    marked: list = []
+    heuristic: list = []
+    for tmpl in qs:
+        if template_has_call_permission_request(tmpl):
+            if count_template_body_placeholders(tmpl.content or "") == 0:
+                marked.append(tmpl)
+            else:
+                heuristic.append(tmpl)
+        elif "call_permission" in (tmpl.name or "").lower():
+            if count_template_body_placeholders(tmpl.content or "") == 0:
+                heuristic.append(tmpl)
+
+    if marked:
+        return marked[0]
+    if heuristic:
+        # Prefer zero-placeholder heuristic hits already collected; else any marked-with-vars
+        return heuristic[0]
+    return None
 
 
 def _parse_ts(value) -> Optional[datetime]:

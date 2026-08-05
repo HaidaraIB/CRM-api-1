@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 
 from crm.models import Client, ClientCall, ClientCallSource
 from integrations.models import (
+    IntegrationAccount,
     WhatsAppAccount,
     WhatsAppCall,
     WhatsAppCallDirection,
@@ -19,6 +20,14 @@ from integrations.services.whatsapp_calling import process_calls_webhook_value
 
 @pytest.fixture
 def wa_account(company):
+    account = IntegrationAccount.objects.create(
+        company=company,
+        platform="whatsapp",
+        name="WA Calling Test",
+        status="connected",
+    )
+    account.set_access_token("test-wa-calling-token")
+    account.save(update_fields=["access_token"])
     return WhatsAppAccount.objects.create(
         company=company,
         waba_id="waba1",
@@ -143,3 +152,65 @@ def test_recording_play_rejects_bad_token(company, wa_account):
     url = reverse("whatsapp_call_recording_play", kwargs={"pk": call.id})
     res = client_api.get(url, {"token": "not-a-valid-token"})
     assert res.status_code == 403
+
+
+def test_parse_meta_template_preserves_call_permission_request():
+    from integrations.views.templates_whatsapp import _parse_meta_template_components
+
+    body, _ht, _htext, _footer, buttons = _parse_meta_template_components(
+        [
+            {"type": "BODY", "text": "May we call you?"},
+            {"type": "CALL_PERMISSION_REQUEST"},
+        ]
+    )
+    assert body == "May we call you?"
+    assert any(
+        isinstance(b, dict) and b.get("type") == "call_permission_request" for b in buttons
+    )
+
+
+@pytest.mark.django_db
+def test_find_call_permission_template_prefers_marked_approved(company):
+    from integrations.models import MessageTemplate
+    from integrations.services.whatsapp_calling import find_call_permission_template
+
+    MessageTemplate.objects.create(
+        company=company,
+        name="plain_utility",
+        channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+        content="Hello",
+        category=MessageTemplate.CATEGORY_UTILITY,
+        language="en",
+        buttons=[],
+        meta_status="APPROVED",
+    )
+    cpr = MessageTemplate.objects.create(
+        company=company,
+        name="request_a_call",
+        channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+        content="Please allow us to call you.",
+        category=MessageTemplate.CATEGORY_UTILITY,
+        language="en",
+        buttons=[{"type": "call_permission_request", "button_text": "Call permission"}],
+        meta_status="APPROVED",
+    )
+    found = find_call_permission_template(company)
+    assert found is not None
+    assert found.id == cpr.id
+
+
+@pytest.mark.django_db
+def test_permission_request_missing_template_returns_code(
+    company, wa_account, admin_user, plan, subscription
+):
+    plan.features = {**(plan.features or {}), "integration_whatsapp": True}
+    plan.save(update_fields=["features"])
+
+    client_api = APIClient()
+    client_api.force_authenticate(user=admin_user)
+    url = reverse("whatsapp_call_permission_request")
+    res = client_api.post(url, {"to": "15551234567"}, format="json")
+    assert res.status_code == 400
+    body = res.json()
+    err = body.get("error") or {}
+    assert err.get("code") == "whatsapp_call_permission_template_missing"

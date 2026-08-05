@@ -345,6 +345,7 @@ def process_whatsapp_message(message, phone_number_id):
             return
 
         from datetime import datetime, timezone as dt_timezone
+        from integrations.services.whatsapp_coexistence import apply_location_fields_to_message
 
         row = LeadWhatsAppMessage(
             client=client,
@@ -355,6 +356,7 @@ def process_whatsapp_message(message, phone_number_id):
             phone_number_id=str(phone_number_id) if phone_number_id else None,
             is_read=False,
         )
+        apply_location_fields_to_message(row, message)
         access_token = wa_account.get_access_token()
         if access_token and extract_meta_media_info(message):
             apply_meta_media_to_message(row, message, access_token=access_token)
@@ -638,6 +640,7 @@ def process_history_sync(value, waba_id=None):
     )
     from integrations.services.whatsapp_coexistence import (
         HISTORY_NOT_SHARED_ERROR_CODE,
+        apply_location_fields_to_message,
         digits_only,
         extract_whatsapp_message_body,
     )
@@ -786,6 +789,7 @@ def process_history_sync(value, waba_id=None):
                     delivery_status=(message.get('history_context') or {}).get('status'),
                     is_read=True,
                 )
+                apply_location_fields_to_message(row, message)
                 access_token = wa_account.get_access_token()
                 if access_token and extract_meta_media_info(message):
                     apply_meta_media_to_message(row, message, access_token=access_token)
@@ -833,7 +837,10 @@ def process_smb_message_echoes(value, waba_id=None):
         ensure_client_for_whatsapp_phone,
         touch_client_last_contacted,
     )
-    from integrations.services.whatsapp_coexistence import extract_whatsapp_message_body
+    from integrations.services.whatsapp_coexistence import (
+        apply_location_fields_to_message,
+        extract_whatsapp_message_body,
+    )
     from integrations.services.whatsapp_media import (
         apply_meta_media_to_message,
         extract_meta_media_info,
@@ -879,6 +886,7 @@ def process_smb_message_echoes(value, waba_id=None):
             phone_number_id=str(phone_number_id) if phone_number_id else None,
             delivery_status='sent',
         )
+        apply_location_fields_to_message(row, echo)
         access_token = wa_account.get_access_token()
         if access_token and extract_meta_media_info(echo):
             apply_meta_media_to_message(row, echo, access_token=access_token)

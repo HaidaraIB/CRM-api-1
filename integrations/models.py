@@ -893,6 +893,7 @@ class LeadWhatsAppMessage(models.Model):
         VIDEO = "video", "Video"
         AUDIO = "audio", "Audio"
         DOCUMENT = "document", "Document"
+        LOCATION = "location", "Location"
 
     attachment = models.FileField(
         upload_to="whatsapp_chat/%Y/%m/%d/",
@@ -927,6 +928,22 @@ class LeadWhatsAppMessage(models.Model):
         null=True,
         help_text="Meta media id used for Cloud API send/download.",
     )
+    location_latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        blank=True,
+        null=True,
+        help_text="WhatsApp location message latitude.",
+    )
+    location_longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        blank=True,
+        null=True,
+        help_text="WhatsApp location message longitude.",
+    )
+    location_name = models.CharField(max_length=255, blank=True, default="")
+    location_address = models.CharField(max_length=512, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

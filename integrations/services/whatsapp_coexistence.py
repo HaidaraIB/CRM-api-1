@@ -296,8 +296,11 @@ def extract_whatsapp_message_body(message: dict) -> str:
         return f"[{msg_type} message]"
     if msg_type == "location":
         loc = message.get("location") or {}
-        name = loc.get("name") or loc.get("address") or ""
-        return name or "[location message]"
+        name = (loc.get("name") or "").strip()
+        address = (loc.get("address") or "").strip()
+        if name and address:
+            return f"{name} — {address}"
+        return name or address or "[location message]"
     if msg_type == "contacts":
         return "[contacts message]"
     if msg_type == "interactive":
@@ -312,6 +315,35 @@ def extract_whatsapp_message_body(message: dict) -> str:
     if msg_type:
         return f"[{msg_type} message]"
     return ""
+
+
+def apply_location_fields_to_message(row, message: dict) -> bool:
+    """
+    If message is type=location, set location_* fields and attachment_kind on row.
+    Returns True when location was applied.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    if not isinstance(message, dict):
+        return False
+    if (message.get("type") or "").strip() != "location":
+        return False
+    loc = message.get("location") or {}
+    if not isinstance(loc, dict):
+        return False
+    try:
+        lat = Decimal(str(loc.get("latitude")))
+        lng = Decimal(str(loc.get("longitude")))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    row.location_latitude = lat
+    row.location_longitude = lng
+    row.location_name = (loc.get("name") or "")[:255]
+    row.location_address = (loc.get("address") or "")[:512]
+    row.attachment_kind = "location"
+    if not (row.body or "").strip():
+        row.body = extract_whatsapp_message_body(message) or "[location message]"
+    return True
 
 
 def digits_only(value: Optional[str]) -> str:
