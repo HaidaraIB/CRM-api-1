@@ -21,7 +21,7 @@ from django.http import Http404
 from django.core.exceptions import PermissionDenied
 
 from crm_saas_api.responses import error_response
-from accounts.exceptions import LoginVerificationRequired
+from accounts.exceptions import AccountLocked, LoginVerificationRequired
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,17 @@ def custom_exception_handler(exc, context):
             status_code=exc.status_code,
             verify_email_url=exc.verify_email_url or None,
             verify_phone_url=exc.verify_phone_url or None,
+        )
+
+    if isinstance(exc, AccountLocked):
+        details = {"retry_after_seconds": exc.retry_after_seconds}
+        if exc.lockout_until:
+            details["lockout_until"] = exc.lockout_until
+        return error_response(
+            str(exc.detail),
+            code=exc.business_code,
+            status_code=exc.status_code,
+            details=details,
         )
 
     response = exception_handler(exc, context)

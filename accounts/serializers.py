@@ -500,9 +500,32 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not user:
             # Use original username for parent validation (will raise error if invalid)
             attrs['username'] = username_or_email
-        
-        # Validate using parent class
-        data = super().validate(attrs)
+
+        from rest_framework.exceptions import AuthenticationFailed
+
+        from .login_lockout_policy import (
+            clear_login_failures,
+            get_login_lockout_settings,
+            is_account_locked,
+            raise_account_locked,
+            record_failed_login,
+        )
+
+        lockout_settings = get_login_lockout_settings()
+        if lockout_settings["enabled"] and user and is_account_locked(user):
+            raise_account_locked(user)
+
+        # Validate using parent class; record failed password attempts on known users
+        try:
+            data = super().validate(attrs)
+        except AuthenticationFailed:
+            if lockout_settings["enabled"] and user:
+                if record_failed_login(user):
+                    raise_account_locked(user)
+            raise
+
+        clear_login_failures(self.user)
+
         request = self.context.get("request")
         from .exceptions import LoginVerificationRequired
         from .login_verification_policy import login_verification_failure

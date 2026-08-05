@@ -136,6 +136,19 @@ class SystemSettingsAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Login lockout",
+            {
+                "description": (
+                    "Temporarily lock accounts after consecutive failed password attempts at login."
+                ),
+                "fields": (
+                    "login_lockout_enabled",
+                    "login_max_failed_attempts",
+                    "login_lockout_duration_minutes",
+                ),
+            },
+        ),
+        (
             "Mobile app — forced update",
             {
                 "description": "Leave minimum version empty for an OS to allow any version. "

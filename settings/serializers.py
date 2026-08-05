@@ -440,10 +440,23 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
             "mobile_store_url_ios",
             "integration_policies",
             "feature_policies",
+            "login_lockout_enabled",
+            "login_max_failed_attempts",
+            "login_lockout_duration_minutes",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_login_max_failed_attempts(self, value):
+        if value is not None and value < 1:
+            raise serializers.ValidationError("Must be at least 1.")
+        return value
+
+    def validate_login_lockout_duration_minutes(self, value):
+        if value is not None and value < 1:
+            raise serializers.ValidationError("Must be at least 1.")
+        return value
 
     def validate_integration_policies(self, value):
         if value in (None, ""):

@@ -62,6 +62,15 @@ class User(AbstractUser):
         default=True,
         help_text="When enabled, company owner must complete email 2FA at login (unless trusted device).",
     )
+    failed_login_attempts = models.PositiveIntegerField(
+        default=0,
+        help_text="Consecutive failed password attempts at login; reset on success or lockout.",
+    )
+    lockout_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When set in the future, login is rejected until this time (temporary lockout).",
+    )
     can_delete_clients = models.BooleanField(
         default=False,
         help_text="When True, employee/supervisor may delete clients (customers).",

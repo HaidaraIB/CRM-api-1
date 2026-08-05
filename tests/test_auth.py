@@ -18,6 +18,7 @@ from tests.platform_auth_settings_helpers import (
     reset_platform_auth_settings,
     set_registration_email_verification_required,
     set_registration_phone_otp_required,
+    set_login_lockout_policy,
 )
 
 User = get_user_model()
@@ -487,3 +488,174 @@ def test_users_list_includes_online_presence(api_client):
     target = next(item for item in results if item["id"] == online_employee.id)
     assert target["is_online"] is True
     assert target["last_seen_source"] == "web"
+
+
+def _error_code(response) -> str:
+    data = response.data
+    if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
+        return str(data["error"].get("code") or "")
+    if isinstance(data, dict):
+        return str(data.get("code") or "")
+    return ""
+
+
+def _error_details(response) -> dict:
+    data = response.data
+    if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
+        details = data["error"].get("details") or {}
+        return details if isinstance(details, dict) else {}
+    return {}
+
+
+@pytest.fixture
+def high_auth_throttle(settings):
+    """Avoid AuthRateThrottle (5/min) interfering with lockout attempt loops."""
+    rates = dict(settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_RATES") or {})
+    rates["auth"] = "1000/minute"
+    settings.REST_FRAMEWORK = {
+        **settings.REST_FRAMEWORK,
+        "DEFAULT_THROTTLE_RATES": rates,
+    }
+
+
+@pytest.mark.django_db
+def test_login_lockout_after_max_failed_attempts(api_client, high_auth_throttle):
+    set_login_lockout_policy(enabled=True, max_attempts=3, duration_minutes=15)
+    user = User.objects.create_user(
+        username="lockout_user",
+        email="lockout_user@example.com",
+        password="securepassword123",
+        role="employee",
+    )
+    _with_active_subscription(user, make_owner=False)
+    url = reverse("token_obtain_pair")
+
+    for _ in range(2):
+        cache.clear()
+        response = api_client.post(
+            url, {"username": "lockout_user", "password": "wrong"}, format="json"
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    cache.clear()
+    response = api_client.post(
+        url, {"username": "lockout_user", "password": "wrong"}, format="json"
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert _error_code(response) == "ACCOUNT_LOCKED"
+    details = _error_details(response)
+    assert int(details.get("retry_after_seconds") or 0) > 0
+
+    user.refresh_from_db()
+    assert user.lockout_until is not None
+    assert user.failed_login_attempts == 0
+
+
+@pytest.mark.django_db
+def test_login_lockout_rejects_correct_password_until_expiry(api_client, high_auth_throttle):
+    set_login_lockout_policy(enabled=True, max_attempts=2, duration_minutes=30)
+    user = User.objects.create_user(
+        username="lockout_correct",
+        email="lockout_correct@example.com",
+        password="securepassword123",
+        role="employee",
+    )
+    _with_active_subscription(user, make_owner=False)
+    url = reverse("token_obtain_pair")
+
+    for _ in range(2):
+        cache.clear()
+        api_client.post(url, {"username": "lockout_correct", "password": "wrong"}, format="json")
+
+    cache.clear()
+    response = api_client.post(
+        url,
+        {"username": "lockout_correct", "password": "securepassword123"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert _error_code(response) == "ACCOUNT_LOCKED"
+
+
+@pytest.mark.django_db
+def test_login_succeeds_after_lockout_expires(api_client, high_auth_throttle):
+    set_login_lockout_policy(enabled=True, max_attempts=2, duration_minutes=15)
+    user = User.objects.create_user(
+        username="lockout_expire",
+        email="lockout_expire@example.com",
+        password="securepassword123",
+        role="employee",
+    )
+    _with_active_subscription(user, make_owner=False)
+    url = reverse("token_obtain_pair")
+
+    for _ in range(2):
+        cache.clear()
+        api_client.post(url, {"username": "lockout_expire", "password": "wrong"}, format="json")
+
+    user.refresh_from_db()
+    user.lockout_until = timezone.now() - timedelta(seconds=5)
+    user.save(update_fields=["lockout_until"])
+
+    cache.clear()
+    response = api_client.post(
+        url,
+        {"username": "lockout_expire", "password": "securepassword123"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    user.refresh_from_db()
+    assert user.failed_login_attempts == 0
+    assert user.lockout_until is None
+
+
+@pytest.mark.django_db
+def test_login_lockout_disabled_allows_many_failures(api_client, high_auth_throttle):
+    set_login_lockout_policy(enabled=False, max_attempts=2, duration_minutes=15)
+    user = User.objects.create_user(
+        username="lockout_off",
+        email="lockout_off@example.com",
+        password="securepassword123",
+        role="employee",
+    )
+    _with_active_subscription(user, make_owner=False)
+    url = reverse("token_obtain_pair")
+
+    for _ in range(5):
+        cache.clear()
+        response = api_client.post(
+            url, {"username": "lockout_off", "password": "wrong"}, format="json"
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    user.refresh_from_db()
+    assert user.lockout_until is None
+    assert user.failed_login_attempts == 0
+
+
+@pytest.mark.django_db
+def test_login_lockout_honors_configured_max_attempts(api_client, high_auth_throttle):
+    set_login_lockout_policy(enabled=True, max_attempts=4, duration_minutes=10)
+    user = User.objects.create_user(
+        username="lockout_cfg",
+        email="lockout_cfg@example.com",
+        password="securepassword123",
+        role="employee",
+    )
+    _with_active_subscription(user, make_owner=False)
+    url = reverse("token_obtain_pair")
+
+    for _ in range(3):
+        cache.clear()
+        response = api_client.post(
+            url, {"username": "lockout_cfg", "password": "wrong"}, format="json"
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    cache.clear()
+    response = api_client.post(
+        url, {"username": "lockout_cfg", "password": "wrong"}, format="json"
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert _error_code(response) == "ACCOUNT_LOCKED"

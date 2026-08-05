@@ -416,6 +416,19 @@ class SystemSettings(models.Model):
         help_text="Require email verification before company registration.",
     )
 
+    login_lockout_enabled = models.BooleanField(
+        default=True,
+        help_text="Temporarily lock accounts after too many failed login password attempts.",
+    )
+    login_max_failed_attempts = models.PositiveIntegerField(
+        default=5,
+        help_text="Failed login attempts before temporary lockout (when enabled).",
+    )
+    login_lockout_duration_minutes = models.PositiveIntegerField(
+        default=15,
+        help_text="How long an account stays locked after exceeding failed attempts.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

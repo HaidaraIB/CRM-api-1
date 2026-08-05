@@ -32,6 +32,14 @@ def exclude_tenant_chat_push_notifications(queryset):
     return queryset.exclude(data__has_key="kind", data__kind="tenant_chat")
 
 
+def exclude_inbox_noise_notifications(queryset):
+    """
+    Hide chat-channel noise from the bell inbox (handled in Chats / FCM instead).
+    """
+    qs = exclude_tenant_chat_push_notifications(queryset)
+    return qs.exclude(type=NotificationType.WHATSAPP_MESSAGE_RECEIVED)
+
+
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for viewing and managing user notifications
@@ -55,7 +63,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         if notification_type:
             queryset = queryset.filter(type=notification_type)
 
-        return exclude_tenant_chat_push_notifications(queryset)
+        return exclude_inbox_noise_notifications(queryset)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -81,7 +89,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
         """Mark all notifications as read (only non soft-deleted)"""
-        count = exclude_tenant_chat_push_notifications(
+        count = exclude_inbox_noise_notifications(
             Notification.objects.filter(
                 user=request.user,
                 read=False,
@@ -97,7 +105,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def unread_count(self, request):
         """Get count of unread notifications (exclude soft-deleted)"""
-        count = exclude_tenant_chat_push_notifications(
+        count = exclude_inbox_noise_notifications(
             Notification.objects.filter(
                 user=request.user,
                 read=False,
@@ -110,7 +118,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['delete'])
     def delete_all_read(self, request):
         """Soft-delete all read notifications (set deleted_at, do not remove from DB)"""
-        qs = exclude_tenant_chat_push_notifications(
+        qs = exclude_inbox_noise_notifications(
             Notification.objects.filter(
                 user=request.user,
                 read=True,
@@ -132,7 +140,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         Optional query/body ``type`` limits deletion to that notification type
         (e.g. ``pbx_incoming_call``). Comma-separated types are allowed.
         """
-        qs = exclude_tenant_chat_push_notifications(
+        qs = exclude_inbox_noise_notifications(
             Notification.objects.filter(
                 user=request.user,
                 deleted_at__isnull=True,

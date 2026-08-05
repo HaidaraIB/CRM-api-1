@@ -35,7 +35,8 @@ def notify_whatsapp_inbound(
     message_id: str | None = None,
 ) -> None:
     """
-    Push to assigned employee (or company owner fallback) when a lead replies on WhatsApp.
+    FCM push to assigned employee (or company owner) when a lead replies on WhatsApp.
+    Does not create bell-inbox Notification rows (Chats unread + sounds cover web UX).
     Failures are logged only; webhook processing must not depend on push delivery.
     """
     try:
@@ -76,6 +77,8 @@ def notify_whatsapp_inbound(
                 body=push_body,
                 data=data,
                 lead_source="whatsapp",
+                # Chats + sounds handle the web inbox; keep FCM for mobile only.
+                skip_database_insert=True,
             )
     except Exception:
         logger.exception(
