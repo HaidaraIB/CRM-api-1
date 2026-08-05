@@ -186,8 +186,9 @@ X_FRAME_OPTIONS = "DENY"
 # File Upload Limits
 # ============================================================================
 
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+# Allow company library uploads up to the default 20 MB per-file plan cap.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024  # 25 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024  # 25 MB
 
 # ============================================================================
 # Application Definition
@@ -216,6 +217,7 @@ INSTALLED_APPS = [
     "notifications",
     "support",
     "tenant_chat",
+    "company_library",
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_q",

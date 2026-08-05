@@ -130,6 +130,7 @@ from subscriptions.views import (
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
 from tenant_chat.views import TenantChatConversationViewSet, TenantChatMessageAttachmentView
+from company_library.views import CompanyLibraryFileViewSet, CompanyLibraryFileDownloadView
 
 # Create a router and register viewsets
 router = DefaultRouter()
@@ -205,6 +206,11 @@ router.register(
     TenantChatConversationViewSet,
     basename="tenant_chat_conversation",
 )
+router.register(
+    r"company-library",
+    CompanyLibraryFileViewSet,
+    basename="company_library",
+)
 
 # --- Versioned API patterns (v1) ---
 v1_patterns = [
@@ -243,6 +249,11 @@ v1_patterns = [
         "tenant-chat/messages/<int:pk>/attachment/",
         TenantChatMessageAttachmentView.as_view(),
         name="tenant_chat_message_attachment",
+    ),
+    path(
+        "company-library/<int:pk>/download/",
+        CompanyLibraryFileDownloadView.as_view(),
+        name="company_library_download",
     ),
     path("", include(router.urls)),
     path("auth/login/", CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),

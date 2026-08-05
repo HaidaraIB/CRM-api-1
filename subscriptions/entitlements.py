@@ -12,6 +12,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from subscriptions.entitlements_catalog import (
     DEFAULT_FEATURES,
+    DEFAULT_QUOTA_LIMITS,
     DEFAULT_USAGE_LIMITS_MONTHLY,
     normalize_bool,
 )
@@ -100,7 +101,7 @@ def build_company_entitlements(
             max_employees=None,
             max_users=None,
             max_clients=None,
-            extra_limits={},
+            extra_limits=dict(DEFAULT_QUOTA_LIMITS),
             features=dict(DEFAULT_FEATURES),
             usage_limits_monthly=dict(DEFAULT_USAGE_LIMITS_MONTHLY),
         )
@@ -122,15 +123,24 @@ def build_company_entitlements(
     for k, default_val in DEFAULT_USAGE_LIMITS_MONTHLY.items():
         usage_limits[k] = _parse_unlimited_int(raw_usage.get(k)) if raw_usage.get(k) is not None else default_val
 
-    extra_limits = getattr(plan, "limits", None) or {}
+    raw_extra_limits = getattr(plan, "limits", None) or {}
+    if not isinstance(raw_extra_limits, dict):
+        raw_extra_limits = {}
 
     # Allow JSON limits to override legacy keys if explicitly provided
-    if "max_employees" in extra_limits:
-        max_employees = _parse_unlimited_int(extra_limits.get("max_employees"))
-    elif "max_users" in extra_limits:
-        max_employees = _parse_unlimited_int(extra_limits.get("max_users"))
-    if "max_clients" in extra_limits:
-        max_clients = _parse_unlimited_int(extra_limits.get("max_clients"))
+    if "max_employees" in raw_extra_limits:
+        max_employees = _parse_unlimited_int(raw_extra_limits.get("max_employees"))
+    elif "max_users" in raw_extra_limits:
+        max_employees = _parse_unlimited_int(raw_extra_limits.get("max_users"))
+    if "max_clients" in raw_extra_limits:
+        max_clients = _parse_unlimited_int(raw_extra_limits.get("max_clients"))
+
+    # Merge platform defaults for library quotas when the plan omits the key.
+    # Explicit "unlimited" / null-with-key present still resolves via _parse_unlimited_int.
+    extra_limits = dict(raw_extra_limits)
+    for key, default_val in DEFAULT_QUOTA_LIMITS.items():
+        if key not in extra_limits:
+            extra_limits[key] = default_val
 
     return CompanyEntitlements(
         plan_id=plan.id,
@@ -138,7 +148,7 @@ def build_company_entitlements(
         max_employees=max_employees,
         max_users=max_employees,
         max_clients=max_clients,
-        extra_limits=extra_limits if isinstance(extra_limits, dict) else {},
+        extra_limits=extra_limits,
         features=features,
         usage_limits_monthly=usage_limits,
     )
@@ -159,15 +169,22 @@ def require_feature(company, feature_key: str, *, message: str, error_key: str):
         )
 
 
+def resolve_quota_limit(ent: CompanyEntitlements, quota_key: str) -> Optional[int]:
+    """Resolve a quota limit from entitlements (None = unlimited)."""
+    if quota_key in {"max_employees", "max_users"}:
+        return ent.max_employees
+    if quota_key == "max_clients":
+        return ent.max_clients
+    if quota_key in ent.extra_limits:
+        return _parse_unlimited_int(ent.extra_limits.get(quota_key))
+    if quota_key in DEFAULT_QUOTA_LIMITS:
+        return DEFAULT_QUOTA_LIMITS[quota_key]
+    return None
+
+
 def require_quota(company, quota_key: str, current_count: int, requested_delta: int = 1, *, message: str, error_key: str):
     ent = build_company_entitlements(company)
-    limit = None
-    if quota_key in {"max_employees", "max_users"}:
-        limit = ent.max_employees
-    elif quota_key == "max_clients":
-        limit = ent.max_clients
-    else:
-        limit = _parse_unlimited_int(ent.extra_limits.get(quota_key))
+    limit = resolve_quota_limit(ent, quota_key)
 
     if limit is None:
         return

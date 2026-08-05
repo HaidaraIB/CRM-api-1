@@ -28,6 +28,8 @@ QUOTA_KEYS = (
     "max_users",
     "max_clients",
     "max_deals",
+    "max_storage_bytes",
+    "max_file_size_bytes",
 )
 
 # Usage limits (monthly counters)
@@ -56,6 +58,13 @@ DEFAULT_USAGE_LIMITS_MONTHLY = {
     "monthly_sms_messages": None,
     "monthly_whatsapp_messages": None,
     "monthly_notifications": None,
+}
+
+# Platform defaults when a plan omits these quota keys (unlike max_deals = unlimited).
+# Explicit "unlimited" on the plan still means no cap.
+DEFAULT_QUOTA_LIMITS = {
+    "max_file_size_bytes": 20 * 1024 * 1024,  # 20 MB
+    "max_storage_bytes": 1 * 1024 * 1024 * 1024,  # 1 GB
 }
 
 
