@@ -108,7 +108,39 @@ def test_temp_suffix_for_audio_mime():
     assert wa_media._temp_suffix_for_audio_mime("audio/mpeg", "x.mp3") == ".mp3"
 
 
-@patch("integrations.services.whatsapp_media.shutil.which", return_value=None)
-def test_convert_audio_returns_none_without_ffmpeg(mock_which):
+@patch("integrations.services.whatsapp_media._resolve_ffmpeg_binary", return_value=None)
+def test_convert_audio_returns_none_without_ffmpeg(mock_resolve):
     assert wa_media.convert_audio_to_ogg_opus("/tmp/missing.webm") is None
-    mock_which.assert_called_once_with("ffmpeg")
+    mock_resolve.assert_called_once()
+
+
+def test_resolve_ffmpeg_uses_settings_override(tmp_path, settings):
+    fake = tmp_path / "ffmpeg"
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    settings.FFMPEG_BINARY = str(fake)
+    with patch("integrations.services.whatsapp_media.shutil.which", return_value=None):
+        assert wa_media._resolve_ffmpeg_binary() == str(fake)
+
+
+def test_resolve_ffmpeg_falls_back_to_absolute_path(tmp_path):
+    fake = tmp_path / "ffmpeg"
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    with (
+        patch("integrations.services.whatsapp_media.shutil.which", return_value=None),
+        patch.object(wa_media, "_FFMPEG_FALLBACK_PATHS", (str(fake),)),
+        patch("django.conf.settings.FFMPEG_BINARY", None, create=True),
+        patch.dict("os.environ", {"FFMPEG_BINARY": ""}, clear=False),
+    ):
+        assert wa_media._resolve_ffmpeg_binary() == str(fake)
+
+
+def test_resolve_ffmpeg_returns_none_when_missing():
+    with (
+        patch("integrations.services.whatsapp_media.shutil.which", return_value=None),
+        patch.object(wa_media, "_FFMPEG_FALLBACK_PATHS", ("/no/such/ffmpeg",)),
+        patch("django.conf.settings.FFMPEG_BINARY", None, create=True),
+        patch.dict("os.environ", {"FFMPEG_BINARY": ""}, clear=False),
+    ):
+        assert wa_media._resolve_ffmpeg_binary() is None

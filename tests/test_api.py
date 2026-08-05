@@ -1044,6 +1044,9 @@ class TestDashboardSummary:
         assert body["stats"]["win_rate"] == 50
         assert body["funnel"]["won"] == 1
         assert body["funnel"]["total_leads"] == 3
+        assert body["overview"]["total"] == 3
+        assert body["overview"]["fresh"] == 1
+        assert body["overview"]["cold"] == 1
         assert len(body["week_series"]) == 7
         assert body["days"] == 7
         assert body["source"] == "all"
@@ -1052,6 +1055,68 @@ class TestDashboardSummary:
         assert "employee_presence" in body
         assert "contact_today_leads" in body
         assert len(body["contact_today_leads"]) == 1
+
+    def test_dashboard_summary_lite_overview(
+        self, authenticated_admin, company, employee_user
+    ):
+        from crm.models import Client
+        from settings.models import LeadStatus
+
+        untouched, _ = LeadStatus.objects.get_or_create(
+            company=company,
+            name="Untouched",
+            defaults={"is_active": True, "is_default": True},
+        )
+        following, _ = LeadStatus.objects.get_or_create(
+            company=company,
+            name="Following",
+            defaults={"is_active": True},
+        )
+        touched, _ = LeadStatus.objects.get_or_create(
+            company=company,
+            name="Touched",
+            defaults={"is_active": True},
+        )
+
+        Client.objects.create(
+            name="Fresh Untouched",
+            company=company,
+            priority="low",
+            type="fresh",
+            status=untouched,
+        )
+        Client.objects.create(
+            name="Cold Following",
+            company=company,
+            priority="low",
+            type="cold",
+            status=following,
+            assigned_to=employee_user,
+        )
+        Client.objects.create(
+            name="Fresh Touched",
+            company=company,
+            priority="low",
+            type="fresh",
+            status=touched,
+            assigned_to=employee_user,
+        )
+
+        response = authenticated_admin.get("/api/v1/clients/dashboard-summary/?lite=1")
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["lite"] is True
+        assert body["overview"] == {
+            "total": 3,
+            "fresh": 2,
+            "cold": 1,
+            "untouched": 1,
+            "touched": 1,
+            "following": 1,
+        }
+        assert "hot_leads" not in body
+        assert "activity_feed" not in body
+        assert "week_series" not in body
 
     def test_dashboard_summary_employee_scope(
         self, authenticated_employee, company, employee_user, admin_user

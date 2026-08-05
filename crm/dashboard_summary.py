@@ -107,6 +107,30 @@ def scoped_visit_qs(user):
     return qs.none()
 
 
+def build_leads_overview(client_qs) -> dict[str, int]:
+    """
+    Mobile home dashboard lead cards (parity with crm_mobile DashboardScreen).
+    Counts by type (fresh/cold) and status name (untouched/touched/following).
+    """
+    total = client_qs.count()
+    by_type = {
+        (row["type"] or "").lower(): row["c"]
+        for row in client_qs.values("type").annotate(c=Count("id"))
+    }
+    by_status = {
+        (row["status__name"] or "").lower(): row["c"]
+        for row in client_qs.values("status__name").annotate(c=Count("id"))
+    }
+    return {
+        "total": total,
+        "fresh": by_type.get("fresh", 0),
+        "cold": by_type.get("cold", 0),
+        "untouched": by_status.get("untouched", 0),
+        "touched": by_status.get("touched", 0),
+        "following": by_status.get("following", 0),
+    }
+
+
 def build_mission_bar(user, client_qs) -> dict[str, int]:
     """Same four fields as GET /clients/mission-bar-summary/."""
     today = timezone.localdate()
@@ -231,6 +255,7 @@ def build_dashboard_summary(
     days: int = 7,
     source: str = "all",
     daily_target: int = 5,
+    lite: bool = False,
 ) -> dict[str, Any]:
     days = days if days in VALID_DAYS else 7
     source = source if source in VALID_SOURCES else "all"
@@ -244,9 +269,27 @@ def build_dashboard_summary(
 
     client_qs = client_qs.select_related("status", "assigned_to")
     mission_bar = build_mission_bar(user, client_qs)
+    overview = build_leads_overview(client_qs)
+
+    # Mobile home only needs overview (+ mission_bar); skip heavy widgets.
+    if lite:
+        return {
+            "mission_bar": mission_bar,
+            "overview": overview,
+            "stats": {
+                "total_leads": overview["total"],
+                "contact_today": mission_bar["contact_today"],
+                "today_new_leads": mission_bar["today_new_leads"],
+                "unassigned_leads": mission_bar["unassigned_leads"],
+                "overdue_follow_ups": mission_bar["overdue_follow_ups"],
+            },
+            "lite": True,
+            "days": days,
+            "source": source,
+        }
 
     # --- Stats ---
-    total_leads = client_qs.count()
+    total_leads = overview["total"]
     today_clients = client_qs.filter(created_at__gte=today_start, created_at__lt=today_end)
     today_touched = today_clients.exclude(status__name="Untouched").count()
     today_untouched = today_clients.filter(status__name="Untouched").count()
@@ -731,6 +774,7 @@ def build_dashboard_summary(
 
     return {
         "mission_bar": mission_bar,
+        "overview": overview,
         "stats": stats,
         "week_series": week_series,
         "trend_series": {
@@ -748,4 +792,5 @@ def build_dashboard_summary(
         "contact_today_leads": contact_today_leads,
         "days": days,
         "source": source,
+        "lite": False,
     }

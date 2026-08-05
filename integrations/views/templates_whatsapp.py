@@ -835,7 +835,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         if (template.channel_type or '').lower() not in ('whatsapp', 'whatsapp_api'):
             return error_response(
                 'Only WhatsApp templates can be submitted to Meta.',
-                code='bad_request',
+                code='only_whatsapp_templates_to_meta',
             )
         company = request.user.company
         wa, err_resp = _connected_wa_or_response(company)
@@ -941,12 +941,10 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             )
         except requests.RequestException as e:
             return error_response(
-                str(e),
-                code='bad_gateway',
+                str(e) or 'Could not reach Meta to submit the template.',
+                code='meta_api_request_failed',
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
-
-    @action(detail=True, methods=['post'], url_path='clone-to-channel')
     def clone_to_channel(self, request, pk=None):
         """
         Create a counterpart template on the other channel (WhatsApp ↔ SMS).
@@ -1041,13 +1039,13 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             if fetch_err is not None:
                 return error_response(
                     'Failed to fetch templates from Meta.',
-                    code='bad_request',
+                    code='meta_templates_fetch_failed',
                     details=fetch_err,
                 )
         except requests.RequestException as e:
             return error_response(
-                str(e),
-                code='bad_gateway',
+                str(e) or 'Could not reach Meta to sync templates.',
+                code='meta_api_request_failed',
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -1222,14 +1220,14 @@ def whatsapp_limits(request):
             err_payload = data.get('error', data) if isinstance(data, dict) else {'error': resp.text}
             return error_response(
                 'Failed to fetch WhatsApp limits from Meta.',
-                code='bad_request',
+                code='whatsapp_limits_fetch_failed',
                 details=err_payload if isinstance(err_payload, dict) else {'error': str(err_payload)},
             )
         return success_response(data=data)
     except requests.RequestException as e:
         return error_response(
-            str(e),
-            code='bad_gateway',
+            str(e) or 'Could not reach Meta to fetch WhatsApp limits.',
+            code='meta_api_request_failed',
             status_code=status.HTTP_502_BAD_GATEWAY,
         )
 

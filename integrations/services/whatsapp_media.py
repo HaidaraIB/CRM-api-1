@@ -201,15 +201,57 @@ def _is_ogg_opus_mime(mime: str) -> bool:
     return "ogg" in mime_l or "opus" in mime_l
 
 
+_FFMPEG_FALLBACK_PATHS = (
+    "/usr/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+)
+
+
+def _resolve_ffmpeg_binary() -> Optional[str]:
+    """
+    Locate ffmpeg for voice-note conversion.
+
+    Order: Django setting / FFMPEG_BINARY env, PATH via shutil.which,
+    then common absolute paths (covers systemd units that only put the
+    venv on PATH).
+    """
+    configured = ""
+    try:
+        from django.conf import settings
+
+        configured = (getattr(settings, "FFMPEG_BINARY", None) or "").strip()
+    except Exception:
+        configured = (os.environ.get("FFMPEG_BINARY") or "").strip()
+    if not configured:
+        configured = (os.environ.get("FFMPEG_BINARY") or "").strip()
+    if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured
+    if configured:
+        logger.warning("FFMPEG_BINARY=%r is set but not an executable file", configured)
+
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+
+    for path in _FFMPEG_FALLBACK_PATHS:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
 def convert_audio_to_ogg_opus(src_path: str) -> Optional[str]:
     """Return path to a temp .ogg file, or None if ffmpeg is unavailable/fails."""
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _resolve_ffmpeg_binary()
     if not ffmpeg:
+        logger.warning(
+            "ffmpeg not found (PATH=%r); voice-note conversion unavailable",
+            os.environ.get("PATH", ""),
+        )
         return None
     fd, dest = tempfile.mkstemp(suffix=".ogg")
     os.close(fd)
     try:
-        subprocess.run(
+        result = subprocess.run(
             [
                 ffmpeg,
                 "-y",
@@ -227,8 +269,13 @@ def convert_audio_to_ogg_opus(src_path: str) -> Optional[str]:
         )
         if os.path.getsize(dest) > 0:
             return dest
+        stderr = (result.stderr or b"")[:500].decode("utf-8", errors="replace")
+        logger.warning("ffmpeg audio→ogg produced empty file; stderr=%s", stderr)
     except (subprocess.SubprocessError, OSError) as e:
-        logger.warning("ffmpeg audio→ogg failed: %s", e)
+        stderr = ""
+        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            stderr = e.stderr[:500].decode("utf-8", errors="replace")
+        logger.warning("ffmpeg audio→ogg failed: %s stderr=%s", e, stderr)
         try:
             os.unlink(dest)
         except OSError:

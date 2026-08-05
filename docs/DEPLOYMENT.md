@@ -61,9 +61,14 @@ sudo apt install ffmpeg -y
 # Verify ffmpeg is on PATH and Opus is available
 ffmpeg -version
 ffmpeg -encoders 2>/dev/null | grep -i opus
+which ffmpeg   # typically /usr/bin/ffmpeg
 ```
 
-After install, restart the API process so it picks up PATH:
+After install, **restart the API process**. Also ensure the systemd/supervisor `PATH` includes system bins (`/usr/bin`), not only the venv — see step 8. Optionally set an absolute override in `.env`:
+
+```bash
+FFMPEG_BINARY=/usr/bin/ffmpeg
+```
 
 ```bash
 sudo systemctl restart crm-api
@@ -245,7 +250,10 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/crm-api
-Environment="PATH=/var/www/crm-api/venv/bin"
+# Include /usr/bin so system ffmpeg is visible (venv-only PATH breaks voice notes)
+Environment="PATH=/var/www/crm-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
+# Optional absolute override if PATH still cannot see ffmpeg:
+# Environment="FFMPEG_BINARY=/usr/bin/ffmpeg"
 ExecStart=/var/www/crm-api/venv/bin/gunicorn \
     --config /var/www/crm-api/gunicorn_config.py \
     crm_saas_api.wsgi:application

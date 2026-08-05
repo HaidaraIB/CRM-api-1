@@ -248,6 +248,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             days=days,
             source=source,
             daily_target=daily_target,
+            lite=str(request.query_params.get("lite") or "").lower() in ("1", "true", "yes"),
         )
         return Response(payload)
 

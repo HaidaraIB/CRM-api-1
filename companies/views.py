@@ -16,6 +16,7 @@ from .serializers import (
     CompanyListSerializer,
     CompanySerializer,
 )
+from rest_framework.response import Response
 
 
 class CompanyViewSet(viewsets.ModelViewSet):
@@ -68,6 +69,17 @@ class CompanyViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return CompanyListSerializer
         return CompanySerializer
+
+    @action(detail=False, methods=["get"], url_path="dashboard-summary")
+    def dashboard_summary(self, request):
+        """Platform admin dashboard KPIs (aggregates; not page-truncated lists)."""
+        from companies.platform_dashboard_summary import build_platform_dashboard_summary
+
+        payload = build_platform_dashboard_summary(
+            start=request.query_params.get("start"),
+            end=request.query_params.get("end"),
+        )
+        return Response(payload)
 
     @action(detail=True, methods=["post"], url_path="admin-whatsapp/send")
     def admin_whatsapp_send(self, request, pk=None):

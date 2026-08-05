@@ -540,6 +540,10 @@ PLATFORM_WHATSAPP_ADMIN_TEMPLATE_LANG = os.getenv("PLATFORM_WHATSAPP_ADMIN_TEMPL
 # Salt for hashing registration OTP codes (fallback to SECRET_KEY if unset).
 PLATFORM_WHATSAPP_OTP_PEPPER = os.getenv("PLATFORM_WHATSAPP_OTP_PEPPER", "").strip()
 
+# Absolute path to ffmpeg for WhatsApp voice-note conversion (optional).
+# Useful when the process PATH is limited (e.g. systemd Environment=PATH=venv/bin only).
+FFMPEG_BINARY = (os.getenv("FFMPEG_BINARY", "") or "").strip() or None
+
 # TikTok Lead Gen (no OAuth, webhook only)
 TIKTOK_LEADGEN_COMPANY_ID = os.getenv("TIKTOK_LEADGEN_COMPANY_ID", "")
 TIKTOK_LEADGEN_ADVERTISER_MAPPING = os.getenv("TIKTOK_LEADGEN_ADVERTISER_MAPPING", "{}")
