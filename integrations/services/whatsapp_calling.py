@@ -430,9 +430,27 @@ def _upsert_from_call_event(
         ):
             call.offer_sdp = sdp
             updates.append("offer_sdp")
-        elif sdp_type == "answer" or direction == WhatsAppCallDirection.OUTBOUND:
+        elif sdp_type == "answer":
+            # Only real SDP answers mean the peer picked up — never treat outbound
+            # offer echoes as answer (that would start recording before answer).
             call.answer_sdp = sdp
             updates.append("answer_sdp")
+            if not call.answered_at:
+                call.answered_at = timezone.now()
+                updates.append("answered_at")
+            if call.status not in (
+                WhatsAppCallStatus.ENDED,
+                WhatsAppCallStatus.MISSED,
+                WhatsAppCallStatus.REJECTED,
+                WhatsAppCallStatus.FAILED,
+                WhatsAppCallStatus.NO_ANSWER,
+            ):
+                if call.status != WhatsAppCallStatus.ANSWERED:
+                    call.status = WhatsAppCallStatus.ANSWERED
+                    updates.append("status")
+            if call.recording_status == WhatsAppCallRecordingStatus.NONE:
+                call.recording_status = WhatsAppCallRecordingStatus.PENDING
+                updates.append("recording_status")
 
     if event == "connect":
         if call.status not in (
@@ -504,18 +522,27 @@ def _apply_status_event(
         if not call.answered_at:
             call.answered_at = timezone.now()
             updates.append("answered_at")
+        if call.recording_status == WhatsAppCallRecordingStatus.NONE:
+            call.recording_status = WhatsAppCallRecordingStatus.PENDING
+            updates.append("recording_status")
     elif status in ("REJECTED",):
         call.status = WhatsAppCallStatus.REJECTED
         updates.append("status")
         if not call.ended_at:
             call.ended_at = timezone.now()
             updates.append("ended_at")
+        if call.recording_status == WhatsAppCallRecordingStatus.PENDING and not call.answered_at:
+            call.recording_status = WhatsAppCallRecordingStatus.NONE
+            updates.append("recording_status")
     elif status in ("FAILED",):
         call.status = WhatsAppCallStatus.FAILED
         updates.append("status")
         if not call.ended_at:
             call.ended_at = timezone.now()
             updates.append("ended_at")
+        if call.recording_status == WhatsAppCallRecordingStatus.PENDING and not call.answered_at:
+            call.recording_status = WhatsAppCallRecordingStatus.NONE
+            updates.append("recording_status")
 
     call.save(update_fields=list(dict.fromkeys(updates)))
     return call
@@ -559,6 +586,11 @@ def _apply_terminate(call: WhatsAppCall, call_obj: dict, updates: list[str]) -> 
     elif call.status == WhatsAppCallStatus.ANSWERED:
         call.status = WhatsAppCallStatus.ENDED
         updates.append("status")
+
+    # Unanswered attempts must not keep a pending recording expectation.
+    if not call.answered_at and call.recording_status == WhatsAppCallRecordingStatus.PENDING:
+        call.recording_status = WhatsAppCallRecordingStatus.NONE
+        updates.append("recording_status")
 
 
 def ensure_client_call_for_whatsapp_call(call: WhatsAppCall):
@@ -647,7 +679,11 @@ def mark_call_rejected(call: WhatsAppCall, *, agent) -> WhatsAppCall:
     call.agent = agent
     call.status = WhatsAppCallStatus.REJECTED
     call.ended_at = timezone.now()
-    call.save(update_fields=["agent", "status", "ended_at", "updated_at"])
+    updates = ["agent", "status", "ended_at", "updated_at"]
+    if not call.answered_at and call.recording_status == WhatsAppCallRecordingStatus.PENDING:
+        call.recording_status = WhatsAppCallRecordingStatus.NONE
+        updates.append("recording_status")
+    call.save(update_fields=updates)
     ensure_client_call_for_whatsapp_call(call)
     return call
 
@@ -658,6 +694,8 @@ def store_call_recording(
     file_bytes: bytes,
     original_filename: str,
 ) -> WhatsAppCall:
+    if not call.answered_at:
+        raise ValueError("Cannot store recording for a call that was never answered")
     key = save_recording(
         company_id=call.company_id,
         linkedid=call.meta_call_id or str(call.id),

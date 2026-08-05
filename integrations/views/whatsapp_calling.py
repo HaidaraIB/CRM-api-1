@@ -418,6 +418,9 @@ def whatsapp_call_terminate(request, pk: int):
             else WhatsAppCallStatus.NO_ANSWER
         )
         updates.append("status")
+    if not call.answered_at and call.recording_status == WhatsAppCallRecordingStatus.PENDING:
+        call.recording_status = WhatsAppCallRecordingStatus.NONE
+        updates.append("recording_status")
     call.save(update_fields=list(dict.fromkeys(updates)))
     ensure_client_call_for_whatsapp_call(call)
     call.refresh_from_db()
@@ -510,7 +513,7 @@ def whatsapp_call_initiate(request):
         agent=request.user,
         offer_sdp=sdp,
         started_at=timezone.now(),
-        recording_status=WhatsAppCallRecordingStatus.PENDING,
+        recording_status=WhatsAppCallRecordingStatus.NONE,
         raw_payload={"initiate_response": body},
     )
     return success_response(_serialize_call(call, request), status_code=201)
@@ -704,6 +707,12 @@ def whatsapp_call_recording_upload(request, pk: int):
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
+    if not call.answered_at:
+        return error_response(
+            "Recording is only stored for answered calls",
+            code="whatsapp_call_not_answered",
+            status_code=400,
+        )
     upload = request.FILES.get("file") or request.FILES.get("recording")
     if not upload:
         return validation_error_response({"file": ["Required"]})
@@ -714,7 +723,10 @@ def whatsapp_call_recording_upload(request, pk: int):
     data = upload.read()
     if not data:
         return validation_error_response({"file": ["Empty file"]})
-    store_call_recording(call, file_bytes=data, original_filename=upload.name or "call.webm")
+    try:
+        store_call_recording(call, file_bytes=data, original_filename=upload.name or "call.webm")
+    except ValueError as exc:
+        return error_response(str(exc), code="whatsapp_call_not_answered", status_code=400)
     call.refresh_from_db()
     return success_response(_serialize_call(call, request))
 
