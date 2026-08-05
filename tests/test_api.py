@@ -947,6 +947,182 @@ class TestMissionBarSummary:
 
 
 @pytest.mark.django_db
+class TestDashboardSummary:
+    """GET /clients/dashboard-summary/ aggregates (parity with mission-bar + core stats)."""
+
+    def test_dashboard_summary_mission_bar_parity(
+        self, authenticated_admin, company, employee_user
+    ):
+        from datetime import datetime, timedelta, time
+
+        from crm.models import Client, ClientTask, Deal
+        from django.utils import timezone
+        from settings.models import LeadStatus
+
+        today = timezone.localdate()
+        yesterday = timezone.now() - timedelta(days=1)
+        today_dt = timezone.make_aware(datetime.combine(today, time.min))
+        untouched, _ = LeadStatus.objects.get_or_create(
+            company=company,
+            name="Untouched",
+            defaults={"is_active": True, "is_default": True},
+        )
+        touched, _ = LeadStatus.objects.get_or_create(
+            company=company,
+            name="Following",
+            defaults={"is_active": True},
+        )
+
+        assigned = Client.objects.create(
+            name="Assigned Today",
+            company=company,
+            priority="high",
+            type="hot",
+            assigned_to=employee_user,
+            status=touched,
+        )
+        Client.objects.create(
+            name="Unassigned",
+            company=company,
+            priority="low",
+            type="cold",
+            status=untouched,
+        )
+        Client.objects.create(
+            name="Created Today Untouched",
+            company=company,
+            priority="low",
+            type="fresh",
+            status=untouched,
+        )
+
+        ClientTask.objects.create(
+            client=assigned,
+            reminder_date=today_dt,
+            notes="Due today",
+            created_by=employee_user,
+        )
+        ClientTask.objects.create(
+            client=assigned,
+            reminder_date=yesterday,
+            notes="Overdue",
+            created_by=employee_user,
+        )
+
+        Deal.objects.create(
+            client=assigned,
+            company=company,
+            employee=employee_user,
+            stage="won",
+            status="closed",
+            value=1000,
+        )
+        Deal.objects.create(
+            client=assigned,
+            company=company,
+            employee=employee_user,
+            stage="in_progress",
+            status="reservation",
+            value=500,
+        )
+
+        mission = api_body(authenticated_admin.get("/api/v1/clients/mission-bar-summary/"))
+        response = authenticated_admin.get("/api/v1/clients/dashboard-summary/?days=7&source=all")
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+
+        assert body["mission_bar"] == mission
+        assert body["stats"]["contact_today"] == mission["contact_today"]
+        assert body["stats"]["today_new_leads"] == mission["today_new_leads"]
+        assert body["stats"]["unassigned_leads"] == mission["unassigned_leads"]
+        assert body["stats"]["overdue_follow_ups"] == mission["overdue_follow_ups"]
+        assert body["stats"]["total_leads"] == 3
+        assert body["stats"]["today_touched_leads"] == 1
+        assert body["stats"]["today_untouched_leads"] == 2
+        assert body["stats"]["total_deals"] == 2
+        assert body["stats"]["completed_deals"] == 1
+        assert body["stats"]["win_rate"] == 50
+        assert body["funnel"]["won"] == 1
+        assert body["funnel"]["total_leads"] == 3
+        assert len(body["week_series"]) == 7
+        assert body["days"] == 7
+        assert body["source"] == "all"
+        assert "hot_leads" in body
+        assert "activity_feed" in body
+        assert "employee_presence" in body
+        assert "contact_today_leads" in body
+        assert len(body["contact_today_leads"]) == 1
+
+    def test_dashboard_summary_employee_scope(
+        self, authenticated_employee, company, employee_user, admin_user
+    ):
+        from crm.models import Client
+
+        Client.objects.create(
+            name="Mine",
+            company=company,
+            priority="low",
+            type="fresh",
+            assigned_to=employee_user,
+        )
+        Client.objects.create(
+            name="Not Mine",
+            company=company,
+            priority="low",
+            type="cold",
+            assigned_to=admin_user,
+        )
+
+        response = authenticated_employee.get("/api/v1/clients/dashboard-summary/")
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["stats"]["total_leads"] == 1
+        assert body["mission_bar"]["unassigned_leads"] == 0
+
+    def test_dashboard_summary_days_and_source_params(
+        self, authenticated_admin, company
+    ):
+        from crm.models import Client
+
+        Client.objects.create(
+            name="Meta Lead",
+            company=company,
+            priority="low",
+            type="fresh",
+            source="meta_lead_form",
+        )
+        Client.objects.create(
+            name="Manual Lead",
+            company=company,
+            priority="low",
+            type="fresh",
+            source="manual",
+        )
+
+        response = authenticated_admin.get(
+            "/api/v1/clients/dashboard-summary/?days=14&source=meta_lead_form"
+        )
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["days"] == 14
+        assert body["source"] == "meta_lead_form"
+        assert len(body["week_series"]) == 14
+        # Source filter only affects week_series, not total_leads
+        assert body["stats"]["total_leads"] == 2
+        assert sum(row["leads_count"] for row in body["week_series"]) == 1
+
+    def test_dashboard_summary_empty_tenant(self, authenticated_admin):
+        response = authenticated_admin.get("/api/v1/clients/dashboard-summary/")
+        assert response.status_code == status.HTTP_200_OK
+        body = api_body(response)
+        assert body["stats"]["total_leads"] == 0
+        assert body["stats"]["total_deals"] == 0
+        assert body["hot_leads"] == []
+        assert body["activity_feed"] == []
+        assert body["mission_bar"]["contact_today"] == 0
+
+
+@pytest.mark.django_db
 class TestMessageTemplateClone:
     def test_clone_whatsapp_template_to_sms(self, authenticated_admin, company):
         from integrations.models import MessageTemplate

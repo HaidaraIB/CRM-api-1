@@ -650,6 +650,10 @@ class ClientTask(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["client", "-created_at"], name="ctask_client_created_idx"),
+            models.Index(
+                fields=["reminder_completed_at", "reminder_date"],
+                name="ctask_reminder_open_idx",
+            ),
         ]
 
     def __str__(self):

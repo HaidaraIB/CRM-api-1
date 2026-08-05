@@ -74,17 +74,27 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset().select_related(
-            "company", "assigned_to", "created_by", "communication_way", "status", "campaign",
-            "integration_account",
-            "interested_developer", "interested_project", "interested_unit",
-        ).prefetch_related(
-            "phone_numbers",
-            "client_tasks__stage",
-            "client_calls__call_method",
-            "client_visits__visit_type",
-            "client_field_visits",
-        )
+        aggregate_actions = {
+            "mission_bar_summary",
+            "dashboard_summary",
+            "status_counts",
+        }
+        if getattr(self, "action", None) in aggregate_actions:
+            queryset = super().get_queryset().select_related(
+                "company", "assigned_to", "status",
+            )
+        else:
+            queryset = super().get_queryset().select_related(
+                "company", "assigned_to", "created_by", "communication_way", "status", "campaign",
+                "integration_account",
+                "interested_developer", "interested_project", "interested_unit",
+            ).prefetch_related(
+                "phone_numbers",
+                "client_tasks__stage",
+                "client_calls__call_method",
+                "client_visits__visit_type",
+                "client_field_visits",
+            )
 
         if user.is_admin() or user.is_reception():
             return queryset.filter(company=user.company).distinct()
@@ -213,44 +223,33 @@ class ClientViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path="mission-bar-summary")
     def mission_bar_summary(self, request):
         """Return dashboard mission bar counts (role-scoped)."""
-        user = request.user
-        today = timezone.localdate()
-        client_qs = self.get_queryset()
+        from crm.dashboard_summary import build_mission_bar
 
-        today_new_leads = client_qs.filter(created_at__date=today).count()
+        return Response(build_mission_bar(request.user, self.get_queryset()))
 
-        unassigned_leads = 0
-        if user.is_admin():
-            unassigned_leads = client_qs.filter(assigned_to__isnull=True).count()
+    @action(detail=False, methods=["get"], url_path="dashboard-summary")
+    def dashboard_summary(self, request):
+        """Return role-scoped dashboard aggregates (replaces full-list client sync)."""
+        from crm.dashboard_summary import build_dashboard_summary
 
-        task_qs = ClientTask.objects.all().select_related("client")
-        if user.is_admin() or user.is_reception():
-            task_qs = task_qs.filter(client__company=user.company)
-        elif user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
-            task_qs = task_qs.filter(client__company=user.company)
-        elif user.is_assigned_clinical_staff():
-            task_qs = task_qs.filter(client__assigned_to=user)
-        else:
-            task_qs = task_qs.none()
+        try:
+            days = int(request.query_params.get("days") or 7)
+        except (TypeError, ValueError):
+            days = 7
+        source = (request.query_params.get("source") or "all").strip().lower()
+        try:
+            daily_target = int(request.query_params.get("daily_target") or 5)
+        except (TypeError, ValueError):
+            daily_target = 5
 
-        overdue_follow_ups = task_qs.filter(
-            reminder_date__isnull=False,
-            reminder_completed_at__isnull=True,
-            reminder_date__date__lt=today,
-        ).count()
-
-        contact_today = client_qs.filter(
-            assigned_to__isnull=False,
-            client_tasks__reminder_date__date=today,
-            client_tasks__reminder_completed_at__isnull=True,
-        ).distinct().count()
-
-        return Response({
-            "contact_today": contact_today,
-            "overdue_follow_ups": overdue_follow_ups,
-            "today_new_leads": today_new_leads,
-            "unassigned_leads": unassigned_leads,
-        })
+        payload = build_dashboard_summary(
+            request.user,
+            self.get_queryset(),
+            days=days,
+            source=source,
+            daily_target=daily_target,
+        )
+        return Response(payload)
 
     @action(detail=False, methods=["post"])
     def assign_unassigned(self, request):
