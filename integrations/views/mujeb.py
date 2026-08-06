@@ -29,6 +29,24 @@ from integrations.views.lead_api import _serialize_key_row
 logger = logging.getLogger(__name__)
 
 
+def _client_ip(request) -> str:
+    xff = request.META.get("HTTP_X_FORWARDED_FOR")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR") or ""
+
+
+def _phone_log(phone: str | None) -> str:
+    """Short safe phone for logs (last 4 digits)."""
+    raw = (phone or "").strip()
+    if not raw:
+        return "-"
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) >= 4:
+        return f"...{digits[-4:]}"
+    return "..."
+
+
 def _mujeb_base_prefix() -> str:
     base = getattr(settings, "API_BASE_URL", "").rstrip("/")
     if base.endswith("/api/v1"):
@@ -48,10 +66,12 @@ def _mujeb_check_endpoint_url() -> str:
     return f"{_mujeb_base_prefix()}/check/"
 
 
-def _resolve_lead_api_company(request):
+def _resolve_lead_api_company(request, *, action: str):
     """Return (company, error_response). error_response is set on auth failure."""
+    ip = _client_ip(request)
     raw_key = extract_lead_api_key_from_request(request)
     if not raw_key:
+        logger.warning("MUJEB_%s missing API key ip=%s", action, ip)
         return None, error_response(
             "API key is required. Use Authorization: Bearer <key> or X-Lead-Api-Key.",
             code="missing_api_key",
@@ -60,6 +80,7 @@ def _resolve_lead_api_company(request):
 
     key_row = resolve_active_api_key(raw_key)
     if not key_row:
+        logger.warning("MUJEB_%s invalid or inactive API key ip=%s", action, ip)
         return None, error_response(
             "Invalid or inactive API key.",
             code="invalid_api_key",
@@ -68,11 +89,12 @@ def _resolve_lead_api_company(request):
     return key_row.company, None
 
 
-def _parse_json_body(request):
+def _parse_json_body(request, *, action: str):
     """Return (body_dict, error_response)."""
     try:
         body = json.loads(request.body) if request.body else {}
     except json.JSONDecodeError:
+        logger.warning("MUJEB_%s invalid JSON body ip=%s", action, _client_ip(request))
         return None, error_response(
             "Invalid JSON body.",
             code="invalid_json",
@@ -94,9 +116,16 @@ def _handle_inbound_create_errors(exc, company_id):
                 status_code = status.HTTP_403_FORBIDDEN
             if detail.get("code") == "integration_disabled":
                 status_code = status.HTTP_403_FORBIDDEN
+            logger.warning(
+                "MUJEB_CREATE rejected company_id=%s code=%s message=%s",
+                company_id,
+                code,
+                str(message)[:200],
+            )
             return error_response(str(message), code=str(code), status_code=status_code, details=detail)
+        logger.warning("MUJEB_CREATE validation error company_id=%s detail=%s", company_id, detail)
         return validation_error_response(detail)
-    logger.exception("Mujeb inbound error company_id=%s", company_id)
+    logger.exception("MUJEB_CREATE failed company_id=%s", company_id)
     return error_response(
         "Failed to create lead.",
         code="lead_create_failed",
@@ -128,24 +157,44 @@ def mujeb_inbound_lead_view(request):
     Auth: Authorization: Bearer <company_lead_api_key> or X-Lead-Api-Key header.
     Creates a lead with source=mujeb.
     """
-    company, auth_err = _resolve_lead_api_company(request)
+    ip = _client_ip(request)
+    logger.info("MUJEB_CREATE_CALLED method=%s ip=%s", request.method, ip)
+
+    company, auth_err = _resolve_lead_api_company(request, action="CREATE")
     if auth_err:
         return auth_err
 
-    body, parse_err = _parse_json_body(request)
+    body, parse_err = _parse_json_body(request, action="CREATE")
     if parse_err:
         return parse_err
 
     serializer = InboundLeadSerializer(data=body, company=company)
     if not serializer.is_valid():
+        logger.warning(
+            "MUJEB_CREATE validation failed company_id=%s errors=%s",
+            company.id,
+            serializer.errors,
+        )
         return validation_error_response(serializer.errors)
+
+    payload = serializer.validated_data
+    phone = (payload.get("phone") or "").strip() or None
+    external_id = (payload.get("external_id") or "").strip() or None
+    name = (payload.get("name") or "").strip() or None
+    logger.info(
+        "MUJEB_CREATE processing company_id=%s name=%s phone=%s external_id=%s",
+        company.id,
+        name,
+        _phone_log(phone),
+        external_id or "-",
+    )
 
     account = get_or_create_mujeb_account(company)
     try:
         data, created = create_inbound_lead(
             company=company,
             account=account,
-            payload=serializer.validated_data,
+            payload=payload,
             source="mujeb",
             platform_gate=MUJEB_PLATFORM,
         )
@@ -153,7 +202,24 @@ def mujeb_inbound_lead_view(request):
         return _handle_inbound_create_errors(exc, company.id)
 
     if created:
+        logger.info(
+            "MUJEB_CREATE created client_id=%s patient_file_number=%s company_id=%s name=%s",
+            data.get("client_id"),
+            data.get("patient_file_number"),
+            company.id,
+            name,
+        )
+        logger.info("MUJEB_CREATE completed status=201 company_id=%s", company.id)
         return success_response(data=data, status_code=status.HTTP_201_CREATED)
+
+    logger.info(
+        "MUJEB_CREATE duplicate client_id=%s company_id=%s phone=%s external_id=%s",
+        data.get("client_id"),
+        company.id,
+        _phone_log(phone),
+        external_id or "-",
+    )
+    logger.info("MUJEB_CREATE completed status=200 company_id=%s", company.id)
     return success_response(data=data, status_code=status.HTTP_200_OK)
 
 
@@ -181,23 +247,50 @@ def mujeb_check_lead_view(request):
     Auth: Authorization: Bearer <company_lead_api_key> or X-Lead-Api-Key header.
     Read-only: does a lead already exist for phone and/or external_id?
     """
-    company, auth_err = _resolve_lead_api_company(request)
+    ip = _client_ip(request)
+    logger.info("MUJEB_CHECK_CALLED method=%s ip=%s", request.method, ip)
+
+    company, auth_err = _resolve_lead_api_company(request, action="CHECK")
     if auth_err:
         return auth_err
 
-    body, parse_err = _parse_json_body(request)
+    body, parse_err = _parse_json_body(request, action="CHECK")
     if parse_err:
         return parse_err
 
     serializer = MujebCheckLeadSerializer(data=body)
     if not serializer.is_valid():
+        logger.warning(
+            "MUJEB_CHECK validation failed company_id=%s errors=%s",
+            company.id,
+            serializer.errors,
+        )
         return validation_error_response(serializer.errors)
+
+    phone = serializer.validated_data.get("phone") or None
+    external_id = serializer.validated_data.get("external_id") or None
+    logger.info(
+        "MUJEB_CHECK processing company_id=%s phone=%s external_id=%s",
+        company.id,
+        _phone_log(phone),
+        external_id or "-",
+    )
 
     data = check_inbound_lead_exists(
         company,
-        phone=serializer.validated_data.get("phone") or None,
-        external_id=serializer.validated_data.get("external_id") or None,
+        phone=phone,
+        external_id=external_id,
     )
+    if data.get("exists"):
+        logger.info(
+            "MUJEB_CHECK exists=true matched_by=%s client_id=%s company_id=%s",
+            data.get("matched_by"),
+            data.get("client_id"),
+            company.id,
+        )
+    else:
+        logger.info("MUJEB_CHECK exists=false company_id=%s", company.id)
+    logger.info("MUJEB_CHECK completed status=200 company_id=%s", company.id)
     return success_response(data=data, status_code=status.HTTP_200_OK)
 
 
