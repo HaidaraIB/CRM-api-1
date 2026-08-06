@@ -1,8 +1,9 @@
 """
-Lead/deal assignment availability from weekly day off (company-local calendar).
+Lead/deal assignment availability from weekly day off and working hours (company-local calendar).
 """
 from __future__ import annotations
 
+from datetime import time
 from zoneinfo import ZoneInfo
 
 from django.utils import timezone as dj_timezone
@@ -18,10 +19,15 @@ def zone_for_company(company) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+def local_now_for_company(company):
+    """Aware datetime 'now' in the company's timezone."""
+    tz = zone_for_company(company)
+    return dj_timezone.now().astimezone(tz)
+
+
 def local_today_weekday(company) -> int:
     """Return datetime.weekday() (Mon=0..Sun=6) for 'today' in the company's timezone."""
-    tz = zone_for_company(company)
-    return dj_timezone.now().astimezone(tz).date().weekday()
+    return local_now_for_company(company).date().weekday()
 
 
 def user_accepts_new_assignments(user, company_for_calendar=None) -> bool:
@@ -37,3 +43,48 @@ def user_accepts_new_assignments(user, company_for_calendar=None) -> bool:
     if not company:
         return True
     return user.weekly_day_off != local_today_weekday(company)
+
+
+def _time_in_window(now_t: time, start: time, end: time) -> bool:
+    """True if now_t is within [start, end], supporting overnight wrap (start > end)."""
+    if start == end:
+        return False
+    if start < end:
+        return start <= now_t <= end
+    # Overnight: e.g. 22:00–06:00
+    return now_t >= start or now_t <= end
+
+
+def user_is_within_working_hours(user, company_for_calendar=None) -> bool:
+    """
+    True if user has both work_start_time and work_end_time set and current local time
+    (company TZ) falls inside that daily window. Overnight ranges are supported.
+    """
+    if not user:
+        return False
+    start = getattr(user, "work_start_time", None)
+    end = getattr(user, "work_end_time", None)
+    if start is None or end is None:
+        return False
+    company = company_for_calendar if company_for_calendar is not None else getattr(
+        user, "company", None
+    )
+    if not company:
+        return False
+    now_t = local_now_for_company(company).time().replace(microsecond=0)
+    return _time_in_window(now_t, start, end)
+
+
+def user_is_on_shift_for_urgent(user, company_for_calendar=None) -> bool:
+    """
+    Eligible for urgent auto-assign: not on weekly day off, and currently within working hours.
+    Users without a working-hours window are never on-shift for urgent routing.
+    """
+    if not user:
+        return False
+    company = company_for_calendar if company_for_calendar is not None else getattr(
+        user, "company", None
+    )
+    if not user_accepts_new_assignments(user, company_for_calendar=company):
+        return False
+    return user_is_within_working_hours(user, company_for_calendar=company)

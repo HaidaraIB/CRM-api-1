@@ -138,6 +138,17 @@ class ClientViewSet(viewsets.ModelViewSet):
             )
         return super().destroy(request, *args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        self._urgent_assignment_warning = None
+        response = super().create(request, *args, **kwargs)
+        warning = getattr(self, "_urgent_assignment_warning", None)
+        if warning and isinstance(response.data, dict):
+            response.data = {
+                **response.data,
+                "urgent_assignment_warning": warning,
+            }
+        return response
+
     def perform_create(self, serializer):
         """Enforce plan quota for clients (leads) before creating."""
         user = self.request.user
@@ -154,7 +165,28 @@ class ClientViewSet(viewsets.ModelViewSet):
                 message="You have reached your plan leads limit. Please upgrade your plan to add more leads.",
                 error_key="plan_quota_max_clients_exceeded",
             )
-        serializer.save(company=company, created_by=user)
+
+        save_kwargs = {"company": company, "created_by": user}
+        is_urgent = bool(serializer.validated_data.get("is_urgent", False))
+        urgent_warning = None
+
+        if is_urgent and company:
+            from crm.assignment import get_urgent_on_shift_employee
+
+            on_shift = get_urgent_on_shift_employee(company)
+            if on_shift:
+                # Urgent on-shift pick wins over manual assigned_to on create.
+                save_kwargs["assigned_to"] = on_shift
+                save_kwargs["assigned_at"] = timezone.now()
+            else:
+                urgent_warning = (
+                    "No employee is currently within working hours; "
+                    "assigned via normal rules."
+                )
+
+        serializer.save(**save_kwargs)
+        self._urgent_assignment_warning = urgent_warning
+
         client = serializer.instance
         if user.is_data_entry() and company and client and not client.assigned_to:
             from crm.signals import get_next_data_entry_round_robin_employee

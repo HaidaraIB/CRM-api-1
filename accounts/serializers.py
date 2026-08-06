@@ -96,6 +96,8 @@ class UserSerializer(serializers.ModelSerializer):
             "last_seen_source",
             "is_online",
             "weekly_day_off",
+            "work_start_time",
+            "work_end_time",
             "can_delete_clients",
         ]
         read_only_fields = [
@@ -158,6 +160,22 @@ class UserSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def _can_set_schedule_fields(self, user, inst):
+        can_set = bool(user and user.is_authenticated and user.is_super_admin())
+        if not can_set and user and user.is_authenticated and user.is_admin():
+            if inst is None or inst.company_id == user.company_id:
+                can_set = True
+        if (
+            not can_set
+            and user
+            and user.is_authenticated
+            and user.is_supervisor()
+            and user.supervisor_has_permission("manage_users")
+        ):
+            if inst is None or inst.company_id == user.company_id:
+                can_set = True
+        return can_set
+
     def validate(self, attrs):
         request = self.context.get("request")
         inst = getattr(self, "instance", None)
@@ -185,23 +203,33 @@ class UserSerializer(serializers.ModelSerializer):
             if not can_set_delete:
                 attrs.pop("can_delete_clients", None)
 
-        if "weekly_day_off" not in attrs:
-            return attrs
-        can_set = bool(user and user.is_authenticated and user.is_super_admin())
-        if not can_set and user and user.is_authenticated and user.is_admin():
-            if inst is None or inst.company_id == user.company_id:
-                can_set = True
-        if (
-            not can_set
-            and user
-            and user.is_authenticated
-            and user.is_supervisor()
-            and user.supervisor_has_permission("manage_users")
-        ):
-            if inst is None or inst.company_id == user.company_id:
-                can_set = True
-        if not can_set:
-            attrs.pop("weekly_day_off", None)
+        schedule_keys = ("weekly_day_off", "work_start_time", "work_end_time")
+        if any(k in attrs for k in schedule_keys):
+            if not self._can_set_schedule_fields(user, inst):
+                for k in schedule_keys:
+                    attrs.pop(k, None)
+
+        start = attrs["work_start_time"] if "work_start_time" in attrs else (
+            getattr(inst, "work_start_time", None) if inst else None
+        )
+        end = attrs["work_end_time"] if "work_end_time" in attrs else (
+            getattr(inst, "work_end_time", None) if inst else None
+        )
+        if "work_start_time" in attrs or "work_end_time" in attrs:
+            if (start is None) != (end is None):
+                raise serializers.ValidationError(
+                    {
+                        "work_start_time": "Both work_start_time and work_end_time are required together, or clear both.",
+                        "work_end_time": "Both work_start_time and work_end_time are required together, or clear both.",
+                    }
+                )
+            if start is not None and end is not None and start == end:
+                raise serializers.ValidationError(
+                    {
+                        "work_end_time": "work_end_time must differ from work_start_time.",
+                    }
+                )
+
         return attrs
 
     @extend_schema_field(serializers.BooleanField())
@@ -434,6 +462,8 @@ class UserListSerializer(serializers.ModelSerializer):
             "company_specialization",
             "company_timezone",
             "weekly_day_off",
+            "work_start_time",
+            "work_end_time",
             "can_delete_clients",
             "is_active",
             "email_verified",

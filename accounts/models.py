@@ -58,6 +58,17 @@ class User(AbstractUser):
         blank=True,
         help_text="Weekly day off: 0=Monday .. 6=Sunday. Null means no recurring weekly off.",
     )
+    # Daily working-hours window (company timezone). Both null = no shift (excluded from urgent pool).
+    work_start_time = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Daily work start time (company timezone). Must be set together with work_end_time.",
+    )
+    work_end_time = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Daily work end time (company timezone). Must be set together with work_start_time.",
+    )
     login_two_factor_enabled = models.BooleanField(
         default=True,
         help_text="When enabled, company owner must complete email 2FA at login (unless trusted device).",

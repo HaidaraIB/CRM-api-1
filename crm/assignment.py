@@ -9,7 +9,7 @@ from django.db.models.functions import Coalesce
 
 from accounts.models import Role, User
 from companies.models import Company
-from crm.availability import user_accepts_new_assignments
+from crm.availability import user_accepts_new_assignments, user_is_on_shift_for_urgent
 from settings.models import StatusCategory
 
 # Statuses that represent real sales work in the assignee's queue.
@@ -136,6 +136,42 @@ def get_auto_assign_employee(company):
     if algorithm == Company.AutoAssignAlgorithm.ROUND_ROBIN:
         return get_round_robin_employee(company)
     return get_least_busy_employee(company)
+
+
+def get_urgent_on_shift_employee(company):
+    """
+    Pick an assignee who is currently on shift (working hours + not on day off).
+
+    Uses the same role pool and company algorithm as normal auto-assign, but only
+    among users with a configured work window that contains "now" in company TZ.
+    """
+    if not company:
+        return None
+
+    algorithm = getattr(company, "auto_assign_algorithm", None) or Company.AutoAssignAlgorithm.LEAST_BUSY
+    if algorithm == Company.AutoAssignAlgorithm.ROUND_ROBIN:
+        employees = list(_eligible_assignees_queryset(company))
+        available = [
+            employee
+            for employee in employees
+            if user_is_on_shift_for_urgent(employee, company_for_calendar=company)
+        ]
+        if not available:
+            return None
+        return _pick_round_robin_among_tied(company, available)
+
+    employees = list(_employees_with_workload_queryset(company))
+    available = [
+        employee
+        for employee in employees
+        if user_is_on_shift_for_urgent(employee, company_for_calendar=company)
+    ]
+    if not available:
+        return None
+
+    min_score = min(employee.workload_score for employee in available)
+    tied = [employee for employee in available if employee.workload_score == min_score]
+    return _pick_round_robin_among_tied(company, tied)
 
 
 def get_least_busy_employee(company):

@@ -70,6 +70,10 @@ class DealPaymentMethod(Enum):
 class Client(models.Model):
     name = models.CharField(max_length=255)
     priority = models.CharField(max_length=10, choices=Priority.choices())
+    is_urgent = models.BooleanField(
+        default=False,
+        help_text="When True on create, prefer an assignee currently within working hours.",
+    )
     type = models.CharField(max_length=20, choices=Type.choices())
     # Link to Channel from settings instead of enum
     communication_way = models.ForeignKey(
