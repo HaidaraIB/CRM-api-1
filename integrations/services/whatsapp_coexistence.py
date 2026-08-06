@@ -304,6 +304,32 @@ def extract_whatsapp_message_body(message: dict) -> str:
     if msg_type == "contacts":
         return "[contacts message]"
     if msg_type == "interactive":
+        interactive = message.get("interactive") or {}
+        if not isinstance(interactive, dict):
+            return "[interactive message]"
+        itype = (interactive.get("type") or "").strip().lower()
+        if itype == "call_permission_request":
+            body_text = ((interactive.get("body") or {}).get("text") or "").strip()
+            return body_text or "[call permission request]"
+        if itype == "call_permission_reply":
+            reply = interactive.get("call_permission_reply") or {}
+            if not isinstance(reply, dict):
+                reply = {}
+            response = (reply.get("response") or "").strip().lower()
+            if response == "accept":
+                return "[call permission accepted]"
+            if response in ("reject", "rejected", "deny", "denied"):
+                return "[call permission rejected]"
+            return "[call permission reply]"
+        if itype == "button_reply":
+            title = ((interactive.get("button_reply") or {}).get("title") or "").strip()
+            return title or "[button reply]"
+        if itype == "list_reply":
+            title = ((interactive.get("list_reply") or {}).get("title") or "").strip()
+            return title or "[list reply]"
+        body_text = ((interactive.get("body") or {}).get("text") or "").strip()
+        if body_text:
+            return body_text
         return "[interactive message]"
     if msg_type == "button":
         return (message.get("button") or {}).get("text") or "[button message]"

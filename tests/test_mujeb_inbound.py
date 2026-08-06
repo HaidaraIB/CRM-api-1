@@ -97,6 +97,95 @@ class TestMujebInboundLeadAPI:
 
 
 @pytest.mark.django_db
+class TestMujebCheckLeadAPI:
+    def test_check_not_found(self, api_client, lead_api_key):
+        response = api_client.post(
+            "/api/v1/integrations/leads/mujeb/check/",
+            data=json.dumps({"phone": "+9647700000888"}),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = api_body(response)
+        assert data["exists"] is False
+        assert "client_id" not in data
+
+    def test_check_match_by_phone(self, api_client, lead_api_key):
+        create = api_client.post(
+            "/api/v1/integrations/leads/mujeb/",
+            data=json.dumps(
+                {
+                    "name": "Phone Match",
+                    "phone": "+9647700000777",
+                    "external_id": "mujeb-phone-check-1",
+                }
+            ),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert create.status_code == status.HTTP_201_CREATED
+        client_id = api_body(create)["client_id"]
+
+        response = api_client.post(
+            "/api/v1/integrations/leads/mujeb/check/",
+            data=json.dumps({"phone": "+9647700000777"}),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = api_body(response)
+        assert data["exists"] is True
+        assert data["matched_by"] == "phone"
+        assert data["client_id"] == client_id
+        assert "patient_file_number" in data
+
+    def test_check_match_by_external_id(self, api_client, lead_api_key):
+        create = api_client.post(
+            "/api/v1/integrations/leads/mujeb/",
+            data=json.dumps(
+                {
+                    "name": "Ext Match",
+                    "phone": "+9647700000666",
+                    "external_id": "mujeb-ext-check-1",
+                }
+            ),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert create.status_code == status.HTTP_201_CREATED
+        client_id = api_body(create)["client_id"]
+
+        response = api_client.post(
+            "/api/v1/integrations/leads/mujeb/check/",
+            data=json.dumps({"external_id": "mujeb-ext-check-1"}),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert response.status_code == status.HTTP_200_OK
+        data = api_body(response)
+        assert data["exists"] is True
+        assert data["matched_by"] == "external_id"
+        assert data["client_id"] == client_id
+
+    def test_check_missing_lookup_fields(self, api_client, lead_api_key):
+        response = api_client.post(
+            "/api/v1/integrations/leads/mujeb/check/",
+            data=json.dumps({}),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_check_missing_api_key(self, api_client):
+        response = api_client.post(
+            "/api/v1/integrations/leads/mujeb/check/",
+            data=json.dumps({"phone": "+9647700000555"}),
+            content_type="application/json",
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
 class TestMujebConfig:
     def test_get_config(self, authenticated_admin, company, lead_api_key):
         response = authenticated_admin.get("/api/v1/integrations/accounts/mujeb-config/")
@@ -104,5 +193,7 @@ class TestMujebConfig:
         data = api_body(response)
         assert "endpoint_url" in data
         assert data["endpoint_url"].endswith("/integrations/leads/mujeb/")
+        assert "check_endpoint_url" in data
+        assert data["check_endpoint_url"].endswith("/integrations/leads/mujeb/check/")
         assert "keys" in data
         assert len(data["keys"]) >= 1

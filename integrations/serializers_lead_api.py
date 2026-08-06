@@ -58,6 +58,24 @@ class InboundLeadSerializer(serializers.Serializer):
         return value
 
 
+class MujebCheckLeadSerializer(serializers.Serializer):
+    """Lookup-only body for Mujeb pre-registration existence check."""
+
+    phone = serializers.CharField(max_length=50, required=False, allow_blank=True, default="")
+    external_id = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        phone = (attrs.get("phone") or "").strip()
+        external_id = (attrs.get("external_id") or "").strip()
+        if not phone and not external_id:
+            raise serializers.ValidationError(
+                "Provide at least one of phone or external_id.",
+            )
+        attrs["phone"] = phone
+        attrs["external_id"] = external_id
+        return attrs
+
+
 class CompanyLeadApiKeyCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=128)
 

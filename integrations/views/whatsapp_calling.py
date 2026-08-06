@@ -614,12 +614,47 @@ def whatsapp_call_permission_request(request):
                 body_text=body_text
                 or "We would like to call you on WhatsApp. Please allow calls from our business.",
             )
+            preview_body = (
+                body_text
+                or "We would like to call you on WhatsApp. Please allow calls from our business."
+            ).strip() or "[call permission request]"
         else:
             body = send_call_permission_request(
                 wa, to=to, template_name=template_name, language_code=language
             )
+            preview_body = "[call permission request]"
     except WhatsAppCallingError as exc:
         return _calling_error_response(exc)
+
+    # Persist into the chat thread so agents see the permission request (not a blank gap).
+    try:
+        from integrations.models import LeadWhatsAppMessage
+        from integrations.services.whatsapp_client import ensure_client_for_whatsapp_phone
+
+        to_digits = "".join(c for c in to if c.isdigit())
+        client = ensure_client_for_whatsapp_phone(
+            company,
+            to_digits,
+            integration_account=wa.integration_account,
+        )
+        wam_id = None
+        messages = body.get("messages") if isinstance(body, dict) else None
+        if isinstance(messages, list) and messages:
+            wam_id = messages[0].get("id")
+        if client and to_digits:
+            LeadWhatsAppMessage.objects.create(
+                client=client,
+                phone_number=to_digits,
+                body=preview_body[:65535],
+                direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+                whatsapp_message_id=wam_id,
+                phone_number_id=wa.phone_number_id,
+                delivery_status="sent",
+                created_by=request.user,
+            )
+    except Exception:
+        logger.exception("Failed to persist call permission request message")
+
     return success_response(
         {
             "graph": body,

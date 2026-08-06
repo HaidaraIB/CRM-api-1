@@ -9,14 +9,25 @@ Leads created through this path are labeled `source=mujeb`.
 1. Loop CRM publishes one **Mujeb mini app** (configured once in Mujeb).
 2. Each CRM tenant generates a Lead API key under **Integrations → Mujeb** (or Lead API).
 3. Tenant installs the mini app in Mujeb and pastes the key into Auth.
-4. Flows map chat variables into the **Create Lead** action; Mujeb POSTs to this endpoint.
+4. Flows should **check existence first**, then map chat variables into **Create Lead** only when the customer is new.
 
-## Endpoint
+## Endpoints
+
+### Create Lead
 
 ```
 POST {API_BASE_URL}/api/v1/integrations/leads/mujeb/
 Content-Type: application/json
 ```
+
+### Check Lead (pre-registration)
+
+```
+POST {API_BASE_URL}/api/v1/integrations/leads/mujeb/check/
+Content-Type: application/json
+```
+
+Use this **before** Create Lead so the Mujeb flow can branch and reply when the customer is already registered (e.g. “Already registered — an employee will contact you”). The message text is configured in Mujeb, not in CRM.
 
 Example base URL: `https://your-api.example.com`
 
@@ -31,7 +42,60 @@ Keys are created in the CRM under **Integrations → Mujeb** (or **Integrations 
 
 Do not send the global `X-API-Key` (mobile/web/admin) on this endpoint.
 
-## Request body
+## Check Lead request body
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `phone` | One of phone / external_id | Phone number to look up |
+| `external_id` | One of phone / external_id | Partner idempotency id |
+
+Lookup order matches Create Lead: `external_id` first, then `phone`. Read-only — does not create a lead or consume plan quota.
+
+### Example
+
+```json
+{
+  "phone": "+9647700000001"
+}
+```
+
+### Responses
+
+| HTTP | Meaning |
+|------|---------|
+| `200` | Lookup completed (`exists` true or false) |
+| `400` | Missing both phone and external_id, or invalid JSON |
+| `401` | Missing or invalid API key |
+| `429` | Rate limit exceeded (~120 req/min/IP) |
+
+#### Exists
+
+```json
+{
+  "success": true,
+  "data": {
+    "exists": true,
+    "matched_by": "phone",
+    "client_id": 42,
+    "patient_file_number": 1001
+  }
+}
+```
+
+`matched_by` is `"external_id"` or `"phone"`.
+
+#### Not found
+
+```json
+{
+  "success": true,
+  "data": {
+    "exists": false
+  }
+}
+```
+
+## Create Lead request body
 
 Same schema as the Custom Lead API:
 
@@ -65,14 +129,14 @@ Same schema as the Custom Lead API:
 }
 ```
 
-## Responses
+## Create Lead responses
 
 All responses use the CRM envelope: `{ "success": true|false, "data"?: ..., "error"?: { "code", "message" } }`.
 
 | HTTP | Meaning |
 |------|---------|
 | `201` | Lead created (`source=mujeb`) |
-| `200` | Duplicate `external_id` (same `client_id` returned) |
+| `200` | Duplicate `external_id` or phone (same `client_id` returned) |
 | `400` | Validation error |
 | `401` | Missing or invalid API key |
 | `403` | Mujeb integration disabled or plan lead quota exceeded |
@@ -98,7 +162,7 @@ All responses use the CRM envelope: `{ "success": true|false, "data"?: ..., "err
 GET {API_BASE_URL}/api/v1/integrations/accounts/mujeb-config/
 ```
 
-Returns `endpoint_url`, active key prefixes, `integration_status`, and `last_received_at`.
+Returns `endpoint_url`, `check_endpoint_url`, active key prefixes, `integration_status`, and `last_received_at`.
 Key create / rotate / revoke reuse Lead API key endpoints:
 
 - `POST /api/v1/integrations/accounts/lead-api-keys/`
@@ -109,17 +173,37 @@ Key create / rotate / revoke reuse Lead API key endpoints:
 
 1. **Create mini app** (V2) named **Loop CRM**.
 2. **Auth** → API Key type → input “Lead API Key” saved to an app field (e.g. `lead_api_key`).
-3. **Action** → **Create Lead** with inputs matching the table above (`name` required).
-4. **Action subflow** → External request:
+3. **Action → Check Lead** with inputs `phone` and/or `external_id`:
+   - Method: `POST`
+   - URL: `{API_BASE_URL}/api/v1/integrations/leads/mujeb/check/`
+   - Header: `Authorization: Bearer {{lead_api_key}}`
+   - Header: `Content-Type: application/json`
+   - Body: JSON mapped from action inputs
+4. **Branch on response:**
+   - If `data.exists == true` → send the already-registered reply (no Create Lead). Example copy: “Already registered in the system — an employee will contact you.”
+   - If `data.exists == false` → continue to Create Lead.
+5. **Action → Create Lead** with inputs matching the create table (`name` required).
+6. **Action subflow** → External request:
    - Method: `POST`
    - URL: `{API_BASE_URL}/api/v1/integrations/leads/mujeb/`
    - Header: `Authorization: Bearer {{lead_api_key}}`
    - Header: `Content-Type: application/json`
    - Body: JSON mapped from action inputs
-5. **Install draft** on a test agent, paste a staging `crm_lk_` key, run a flow, confirm lead appears with source **Mujeb**.
-6. **Publish** so tenants can install from Mujeb Integrations.
+7. **Install draft** on a test agent, paste a staging `crm_lk_` key, run a flow, confirm lead appears with source **Mujeb**.
+8. **Publish** so tenants can install from Mujeb Integrations.
 
 ## cURL
+
+### Check
+
+```bash
+curl -X POST "https://your-api.example.com/api/v1/integrations/leads/mujeb/check/" \
+  -H "Authorization: Bearer crm_lk_YOUR_KEY_HERE" \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"+9647700000001"}'
+```
+
+### Create
 
 ```bash
 curl -X POST "https://your-api.example.com/api/v1/integrations/leads/mujeb/" \

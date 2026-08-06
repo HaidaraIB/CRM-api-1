@@ -57,6 +57,62 @@ def test_extract_whatsapp_message_body_text():
     assert extract_whatsapp_message_body({"type": "image", "image": {}}) == "[image message]"
 
 
+def test_extract_interactive_call_permission_stubs():
+    assert (
+        extract_whatsapp_message_body(
+            {
+                "type": "interactive",
+                "interactive": {
+                    "type": "call_permission_request",
+                    "body": {"text": "May we call you?"},
+                },
+            }
+        )
+        == "May we call you?"
+    )
+    assert (
+        extract_whatsapp_message_body(
+            {
+                "type": "interactive",
+                "interactive": {"type": "call_permission_request", "action": {"name": "call_permission_request"}},
+            }
+        )
+        == "[call permission request]"
+    )
+    assert (
+        extract_whatsapp_message_body(
+            {
+                "type": "interactive",
+                "interactive": {
+                    "type": "call_permission_reply",
+                    "call_permission_reply": {"response": "accept"},
+                },
+            }
+        )
+        == "[call permission accepted]"
+    )
+    assert (
+        extract_whatsapp_message_body(
+            {
+                "type": "interactive",
+                "interactive": {
+                    "type": "call_permission_reply",
+                    "call_permission_reply": {"response": "reject"},
+                },
+            }
+        )
+        == "[call permission rejected]"
+    )
+    assert (
+        extract_whatsapp_message_body(
+            {
+                "type": "interactive",
+                "interactive": {"type": "button_reply", "button_reply": {"title": "Yes"}},
+            }
+        )
+        == "Yes"
+    )
+
 @pytest.mark.django_db
 def test_smb_app_state_sync_creates_client(whatsapp_setup):
     account, wa = whatsapp_setup

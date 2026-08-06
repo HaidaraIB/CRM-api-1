@@ -101,6 +101,44 @@ def find_existing_by_external_id(company, external_id: str):
     ).first()
 
 
+def check_inbound_lead_exists(
+    company,
+    *,
+    phone: str | None = None,
+    external_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Read-only lookup: does a lead already exist for this company by external_id or phone?
+    Same identity order as create_inbound_lead (external_id first, then phone).
+    """
+    external_id = (external_id or "").strip() or None
+    phone = (phone or "").strip() or None
+
+    if external_id:
+        existing = find_existing_by_external_id(company, external_id)
+        if existing:
+            return {
+                "exists": True,
+                "matched_by": "external_id",
+                "client_id": existing.id,
+                "patient_file_number": existing.patient_file_number,
+            }
+
+    if phone:
+        from integrations.services.phone_match import find_client_by_phone
+
+        existing_by_phone = find_client_by_phone(company, phone)
+        if existing_by_phone:
+            return {
+                "exists": True,
+                "matched_by": "phone",
+                "client_id": existing_by_phone.id,
+                "patient_file_number": existing_by_phone.patient_file_number,
+            }
+
+    return {"exists": False}
+
+
 def _build_notes(*, notes: str | None, email: str | None, custom_fields: dict | None) -> str | None:
     parts: list[str] = []
     if notes and str(notes).strip():
@@ -175,38 +213,29 @@ def create_inbound_lead(
     default_name = "Mujeb Lead" if source == "mujeb" else "API Lead"
 
     external_id = (payload.get("external_id") or "").strip() or None
-    if external_id:
-        existing = find_existing_by_external_id(company, external_id)
-        if existing:
-            return (
-                {
-                    "client_id": existing.id,
-                    "patient_file_number": existing.patient_file_number,
-                    "created_at": existing.created_at.isoformat() if existing.created_at else None,
-                    "duplicate": True,
-                },
-                False,
-            )
-
     phone_preview = (payload.get("phone") or "").strip() or None
-    if phone_preview:
-        from integrations.services.phone_match import find_client_by_phone
+    existing_check = check_inbound_lead_exists(
+        company, phone=phone_preview, external_id=external_id
+    )
+    if existing_check.get("exists"):
+        from crm.models import Client
 
-        existing_by_phone = find_client_by_phone(company, phone_preview)
-        if existing_by_phone:
-            return (
-                {
-                    "client_id": existing_by_phone.id,
-                    "patient_file_number": existing_by_phone.patient_file_number,
-                    "created_at": (
-                        existing_by_phone.created_at.isoformat()
-                        if existing_by_phone.created_at
-                        else None
-                    ),
-                    "duplicate": True,
-                },
-                False,
-            )
+        existing = Client.objects.filter(
+            company=company, id=existing_check["client_id"]
+        ).first()
+        return (
+            {
+                "client_id": existing_check["client_id"],
+                "patient_file_number": existing_check.get("patient_file_number"),
+                "created_at": (
+                    existing.created_at.isoformat()
+                    if existing and existing.created_at
+                    else None
+                ),
+                "duplicate": True,
+            },
+            False,
+        )
 
     gate = integration_gate(company, platform_gate)
     if not gate["enabled"]:

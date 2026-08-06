@@ -72,7 +72,7 @@ from .views.lead_api import (
     LeadApiKeyRotateView,
     LeadApiKeyRevokeView,
 )
-from .views.mujeb import mujeb_inbound_lead_view, MujebConfigView
+from .views.mujeb import mujeb_inbound_lead_view, mujeb_check_lead_view, MujebConfigView
 
 router = DefaultRouter()
 router.register(r'accounts', IntegrationAccountViewSet, basename='integration-account')
@@ -89,6 +89,7 @@ urlpatterns = [
     path('accounts/lead-api-keys/<int:key_id>/', LeadApiKeyRevokeView.as_view(), name='lead_api_key_revoke'),
     path('accounts/mujeb-config/', MujebConfigView.as_view(), name='mujeb_config'),
     path('leads/inbound/', inbound_lead_view, name='inbound_lead'),
+    path('leads/mujeb/check/', mujeb_check_lead_view, name='mujeb_check_lead'),
     path('leads/mujeb/', mujeb_inbound_lead_view, name='mujeb_inbound_lead'),
     path('', include(router.urls)),
     path('message-logs/', message_logs_list, name='message_logs'),
