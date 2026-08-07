@@ -131,9 +131,13 @@ from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
 from platform_content.views import (
     GuideArticleAdminViewSet,
+    GuideCategoryAdminViewSet,
     NewsPostAdminViewSet,
+    PageHelpVideoAdminViewSet,
     PublishedGuideArticleViewSet,
+    PublishedGuideCategoryViewSet,
     PublishedNewsPostViewSet,
+    PublishedPageHelpVideoViewSet,
 )
 from tenant_chat.views import TenantChatConversationViewSet, TenantChatMessageAttachmentView
 from company_library.views import CompanyLibraryFileViewSet, CompanyLibraryFileDownloadView
@@ -207,8 +211,15 @@ router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
 router.register(r"supervisors", SupervisorViewSet, basename="supervisor")
 router.register(r"support-tickets", SupportTicketViewSet, basename="supportticket")
+router.register(r"guide-categories", GuideCategoryAdminViewSet, basename="guidecategory")
 router.register(r"guide-articles", GuideArticleAdminViewSet, basename="guidearticle")
 router.register(r"news-posts", NewsPostAdminViewSet, basename="newspost")
+router.register(r"page-help-videos", PageHelpVideoAdminViewSet, basename="pagehelpvideo")
+router.register(
+    r"public-content/guide-categories",
+    PublishedGuideCategoryViewSet,
+    basename="public_guidecategory",
+)
 router.register(
     r"public-content/guide-articles",
     PublishedGuideArticleViewSet,
@@ -218,6 +229,11 @@ router.register(
     r"public-content/news-posts",
     PublishedNewsPostViewSet,
     basename="public_newspost",
+)
+router.register(
+    r"public-content/page-help-videos",
+    PublishedPageHelpVideoViewSet,
+    basename="public_pagehelpvideo",
 )
 router.register(
     r"tenant-chat/conversations",

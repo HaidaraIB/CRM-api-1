@@ -3,6 +3,41 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 
+class GuideCategory(models.Model):
+    """Category for grouping User Guide articles."""
+
+    name_en = models.CharField(max_length=120)
+    name_ar = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=140, unique=True, blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "platform_guide_categories"
+        ordering = ["sort_order", "name_en"]
+        verbose_name = "Guide Category"
+        verbose_name_plural = "Guide Categories"
+
+    def __str__(self):
+        return self.name_en
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base = slugify(self.name_en) or "category"
+            candidate = base
+            n = 1
+            while (
+                GuideCategory.objects.filter(slug=candidate)
+                .exclude(pk=self.pk)
+                .exists()
+            ):
+                n += 1
+                candidate = f"{base}-{n}"
+            self.slug = candidate
+        super().save(*args, **kwargs)
+
+
 class GuideArticle(models.Model):
     """Platform-level Loop usage guide article (super admin CMS)."""
 
@@ -11,6 +46,13 @@ class GuideArticle(models.Model):
     body_en = models.TextField()
     body_ar = models.TextField()
     slug = models.SlugField(max_length=280, unique=True, blank=True)
+    category = models.ForeignKey(
+        GuideCategory,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="articles",
+    )
     sort_order = models.PositiveIntegerField(default=0)
     is_published = models.BooleanField(default=False)
     cover_image = models.ImageField(
@@ -18,6 +60,12 @@ class GuideArticle(models.Model):
         blank=True,
         null=True,
         max_length=500,
+    )
+    youtube_url = models.URLField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="Optional YouTube video URL (plays embedded in Loop).",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -75,6 +123,12 @@ class NewsPost(models.Model):
         null=True,
         max_length=500,
     )
+    youtube_url = models.URLField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="Optional YouTube video URL (plays embedded in Loop).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -117,3 +171,46 @@ class UserNewsReadState(models.Model):
 
     def __str__(self):
         return f"NewsReadState(user={self.user_id})"
+
+
+class PageHelpVideo(models.Model):
+    """Optional YouTube tutorial for a CRM page (shown as in-app embed)."""
+
+    class PageKey(models.TextChoices):
+        # Order = admin UI order (integrations grouped logically).
+        WHATSAPP = "whatsapp", "WhatsApp"
+        MESSAGING_CENTER = "messaging_center", "Messaging Center"
+        CHATS = "chats", "Chats"
+        META = "meta", "Meta"
+        TIKTOK = "tiktok", "TikTok"
+        TWILIO = "twilio", "Twilio / SMS"
+        AI = "ai", "AI / OpenAI"
+        LEAD_API = "lead_api", "Lead API"
+        MUJEB = "mujeb", "Mujeb"
+        PBX = "pbx", "PBX"
+
+    page_key = models.CharField(
+        max_length=64,
+        unique=True,
+        choices=PageKey.choices,
+    )
+    youtube_url = models.URLField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="YouTube URL shown as an embedded tutorial on this page.",
+    )
+    title_en = models.CharField(max_length=255, blank=True, default="")
+    title_ar = models.CharField(max_length=255, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "platform_page_help_videos"
+        ordering = ["page_key"]
+        verbose_name = "Page Help Video"
+        verbose_name_plural = "Page Help Videos"
+
+    def __str__(self):
+        return f"PageHelpVideo({self.page_key})"
