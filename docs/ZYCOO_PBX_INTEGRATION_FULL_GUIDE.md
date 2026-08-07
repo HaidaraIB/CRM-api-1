@@ -96,7 +96,7 @@ So we add a **helper program (LAN connector)** on a computer **inside the office
 | **Auto call log** | Call appears on lead timeline automatically | On hangup, CRM creates a `ClientCall` linked to the PBX record |
 | **Click-to-dial** | Phone icon on lead → desk phone rings, then customer is dialed | CRM queues command → connector polls → AMI Originate |
 | **Call reports** | Reports → Call Reports (totals, inbound/outbound, per agent) | Aggregates stored `PbxCallRecord` rows |
-| **Recordings** | Recording URL stored in call notes (when PBX sends it) | Parsed from hangup/CDR payload |
+| **Recordings** | Connector FTP-pulls WAV from Zycoo internal FTP (`/recording/...`) into CRM storage; signed playback URL on call | CDR `recording_filename` + FTP Server enabled on PBX |
 
 ---
 

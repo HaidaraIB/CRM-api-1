@@ -19,6 +19,7 @@ from integrations.models import (
     UserPbxExtension,
 )
 from integrations.services.phone_match import find_client_by_phone
+from integrations.services.pbx_recording_service import apply_recording_path_from_cdr
 from integrations.services.zycoo_parser import parse_zycoo_payload
 from notifications.models import Notification, NotificationType
 from notifications.services import NotificationService
@@ -478,6 +479,22 @@ def process_pbx_payload(
         external_phone=external_phone,
         created=created,
     )
+
+    if parsed.get("recording_path"):
+        recording_path = parsed["recording_path"]
+
+        def _queue_recording(
+            rid: int = record.id,
+            path: str = recording_path,
+            pbx_settings: PbxSettings = settings,
+        ) -> None:
+            try:
+                rec = PbxCallRecord.objects.get(pk=rid)
+                apply_recording_path_from_cdr(rec, path, settings=pbx_settings)
+            except PbxCallRecord.DoesNotExist:
+                pass
+
+        transaction.on_commit(_queue_recording)
 
     event_type = parsed["event_type"]
     uniqueid = parsed["uniqueid"]

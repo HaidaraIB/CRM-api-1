@@ -41,6 +41,13 @@ def build_connector_config(settings: PbxSettings, request) -> dict:
         "listen_host": "0.0.0.0",
         "listen_port": 8787,
         "poll_interval_sec": 3,
+        "recording_poll_interval_sec": 5,
+        "recording_fetch_timeout_sec": 60,
+        "ftp_host": "",
+        "ftp_port": 21,
+        "ftp_user": "ftpuser",
+        "ftp_password": "",
+        "ftp_passive": True,
         "ssl_verify": True,
         "x_api_key": "",
     }
@@ -78,7 +85,7 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "============================\n\n"
             "1. Install Python 3.10+ on a PC on the same network as your ZYCOO PBX.\n"
             "2. pip install -r requirements.txt\n"
-            "3. Edit config.json — set ami_password (not included for security).\n"
+            "3. Edit config.json — set ami_password and ftp_password (not included for security).\n"
             "   macOS SSL error? Run: /Applications/Python 3.*/Install Certificates.command\n"
             "   Or ensure certifi is installed (included in requirements.txt).\n"
             "4. Test AMI only: python connector.py --test-ami\n"
@@ -86,8 +93,13 @@ def build_connector_zip(settings: PbxSettings, request) -> bytes:
             "5. ZYCOO Push Event URL (choose one):\n"
             "   A) Direct to CRM (recommended): paste Webhook URL from CRM PBX settings.\n"
             "   B) Via this PC: http://<this-pc-ip>:8787 (connector forwards events).\n"
-            "6. In CRM: Integrations → PBX — confirm Connector status is Online.\n"
-            "7. Click-to-dial: map each CRM user to their ZYCOO extension (same number as\n"
+            "6. Call recordings (FTP):\n"
+            "   On ZYCOO: System → Storage → FTP Storage → FTP Server → Enable Service.\n"
+            "   Leave FTP Uploading OFF (that is a different daily-push feature).\n"
+            "   Set ftp_user / ftp_password in config.json (ftp_host defaults to pbx_host).\n"
+            "   Enable Cdr in Push Events. Connector downloads /recording/YYYYMMDD/... via FTP.\n"
+            "7. In CRM: Integrations → PBX — confirm Connector status is Online.\n"
+            "8. Click-to-dial: map each CRM user to their ZYCOO extension (same number as\n"
             "   Telephony → Extensions). Desk phone or mobile SIP app must register to that\n"
             "   extension. AMI login alone does not ring phones — Originate uses PJSIP/{ext}.\n\n"
             f"API base URL: {config['api_base_url']}\n"

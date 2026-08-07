@@ -6,6 +6,8 @@ Run on a machine on the same network as the PBX.
 """
 from __future__ import annotations
 
+import ftplib
+import io
 import json
 import logging
 import socket
@@ -76,7 +78,17 @@ def load_config() -> dict[str, Any]:
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     if isinstance(cfg.get("connector_api_key"), str):
         cfg["connector_api_key"] = cfg["connector_api_key"].strip()
-    for field in ("api_base_url", "x_api_key", "app_api_key", "ami_username", "ami_password"):
+    for field in (
+        "api_base_url",
+        "x_api_key",
+        "app_api_key",
+        "ami_username",
+        "ami_password",
+        "ftp_host",
+        "ftp_user",
+        "ftp_password",
+        "pbx_host",
+    ):
         if isinstance(cfg.get(field), str):
             cfg[field] = cfg[field].strip()
     if not cfg.get("connector_api_key"):
@@ -353,6 +365,135 @@ def forward_event(cfg: dict, raw_body: bytes, content_type: str) -> None:
         raise
 
 
+def fetch_recording_via_ftp(cfg: dict, ftp_path: str) -> bytes:
+    """Download a recording WAV from the PBX internal FTP server."""
+    host = (cfg.get("ftp_host") or cfg.get("pbx_host") or "").strip()
+    if not host:
+        raise ValueError("ftp_host / pbx_host is empty — cannot fetch recording")
+    user = (cfg.get("ftp_user") or "").strip()
+    if not user:
+        raise ValueError("ftp_user is empty — cannot fetch recording")
+    password = cfg.get("ftp_password") or ""
+    port = int(cfg.get("ftp_port", 21))
+    timeout = int(cfg.get("recording_fetch_timeout_sec", 60))
+    passive = cfg.get("ftp_passive", True)
+
+    ftp = ftplib.FTP()
+    try:
+        ftp.connect(host, port, timeout=timeout)
+        ftp.login(user, password)
+        ftp.set_pasv(bool(passive))
+        buf = io.BytesIO()
+        ftp.retrbinary(f"RETR {ftp_path}", buf.write)
+        return buf.getvalue()
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            try:
+                ftp.close()
+            except Exception:
+                pass
+
+
+def upload_recording_bytes(
+    cfg: dict, record_id: int, file_bytes: bytes, filename: str
+) -> None:
+    """Upload recording bytes to CRM storage."""
+    url = build_api_url(cfg, f"/integrations/pbx/connector/recordings/{record_id}/upload/")
+    boundary = f"----LoopPbx{int(time.time() * 1000)}"
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode(),
+            (
+                f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                "Content-Type: audio/wav\r\n\r\n"
+            ).encode(),
+            file_bytes,
+            f"\r\n--{boundary}--\r\n".encode(),
+        ]
+    )
+    headers = _request_headers(
+        cfg,
+        {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    req = urlrequest.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with _urlopen(cfg, req, timeout=120) as resp:
+            logger.info(
+                "Uploaded recording record_id=%s (%s bytes): %s",
+                record_id,
+                len(file_bytes),
+                resp.read().decode()[:200],
+            )
+    except HTTPError as e:
+        _log_http_error("POST", url, e)
+        raise
+
+
+def _recording_filename_from_job(job: dict[str, Any]) -> str:
+    ftp_path = (job.get("ftp_path") or "").strip()
+    if ftp_path:
+        name = Path(ftp_path).name
+        if name:
+            return name
+    path_str = (job.get("file") or "").strip()
+    if path_str:
+        return Path(path_str).name
+    return "recording.wav"
+
+
+def process_recording_job(cfg: dict, job: dict[str, Any]) -> None:
+    record_id = job.get("record_id")
+    ftp_path = (job.get("ftp_path") or "").strip()
+    if not record_id or not ftp_path:
+        return
+    filename = _recording_filename_from_job(job)
+    try:
+        file_bytes = fetch_recording_via_ftp(cfg, ftp_path)
+        if not file_bytes:
+            logger.warning(
+                "Recording FTP fetch returned empty body record_id=%s path=%s",
+                record_id,
+                ftp_path[:120],
+            )
+            return
+        upload_recording_bytes(cfg, int(record_id), file_bytes, filename)
+    except ftplib.error_perm as exc:
+        # 550 = file not found / not ready yet — retry on next poll.
+        msg = str(exc)
+        if msg.startswith("550") or "not found" in msg.lower() or "no such" in msg.lower():
+            logger.info(
+                "Recording not ready yet on FTP record_id=%s path=%s (%s)",
+                record_id,
+                ftp_path[:120],
+                msg[:80],
+            )
+            return
+        logger.exception(
+            "Recording FTP permission error record_id=%s path=%s",
+            record_id,
+            ftp_path[:120],
+        )
+    except Exception:
+        logger.exception("Recording FTP fetch/upload failed record_id=%s", record_id)
+
+
+def poll_recordings(cfg: dict) -> None:
+    interval = float(cfg.get("recording_poll_interval_sec", 5))
+    while True:
+        try:
+            resp = api_request(cfg, "GET", "/integrations/pbx/connector/recording-jobs/")
+            data = resp.get("data") or resp
+            for job in data.get("jobs") or []:
+                process_recording_job(cfg, job)
+        except Exception:
+            logger.exception("Recording poll error")
+        time.sleep(interval)
+
+
 def poll_commands(cfg: dict, ami: AmiClient) -> None:
     while True:
         try:
@@ -498,6 +639,8 @@ def main() -> None:
 
     poll_thread = threading.Thread(target=poll_commands, args=(cfg, ami), daemon=True)
     poll_thread.start()
+    recording_thread = threading.Thread(target=poll_recordings, args=(cfg,), daemon=True)
+    recording_thread.start()
 
     host = cfg.get("listen_host", "0.0.0.0")
     port = int(cfg.get("listen_port", 8787))

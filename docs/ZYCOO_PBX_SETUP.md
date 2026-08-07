@@ -136,10 +136,42 @@ python connector.py
 | `ami_username` / `ami_password` | AMI credentials |
 | `listen_host` | `0.0.0.0` |
 | `listen_port` | `8787` |
+| `ftp_user` / `ftp_password` | Zycoo **FTP Server** credentials (System → Storage → FTP Storage) |
+| `ftp_host` | Optional; defaults to `pbx_host` |
+| `ftp_port` | `21` (plain FTP) |
+| `recording_poll_interval_sec` | How often to poll CRM for pending recording jobs (default `5`) |
 
 Run as a Windows service or systemd unit so it stays online.
 
-## 6. Remote Access (optional)
+## 6. Call recording via PBX FTP (required for CRM playback)
+
+Zycoo has **no HTTP API** for recordings. LOOP pulls files from the PBX **internal FTP server**.
+
+### On the Zycoo admin UI
+
+1. **System → Storage → FTP Storage → FTP Server**
+2. Turn **Enable Service** ON (and optionally **Allow Write** — not required for CRM pull).
+3. Set a strong **Username** / **Password** (do not use defaults like `ftpuser`/`ftppass` in production).
+4. Leave **FTP Uploading** OFF — that feature pushes to *your* FTP server on a **daily** schedule and is not used by LOOP.
+5. Click **Submit**.
+
+### Verify from the connector PC
+
+After a recorded call, browse FTP (e.g. FileZilla) to:
+
+```
+/recording/<YYYYMMDD>/<extension>/<uniqueid>-....wav
+```
+
+CDR paths look like `/var/spool/asterisk/monitor/recording/...`; the connector maps them to `/recording/...`.
+
+### Connector config
+
+Set `ftp_user` / `ftp_password` in `config.json` (and `ftp_host` if different from `pbx_host`). Enable **Cdr** (and recording-related) Push Events so CRM receives `recording_filename`.
+
+Expect a short delay after hangup before the `.wav` exists; the connector retries on FTP 550.
+
+## 7. Remote Access (optional)
 
 **Path:** Addons → Remote Access
 
@@ -153,20 +185,22 @@ https://<your-api>/api/integrations/webhooks/pbx/<webhook_token>/
 
 and whitelist the CRM server IP in AMI (less secure; connector is preferred).
 
-## 7. PMS (skip)
+## 8. PMS (skip)
 
 **Addons → API → PMS** is for hotel/property systems. Leave disabled for standard CRM use.
 
-## 8. CRM configuration checklist
+## 9. CRM configuration checklist
 
 1. Enable PBX integration in **Integrations → PBX / ZYCOO**.
 2. Copy **Webhook URL** and **Connector API key**.
 3. Map user extensions.
-4. Start connector; confirm **Connector last seen** updates in CRM.
-5. Place a test inbound call → screen pop + auto call log on lead timeline.
-6. Test click-to-dial from a lead page.
+4. Enable Zycoo **FTP Server** and put credentials in connector `config.json`.
+5. Start connector; confirm **Connector last seen** updates in CRM.
+6. Place a test inbound call → screen pop + auto call log on lead timeline.
+7. Confirm recording status becomes ready and playback works on the lead call.
+8. Test click-to-dial from a lead page.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Issue | Check |
 |-------|-------|
@@ -175,4 +209,5 @@ and whitelist the CRM server IP in AMI (less secure; connector is preferred).
 | `Extension does not exist` | Wrong extension in CRM mapping, or extension not created under Telephony → Extensions |
 | Wrong lead on screen pop | Phone number format; add number to lead profile |
 | No recording metadata | Recording enabled on PBX? `recording_filename` / CDR fields present in Push Event payload? |
+| Recording stuck pending | FTP Server enabled? `ftp_user`/`ftp_password` correct? File under `/recording/YYYYMMDD/...` from connector PC? |
 | Connector offline | `connector_last_seen_at` in CRM settings; network to cloud API |
