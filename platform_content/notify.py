@@ -16,6 +16,17 @@ def _feature_title_for_user(news, user) -> str:
     return (news.title_en or news.title_ar or "").strip()
 
 
+def _owner_has_news_inbox(owner_id: int, news_id: int) -> bool:
+    """True if this owner already has an inbox row for this news post."""
+    from notifications.models import Notification, NotificationType
+
+    return Notification.objects.filter(
+        user_id=owner_id,
+        type=NotificationType.SYSTEM_UPDATE,
+        data__news_id=str(news_id),
+    ).exists()
+
+
 def notify_company_owners_news(
     news_id: int,
     channels: str = "both",
@@ -27,6 +38,9 @@ def notify_company_owners_news(
       - push: in-app inbox + FCM only
       - email: email only
       - both: inbox + FCM + email
+
+    Inbox rows are created at most once per owner per news post. Re-notifying
+    still sends push/email when requested, but skips a duplicate inbox record.
     """
     from accounts.event_emails import send_news_published_email
     from accounts.models import User
@@ -65,6 +79,7 @@ def notify_company_owners_news(
 
         if send_push:
             try:
+                skip_inbox = _owner_has_news_inbox(owner.pk, news.id)
                 NotificationService.send_notification(
                     user=owner,
                     notification_type=NotificationType.SYSTEM_UPDATE,
@@ -75,6 +90,7 @@ def notify_company_owners_news(
                         "type": NotificationType.SYSTEM_UPDATE.value,
                     },
                     skip_settings_check=True,
+                    skip_database_insert=skip_inbox,
                 )
             except Exception:
                 logger.exception(
