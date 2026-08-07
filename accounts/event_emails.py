@@ -273,3 +273,29 @@ def send_followup_reminder_email(
     except Exception as exc:
         logger.error("Failed to send followup reminder email: %s", exc)
         return False
+
+
+def send_news_published_email(user, news, language="en"):
+    """Notify a company owner about a newly published Loop news post."""
+    lang = language if language in EMAIL_LANGUAGES else "en"
+    title = (
+        (news.title_ar or news.title_en)
+        if lang == "ar"
+        else (news.title_en or news.title_ar)
+    )
+    summary = (
+        (getattr(news, "summary_ar", None) or getattr(news, "summary_en", None) or "")
+        if lang == "ar"
+        else (getattr(news, "summary_en", None) or getattr(news, "summary_ar", None) or "")
+    )
+    if lang == "ar":
+        subject = f"تحديث جديد في LOOP CRM: {title}"
+    else:
+        subject = f"New LOOP CRM update: {title}"
+    context = {
+        "greeting_name": user.first_name or user.username or ("مرحباً" if lang == "ar" else "there"),
+        "news_title": title,
+        "news_summary": (summary or "").strip(),
+        "support_email": SMTPSettings.get_settings().from_email,
+    }
+    return _send_event_email(user, subject, "news_published", context, lang)

@@ -168,6 +168,7 @@ class LimitedAdminAdmin(admin.ModelAdmin):
         "can_manage_payment_gateways",
         "can_view_reports",
         "can_manage_communication",
+        "can_manage_content",
         "can_manage_settings",
         "created_at",
     ]
@@ -185,6 +186,7 @@ class LimitedAdminAdmin(admin.ModelAdmin):
                 "can_manage_payment_gateways",
                 "can_view_reports",
                 "can_manage_communication",
+                "can_manage_content",
                 "can_manage_settings",
                 "can_manage_limited_admins",
             )

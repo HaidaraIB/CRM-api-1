@@ -216,6 +216,7 @@ INSTALLED_APPS = [
     "integrations",
     "notifications",
     "support",
+    "platform_content",
     "tenant_chat",
     "company_library",
     "drf_spectacular",

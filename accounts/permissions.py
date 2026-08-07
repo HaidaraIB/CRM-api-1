@@ -502,6 +502,11 @@ class CanManageCommunication(LimitedAdminPermission):
     required_permission = "can_manage_communication"
 
 
+class CanManageContent(LimitedAdminPermission):
+    message = "You do not have permission to manage platform content."
+    required_permission = "can_manage_content"
+
+
 class CanManageSettings(LimitedAdminPermission):
     message = "You do not have permission to manage settings."
     write_permission = "can_manage_settings"

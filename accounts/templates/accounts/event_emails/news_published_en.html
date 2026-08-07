@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        body { background-color: #f4effc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 32px 16px; color: #1f1f2e; }
+        .wrapper { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 24px; box-shadow: 0 20px 50px rgba(66, 21, 170, 0.15); overflow: hidden; border: 1px solid rgba(66, 21, 170, 0.08); }
+        .header { background: linear-gradient(135deg, #5b21b6, #7c3aed); padding: 32px; color: #fff; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 700; }
+        .content { padding: 32px; line-height: 1.65; }
+        .highlight { padding: 16px 24px; font-size: 18px; font-weight: 600; color: #5b21b6; background: #f5f3ff; border-radius: 16px; margin: 16px 0; }
+        .footer { padding: 24px 32px; font-size: 12px; color: #78738c; background: #fafafc; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="header"><h1>What's new in LOOP CRM</h1></div>
+        <div class="content">
+            <p>Hi {{ greeting_name }},</p>
+            <p>A new update was published in LOOP CRM.</p>
+            <div class="highlight">{{ news_title }}</div>
+            {% if news_summary %}<p>{{ news_summary }}</p>{% endif %}
+            <p>Open LOOP CRM and go to <strong>News &amp; Updates</strong> to read the full announcement.</p>
+        </div>
+        <div class="footer">Sent by LOOP CRM · Need help? Reply to: {{ support_email }}</div>
+    </div>
+</body>
+</html>

@@ -129,6 +129,12 @@ from subscriptions.views import (
 )
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
+from platform_content.views import (
+    GuideArticleAdminViewSet,
+    NewsPostAdminViewSet,
+    PublishedGuideArticleViewSet,
+    PublishedNewsPostViewSet,
+)
 from tenant_chat.views import TenantChatConversationViewSet, TenantChatMessageAttachmentView
 from company_library.views import CompanyLibraryFileViewSet, CompanyLibraryFileDownloadView
 
@@ -201,6 +207,18 @@ router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
 router.register(r"supervisors", SupervisorViewSet, basename="supervisor")
 router.register(r"support-tickets", SupportTicketViewSet, basename="supportticket")
+router.register(r"guide-articles", GuideArticleAdminViewSet, basename="guidearticle")
+router.register(r"news-posts", NewsPostAdminViewSet, basename="newspost")
+router.register(
+    r"public-content/guide-articles",
+    PublishedGuideArticleViewSet,
+    basename="public_guidearticle",
+)
+router.register(
+    r"public-content/news-posts",
+    PublishedNewsPostViewSet,
+    basename="public_newspost",
+)
 router.register(
     r"tenant-chat/conversations",
     TenantChatConversationViewSet,

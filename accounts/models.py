@@ -435,6 +435,10 @@ class LimitedAdmin(models.Model):
     can_manage_payment_gateways = models.BooleanField(default=False)
     can_view_reports = models.BooleanField(default=False)
     can_manage_communication = models.BooleanField(default=False)
+    can_manage_content = models.BooleanField(
+        default=False,
+        help_text="Can manage Loop user guide articles and news posts",
+    )
     can_manage_settings = models.BooleanField(default=False)
     can_manage_limited_admins = models.BooleanField(default=False, help_text="Can manage other limited admins")
     
@@ -459,6 +463,7 @@ class LimitedAdmin(models.Model):
             'manage_payment_gateways': self.can_manage_payment_gateways,
             'view_reports': self.can_view_reports,
             'manage_communication': self.can_manage_communication,
+            'manage_content': self.can_manage_content,
             'manage_settings': self.can_manage_settings,
             'manage_limited_admins': self.can_manage_limited_admins,
         }
