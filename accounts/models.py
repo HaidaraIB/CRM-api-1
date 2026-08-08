@@ -69,6 +69,11 @@ class User(AbstractUser):
         blank=True,
         help_text="Daily work end time (company timezone). Must be set together with work_start_time.",
     )
+    whatsapp_call_away_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When set and in the future, user is Away for WhatsApp Cloud Calling (no incoming rings).",
+    )
     login_two_factor_enabled = models.BooleanField(
         default=True,
         help_text="When enabled, company owner must complete email 2FA at login (unless trusted device).",

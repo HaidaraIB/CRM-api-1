@@ -338,6 +338,26 @@ class WhatsAppAccount(models.Model):
         default=False,
         help_text="Whether WhatsApp Cloud Calling is enabled for this phone number",
     )
+    call_hours_enabled = models.BooleanField(
+        default=False,
+        help_text="When true, enforce weekly call hours (synced to Meta call_hours when possible).",
+    )
+    call_hours_timezone = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="IANA timezone for call hours (e.g. Asia/Baghdad).",
+    )
+    call_hours_weekly = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Per-day schedule: {monday: {closed, open, close}, ...} times HH:MM.",
+    )
+    out_of_hours_message = models.TextField(
+        blank=True,
+        default="",
+        help_text="Text sent to the customer when an inbound call arrives outside call hours.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

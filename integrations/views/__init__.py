@@ -79,9 +79,13 @@ from .whatsapp_calling import (
     whatsapp_call_recording_play,
     whatsapp_call_recording_upload,
     whatsapp_call_reject,
+    whatsapp_call_agent_status,
+    whatsapp_call_agent_status_team,
+    whatsapp_call_hours,
     whatsapp_call_terminate,
     whatsapp_calling_enable,
     whatsapp_calls_list,
+    whatsapp_calls_live,
     whatsapp_calls_pending,
 )
 
@@ -145,6 +149,7 @@ __all__ = [
     "pbx_reports_agents_view",
     "whatsapp_calls_list",
     "whatsapp_calls_pending",
+    "whatsapp_calls_live",
     "whatsapp_call_detail",
     "whatsapp_call_pre_accept",
     "whatsapp_call_accept",
@@ -156,4 +161,7 @@ __all__ = [
     "whatsapp_calling_enable",
     "whatsapp_call_recording_upload",
     "whatsapp_call_recording_play",
+    "whatsapp_call_agent_status",
+    "whatsapp_call_agent_status_team",
+    "whatsapp_call_hours",
 ]

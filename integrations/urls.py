@@ -55,6 +55,7 @@ from .views import (
     pbx_reports_agents_view,
     whatsapp_calls_list,
     whatsapp_calls_pending,
+    whatsapp_calls_live,
     whatsapp_call_detail,
     whatsapp_call_pre_accept,
     whatsapp_call_accept,
@@ -66,6 +67,9 @@ from .views import (
     whatsapp_calling_enable,
     whatsapp_call_recording_upload,
     whatsapp_call_recording_play,
+    whatsapp_call_agent_status,
+    whatsapp_call_agent_status_team,
+    whatsapp_call_hours,
 )
 from .whatsapp_webhook import whatsapp_webhook
 from .views.lead_api import (
@@ -121,6 +125,14 @@ urlpatterns = [
     path('whatsapp/contact-by-phone/', whatsapp_contact_by_phone, name='whatsapp_contact_by_phone'),
     path('whatsapp/calls/', whatsapp_calls_list, name='whatsapp_calls_list'),
     path('whatsapp/calls/pending/', whatsapp_calls_pending, name='whatsapp_calls_pending'),
+    path('whatsapp/calls/agent-status/', whatsapp_call_agent_status, name='whatsapp_call_agent_status'),
+    path(
+        'whatsapp/calls/agent-status/team/',
+        whatsapp_call_agent_status_team,
+        name='whatsapp_call_agent_status_team',
+    ),
+    path('whatsapp/calls/hours/', whatsapp_call_hours, name='whatsapp_call_hours'),
+    path('whatsapp/calls/live/', whatsapp_calls_live, name='whatsapp_calls_live'),
     path('whatsapp/calls/initiate/', whatsapp_call_initiate, name='whatsapp_call_initiate'),
     path('whatsapp/calls/permission-request/', whatsapp_call_permission_request, name='whatsapp_call_permission_request'),
     path('whatsapp/calls/permissions/', whatsapp_call_permissions, name='whatsapp_call_permissions'),

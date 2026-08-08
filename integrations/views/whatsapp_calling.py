@@ -20,6 +20,14 @@ from integrations.models import (
     WhatsAppCallRecordingStatus,
     WhatsAppCallStatus,
 )
+from integrations.services.whatsapp_call_availability import (
+    normalize_weekly_schedule,
+    serialize_agent_call_status,
+    serialize_call_hours,
+    set_agent_call_away,
+    sync_call_hours_to_meta,
+    user_is_whatsapp_call_away,
+)
 from integrations.services.whatsapp_calling import (
     WhatsAppCallingError,
     call_permission_allows_start,
@@ -273,16 +281,27 @@ def whatsapp_calls_pending(request):
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
 
-    qs = (
-        _company_calls_qs(request.user)
-        .filter(
-            status=WhatsAppCallStatus.RINGING,
-            direction=WhatsAppCallDirection.INBOUND,
-            agent__isnull=True,
+    agent_away = user_is_whatsapp_call_away(request.user)
+    results = []
+    seen = set()
+
+    if not agent_away:
+        qs = (
+            _company_calls_qs(request.user)
+            .filter(
+                status=WhatsAppCallStatus.RINGING,
+                direction=WhatsAppCallDirection.INBOUND,
+                agent__isnull=True,
+            )
+            .order_by("created_at")[:20]
         )
-        .order_by("created_at")[:20]
-    )
-    # Also include outbound ringing owned by this agent (waiting for remote SDP answer)
+        for call in qs:
+            if call.id in seen:
+                continue
+            seen.add(call.id)
+            results.append(_serialize_call(call, request))
+
+    # Outbound ringing owned by this agent (waiting for remote SDP answer)
     mine = (
         _company_calls_qs(request.user)
         .filter(
@@ -291,15 +310,109 @@ def whatsapp_calls_pending(request):
         )
         .order_by("-created_at")[:10]
     )
-    seen = set()
-    results = []
-    for call in list(qs) + list(mine):
+    for call in mine:
         if call.id in seen:
             continue
         seen.add(call.id)
         results.append(_serialize_call(call, request))
-    return success_response({"results": results})
+    return success_response(
+        {
+            "results": results,
+            "agent_status": serialize_agent_call_status(request.user),
+        }
+    )
 
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_calls_live(request):
+    """
+    Live calls for the Calls page: ringing (answerable) + answered in-progress.
+    Away agents do not receive unassigned ringing rows.
+
+    Stale rows (missed terminate webhooks) are closed so LIVE CALLS does not
+    show forever-running timers.
+    """
+    from datetime import timedelta
+
+    from django.db.models import Q
+
+    gate = _integration_gate(request.user.company, "whatsapp")
+    if not gate.get("enabled"):
+        return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+
+    now = timezone.now()
+    answered_cutoff = now - timedelta(hours=3)
+    ringing_cutoff = now - timedelta(minutes=5)
+
+    company_id = request.user.company_id
+    if company_id:
+        stale_answered = WhatsAppCall.objects.filter(
+            company_id=company_id,
+            status=WhatsAppCallStatus.ANSWERED,
+        ).filter(
+            Q(answered_at__lt=answered_cutoff)
+            | Q(answered_at__isnull=True, updated_at__lt=answered_cutoff)
+        )[:25]
+        for call in stale_answered:
+            call.status = WhatsAppCallStatus.ENDED
+            if not call.ended_at:
+                call.ended_at = now
+            if call.answered_at and call.ended_at:
+                call.duration_sec = max(
+                    0, int((call.ended_at - call.answered_at).total_seconds())
+                )
+            call.save(
+                update_fields=["status", "ended_at", "duration_sec", "updated_at"]
+            )
+
+        stale_ringing = WhatsAppCall.objects.filter(
+            company_id=company_id,
+            status=WhatsAppCallStatus.RINGING,
+            created_at__lt=ringing_cutoff,
+        )[:25]
+        for call in stale_ringing:
+            if call.direction == WhatsAppCallDirection.INBOUND and not call.answered_at:
+                call.status = WhatsAppCallStatus.MISSED
+            elif call.direction == WhatsAppCallDirection.OUTBOUND and not call.answered_at:
+                call.status = WhatsAppCallStatus.NO_ANSWER
+            else:
+                call.status = WhatsAppCallStatus.ENDED
+            if not call.ended_at:
+                call.ended_at = now
+            call.save(update_fields=["status", "ended_at", "updated_at"])
+
+    qs = (
+        _company_calls_qs(request.user)
+        .filter(status__in=(WhatsAppCallStatus.RINGING, WhatsAppCallStatus.ANSWERED))
+        .filter(
+            Q(status=WhatsAppCallStatus.RINGING, created_at__gte=ringing_cutoff)
+            | Q(status=WhatsAppCallStatus.ANSWERED, answered_at__gte=answered_cutoff)
+            | Q(
+                status=WhatsAppCallStatus.ANSWERED,
+                answered_at__isnull=True,
+                updated_at__gte=answered_cutoff,
+            )
+        )
+    )
+    agent_away = user_is_whatsapp_call_away(request.user)
+    results = []
+    for call in qs.order_by("-updated_at")[:50]:
+        if (
+            agent_away
+            and call.status == WhatsAppCallStatus.RINGING
+            and call.direction == WhatsAppCallDirection.INBOUND
+            and call.agent_id is None
+        ):
+            continue
+        results.append(_serialize_call(call, request))
+    return success_response(
+        {
+            "results": results,
+            "count": len(results),
+            "agent_status": serialize_agent_call_status(request.user),
+        }
+    )
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
@@ -341,8 +454,15 @@ def whatsapp_call_accept(request, pk: int):
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
+    if user_is_whatsapp_call_away(request.user):
+        return error_response(
+            "You are Away and cannot answer WhatsApp calls",
+            code="whatsapp_call_agent_away",
+            status_code=400,
+        )
     if call.status not in (WhatsAppCallStatus.RINGING, WhatsAppCallStatus.ANSWERED):
         return error_response(f"Cannot accept call in status {call.status}", status_code=400)
+
     sdp = (request.data.get("sdp") or call.answer_sdp or "").strip()
     if not sdp:
         return validation_error_response({"sdp": ["Required"]})
@@ -441,7 +561,9 @@ def whatsapp_call_initiate(request):
     account_id = request.data.get("whatsapp_account_id")
     skip_permission_check = (request.data.get("skip_permission_check") or False) is True
 
-    if not to or not sdp:
+    if not to:
+        return validation_error_response({"to": ["Required"]})
+    if not sdp:
         return validation_error_response({"to": ["Required"], "sdp": ["Required"]})
 
     wa, err = _resolve_account(request.user, account_id)
@@ -796,3 +918,151 @@ def whatsapp_call_recording_play(request, pk: int):
         raise Http404("Recording not found")
     content_type = mimetypes.guess_type(call.recording_storage_key)[0] or "audio/webm"
     return FileResponse(fh, content_type=content_type, as_attachment=False)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_call_agent_status(request):
+    """
+    Agent Ready / Away for WhatsApp calling.
+    POST body: { "status": "ready" } or { "status": "away", "duration_minutes": 15|30|60 }
+    """
+    gate = _integration_gate(request.user.company, "whatsapp")
+    if not gate.get("enabled"):
+        return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+
+    if request.method == "GET":
+        return success_response(serialize_agent_call_status(request.user))
+
+    status = (request.data.get("status") or "").strip().lower()
+    if status == "ready":
+        payload = set_agent_call_away(request.user, duration_minutes=None)
+        return success_response(payload)
+    if status == "away":
+        try:
+            minutes = int(request.data.get("duration_minutes") or 0)
+        except (TypeError, ValueError):
+            return validation_error_response({"duration_minutes": ["Must be 15, 30, or 60"]})
+        try:
+            payload = set_agent_call_away(request.user, duration_minutes=minutes)
+        except ValueError as exc:
+            return validation_error_response({"duration_minutes": [str(exc)]})
+        return success_response(payload)
+    return validation_error_response({"status": ["Must be ready or away"]})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_call_agent_status_team(request):
+    """
+    Owner/supervisor view: Ready/Away for company users who can take WhatsApp calls.
+    """
+    gate = _integration_gate(request.user.company, "whatsapp")
+    if not gate.get("enabled"):
+        return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_sees_all_company_leads(request.user):
+        return error_response("Not allowed to view team call status", status_code=403)
+
+    from accounts.models import User
+
+    qs = (
+        User.objects.filter(company=request.user.company, is_active=True)
+        .exclude(role__in=("data_entry",))
+        .order_by("first_name", "last_name", "username")
+    )
+    results = []
+    for u in qs[:100]:
+        st = serialize_agent_call_status(u)
+        results.append(
+            {
+                "id": u.id,
+                "username": u.username,
+                "first_name": u.first_name or "",
+                "last_name": u.last_name or "",
+                "role": u.role,
+                "status": st["status"],
+                "away_until": st.get("away_until"),
+            }
+        )
+    return success_response({"results": results})
+
+
+def _user_can_manage_call_hours(user) -> bool:
+    role = (getattr(user, "role", "") or "").lower()
+    if role in ("admin", "owner"):
+        return True
+    return user_sees_all_company_leads(user)
+
+
+@api_view(["GET", "PUT", "PATCH"])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_call_hours(request):
+    """
+    Configure weekly WhatsApp call hours + out-of-hours customer message.
+    Syncs to Meta call_hours when credentials allow.
+    """
+    gate = _integration_gate(request.user.company, "whatsapp")
+    if not gate.get("enabled"):
+        return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+
+    account_id = request.query_params.get("whatsapp_account_id") or request.data.get(
+        "whatsapp_account_id"
+    )
+    wa, err = _resolve_account(request.user, account_id)
+    if not wa:
+        return error_response(
+            "No connected WhatsApp number for this company.",
+            code=err or "no_connected_whatsapp_number",
+            status_code=400,
+        )
+
+    if request.method == "GET":
+        return success_response(serialize_call_hours(wa))
+
+    if not _user_can_manage_call_hours(request.user):
+        return error_response("Not allowed to manage call hours", status_code=403)
+
+    enabled = request.data.get("enabled")
+    if enabled is not None:
+        wa.call_hours_enabled = bool(enabled)
+
+    tz = request.data.get("timezone")
+    if tz is not None:
+        wa.call_hours_timezone = str(tz).strip()[:64]
+
+    weekly = request.data.get("weekly")
+    if weekly is not None:
+        wa.call_hours_weekly = normalize_weekly_schedule(weekly)
+
+    msg = request.data.get("out_of_hours_message")
+    if msg is not None:
+        wa.out_of_hours_message = str(msg)[:4000]
+
+    sync_meta = request.data.get("sync_meta", True)
+    wa.save(
+        update_fields=[
+            "call_hours_enabled",
+            "call_hours_timezone",
+            "call_hours_weekly",
+            "out_of_hours_message",
+            "updated_at",
+        ]
+    )
+
+    meta_result = None
+    meta_error = None
+    if sync_meta and wa.calling_enabled:
+        try:
+            meta_result = sync_call_hours_to_meta(wa)
+        except WhatsAppCallingError as exc:
+            meta_error = str(exc)
+        except Exception as exc:
+            meta_error = str(exc)
+
+    payload = serialize_call_hours(wa)
+    if meta_result is not None:
+        payload["meta_sync"] = meta_result
+    if meta_error:
+        payload["meta_sync_error"] = meta_error
+    return success_response(payload)
+

@@ -488,6 +488,22 @@ def _upsert_from_call_event(
     call.save(update_fields=list(dict.fromkeys(updates)))
     if event == "terminate":
         ensure_client_call_for_whatsapp_call(call)
+    elif (
+        event == "connect"
+        and direction == WhatsAppCallDirection.INBOUND
+        and call.status == WhatsAppCallStatus.RINGING
+    ):
+        try:
+            from integrations.services.whatsapp_call_availability import (
+                is_within_call_hours,
+                reject_inbound_out_of_hours,
+            )
+
+            if not is_within_call_hours(account):
+                reject_inbound_out_of_hours(call)
+                call.refresh_from_db()
+        except Exception:
+            logger.exception("Out-of-hours inbound handling failed call=%s", call.id)
     return call
 
 
