@@ -286,6 +286,11 @@ def whatsapp_calls_pending(request):
     seen = set()
 
     if not agent_away:
+        # Only ring the assigned agent (or, for an unassigned lead, anyone eligible
+        # to pick it up) — company-wide viewers (owner/admin/reception/etc.) must
+        # not be rung for calls on leads assigned to someone else.
+        from django.db.models import Q
+
         qs = (
             _company_calls_qs(request.user)
             .filter(
@@ -293,6 +298,7 @@ def whatsapp_calls_pending(request):
                 direction=WhatsAppCallDirection.INBOUND,
                 agent__isnull=True,
             )
+            .filter(Q(client__isnull=True) | Q(client__assigned_to_id=request.user.id))
             .order_by("created_at")[:20]
         )
         for call in qs:
@@ -382,17 +388,26 @@ def whatsapp_calls_live(request):
                 call.ended_at = now
             call.save(update_fields=["status", "ended_at", "updated_at"])
 
-    qs = (
-        _company_calls_qs(request.user)
-        .filter(status__in=(WhatsAppCallStatus.RINGING, WhatsAppCallStatus.ANSWERED))
-        .filter(
-            Q(status=WhatsAppCallStatus.RINGING, created_at__gte=ringing_cutoff)
-            | Q(status=WhatsAppCallStatus.ANSWERED, answered_at__gte=answered_cutoff)
-            | Q(
-                status=WhatsAppCallStatus.ANSWERED,
-                answered_at__isnull=True,
-                updated_at__gte=answered_cutoff,
-            )
+    # RINGING must only reach the assigned agent (or an unassigned inbound call
+    # nobody has claimed yet) — never every company-wide viewer, or owners/admins
+    # get rung for leads that aren't theirs. ANSWERED stays company-wide so
+    # supervisors can still monitor in-progress calls on the Live Calls page.
+    personal_scope = (
+        Q(client__assigned_to_id=request.user.id)
+        | Q(client__isnull=True, agent__isnull=True)
+        | Q(agent_id=request.user.id)
+    )
+    qs = _company_calls_qs(request.user).filter(
+        Q(
+            status=WhatsAppCallStatus.RINGING,
+            created_at__gte=ringing_cutoff,
+        )
+        & personal_scope
+        | Q(status=WhatsAppCallStatus.ANSWERED, answered_at__gte=answered_cutoff)
+        | Q(
+            status=WhatsAppCallStatus.ANSWERED,
+            answered_at__isnull=True,
+            updated_at__gte=answered_cutoff,
         )
     )
     agent_away = user_is_whatsapp_call_away(request.user)

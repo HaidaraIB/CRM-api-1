@@ -9,6 +9,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from crm.models import Client, ClientCall, ClientCallSource
+from django.utils import timezone
 from integrations.models import (
     IntegrationAccount,
     MessageTemplate,
@@ -307,6 +308,126 @@ def test_store_recording_rejects_unanswered_call(company, wa_account):
     call.refresh_from_db()
     assert call.recording_status == WhatsAppCallRecordingStatus.NONE
     assert not call.recording_storage_key
+
+
+@pytest.mark.django_db
+def test_pending_calls_only_ring_assigned_agent_not_owner(
+    company, wa_account, admin_user, employee_user, plan, subscription
+):
+    """
+    RINGING inbound call for a lead assigned to `employee_user` must appear in
+    /calls/pending/ for that employee, but NOT for the company owner/admin —
+    even though the admin can see the call in the full calls list/history.
+    """
+    plan.features = {**(plan.features or {}), "integration_whatsapp": True}
+    plan.save(update_fields=["features"])
+
+    lead = Client.objects.create(company=company, name="Assigned Lead", assigned_to=employee_user)
+    WhatsAppCall.objects.create(
+        company=company,
+        whatsapp_account=wa_account,
+        client=lead,
+        meta_call_id="wacid.pending.assigned",
+        direction=WhatsAppCallDirection.INBOUND,
+        status=WhatsAppCallStatus.RINGING,
+        peer_phone="15559990000",
+        recording_status=WhatsAppCallRecordingStatus.NONE,
+    )
+
+    url = reverse("whatsapp_calls_pending")
+
+    employee_client = APIClient()
+    employee_client.force_authenticate(user=employee_user)
+    res = employee_client.get(url)
+    assert res.status_code == 200
+    body = res.json()
+    results = (body.get("data") or body).get("results")
+    assert any(r["meta_call_id"] == "wacid.pending.assigned" for r in results)
+
+    admin_client = APIClient()
+    admin_client.force_authenticate(user=admin_user)
+    res = admin_client.get(url)
+    assert res.status_code == 200
+    body = res.json()
+    results = (body.get("data") or body).get("results")
+    assert not any(r["meta_call_id"] == "wacid.pending.assigned" for r in results)
+
+
+@pytest.mark.django_db
+def test_pending_calls_ring_everyone_when_lead_unassigned(
+    company, wa_account, admin_user, employee_user, plan, subscription
+):
+    """Unassigned/unknown-caller inbound RINGING calls stay visible to any eligible agent."""
+    plan.features = {**(plan.features or {}), "integration_whatsapp": True}
+    plan.save(update_fields=["features"])
+
+    WhatsAppCall.objects.create(
+        company=company,
+        whatsapp_account=wa_account,
+        client=None,
+        meta_call_id="wacid.pending.unassigned",
+        direction=WhatsAppCallDirection.INBOUND,
+        status=WhatsAppCallStatus.RINGING,
+        peer_phone="15559991111",
+        recording_status=WhatsAppCallRecordingStatus.NONE,
+    )
+
+    url = reverse("whatsapp_calls_pending")
+    admin_client = APIClient()
+    admin_client.force_authenticate(user=admin_user)
+    res = admin_client.get(url)
+    assert res.status_code == 200
+    body = res.json()
+    results = (body.get("data") or body).get("results")
+    assert any(r["meta_call_id"] == "wacid.pending.unassigned" for r in results)
+
+
+@pytest.mark.django_db
+def test_live_calls_ringing_scoped_to_assignee_but_answered_stays_company_wide(
+    company, wa_account, admin_user, employee_user, plan, subscription
+):
+    """
+    /calls/live/ (Live Calls page) must not surface another agent's RINGING
+    call to the owner, but should still show company-wide ANSWERED calls so
+    supervisors can monitor in-progress conversations.
+    """
+    plan.features = {**(plan.features or {}), "integration_whatsapp": True}
+    plan.save(update_fields=["features"])
+
+    lead = Client.objects.create(company=company, name="Assigned Lead 2", assigned_to=employee_user)
+    WhatsAppCall.objects.create(
+        company=company,
+        whatsapp_account=wa_account,
+        client=lead,
+        meta_call_id="wacid.live.ringing.assigned",
+        direction=WhatsAppCallDirection.INBOUND,
+        status=WhatsAppCallStatus.RINGING,
+        peer_phone="15559992222",
+        recording_status=WhatsAppCallRecordingStatus.NONE,
+    )
+    WhatsAppCall.objects.create(
+        company=company,
+        whatsapp_account=wa_account,
+        client=lead,
+        agent=employee_user,
+        meta_call_id="wacid.live.answered.assigned",
+        direction=WhatsAppCallDirection.INBOUND,
+        status=WhatsAppCallStatus.ANSWERED,
+        answered_at=timezone.now(),
+        peer_phone="15559993333",
+        recording_status=WhatsAppCallRecordingStatus.NONE,
+    )
+
+    url = reverse("whatsapp_calls_live")
+    admin_client = APIClient()
+    admin_client.force_authenticate(user=admin_user)
+    res = admin_client.get(url)
+    assert res.status_code == 200
+    body = res.json()
+    results = (body.get("data") or body).get("results")
+    ids = {r["meta_call_id"] for r in results}
+    assert "wacid.live.ringing.assigned" not in ids
+    assert "wacid.live.answered.assigned" in ids
 
 
 @pytest.mark.django_db
