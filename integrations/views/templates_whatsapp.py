@@ -1106,6 +1106,8 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 code='meta_api_request_failed',
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
+
+    @action(detail=True, methods=['post'], url_path='clone-to-channel')
     def clone_to_channel(self, request, pk=None):
         """
         Create a counterpart template on the other channel (WhatsApp ↔ SMS).

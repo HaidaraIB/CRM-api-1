@@ -640,6 +640,9 @@ LOGGING = {
         "important_only": {
             "()": "crm_saas_api.logging_filters.ImportantOnlyFilter",
         },
+        "skip_expected_forbidden": {
+            "()": "crm_saas_api.logging_filters.SkipExpectedForbiddenFilter",
+        },
     },
     "handlers": {
         "file": {
@@ -647,19 +650,20 @@ LOGGING = {
             "class": "logging.FileHandler",
             "filename": BASE_DIR / "logs" / "django.log",
             "formatter": "verbose",
-            "filters": ["skip_noise"],
+            "filters": ["skip_expected_forbidden", "skip_noise"],
         },
         "file_important": {
             "level": "WARNING",
             "class": "logging.FileHandler",
             "filename": BASE_DIR / "logs" / "django_important.log",
             "formatter": "verbose",
-            "filters": ["important_only"],
+            "filters": ["skip_expected_forbidden", "important_only"],
         },
         "console": {
             "level": "INFO",
             "class": "logging.StreamHandler",
             "formatter": "simple",
+            "filters": ["skip_expected_forbidden"],
         },
     },
     "root": {

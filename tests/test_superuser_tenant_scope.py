@@ -1,4 +1,5 @@
 import pytest
+from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory
 
 from accounts.models import Role, User
@@ -57,11 +58,15 @@ def test_superuser_admin_user_queryset_is_company_scoped():
     )
 
     factory = APIRequestFactory()
-    request = factory.get("/api/users/")
+    # get_queryset() reads request.query_params, which only exists on DRF's Request
+    # wrapper — dispatch always provides it, so the test must wrap it too.
+    request = Request(factory.get("/api/users/"))
     request.user = owner_a
 
     view = UserViewSet()
     view.request = request
+    # Set by dispatch() in real use; get_queryset() branches on it.
+    view.action = "list"
     qs_ids = set(view.get_queryset().values_list("id", flat=True))
 
     assert owner_a.id in qs_ids

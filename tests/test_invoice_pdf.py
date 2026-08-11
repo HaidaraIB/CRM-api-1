@@ -178,7 +178,12 @@ def test_invoice_send_email_viewset_action(monkeypatch):
 
     viewset = InvoiceViewSet()
     viewset.get_object = lambda: invoice
-    request = SimpleNamespace(data={"to": "owner@example.com", "language": "en"})
+    # send_email runs CanManagePayments, which reads request.user — real requests
+    # always carry one, so the fake request needs a platform admin.
+    request = SimpleNamespace(
+        data={"to": "owner@example.com", "language": "en"},
+        user=SimpleNamespace(is_authenticated=True, is_super_admin=lambda: True),
+    )
 
     response = viewset.send_email(request)
 

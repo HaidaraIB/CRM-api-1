@@ -266,7 +266,15 @@ def ai_insight_approve_view(request, pk):
     if notes and not notes.strip().startswith("🤖"):
         notes = f"🤖 AI: {notes}"
 
-    stage = insight.client.status
+    # ClientTask.stage is a settings.LeadStage FK — Client.status is a LeadStatus and
+    # assigning it raises ValueError. A client has no stage of its own; it lives on the
+    # latest task, so carry that forward (None when the client has no staged task yet).
+    last_staged_task = (
+        ClientTask.objects.filter(client=insight.client, stage__isnull=False)
+        .select_related("stage")
+        .first()
+    )
+    stage = last_staged_task.stage if last_staged_task else None
     task = ClientTask.objects.create(
         client=insight.client,
         stage=stage,

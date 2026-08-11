@@ -22,6 +22,34 @@ class ImportantOnlyFilter(logging.Filter):
         return False
 
 
+class SkipExpectedForbiddenFilter(logging.Filter):
+    """
+    Drop `Forbidden: <path>` warnings for endpoints that clients poll on a timer.
+
+    A user whose WhatsApp access the owner switched off keeps polling unread-count /
+    conversations every few seconds (including from app builds already installed on
+    phones), so Django's django.request logger writes a WARNING several times a minute
+    forever. The 403 itself is correct and intentional — only the log line is noise.
+
+    Scoped to this allowlist on purpose: every other Forbidden stays loud.
+    """
+
+    POLLED_PATHS = (
+        "/integrations/whatsapp/unread-count/",
+        "/integrations/whatsapp/conversations/",
+        "/integrations/whatsapp/live-calls/",
+    )
+
+    def filter(self, record):
+        if record.levelno != logging.WARNING:
+            return True
+        msg = record.getMessage() or ""
+        if not msg.startswith("Forbidden: "):
+            return True
+        path = msg[len("Forbidden: "):].strip()
+        return not any(path.endswith(p) for p in self.POLLED_PATHS)
+
+
 class SkipNoiseFilter(logging.Filter):
     """
     Skip noisy records that fill the main log:
