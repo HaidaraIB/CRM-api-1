@@ -15,6 +15,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rest_framework import mixins, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
@@ -274,7 +275,18 @@ class LeadWhatsAppMessageViewSet(
 
     def get_queryset(self):
         user = self.request.user
-        from integrations.whatsapp_access import filter_whatsapp_messages_queryset
+        from integrations.whatsapp_access import (
+            filter_whatsapp_messages_queryset,
+            user_can_access_whatsapp_chats,
+        )
+
+        if not user_can_access_whatsapp_chats(user):
+            raise PermissionDenied(
+                detail={
+                    'error': 'WhatsApp chat access is disabled for your account',
+                    'error_key': 'whatsapp_access_disabled',
+                }
+            )
 
         qs = LeadWhatsAppMessage.objects.filter(client__company=user.company).order_by('-created_at')
         qs = filter_whatsapp_messages_queryset(user, qs)

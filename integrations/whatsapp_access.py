@@ -27,6 +27,28 @@ def user_sees_all_company_leads(user) -> bool:
     return False
 
 
+def user_can_access_whatsapp_chats(user) -> bool:
+    """Per-user toggle: owner may disable WhatsApp chat access for an employee/supervisor."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_admin():
+        return True
+    if user.is_supervisor():
+        return user.supervisor_has_permission("manage_whatsapp_chats")
+    return bool(getattr(user, "whatsapp_chat_enabled", True))
+
+
+def user_can_access_whatsapp_calls(user) -> bool:
+    """Per-user toggle: owner may disable WhatsApp calling access for an employee/supervisor."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_admin():
+        return True
+    if user.is_supervisor():
+        return user.supervisor_has_permission("manage_whatsapp_calls")
+    return bool(getattr(user, "whatsapp_call_enabled", True))
+
+
 def user_is_whatsapp_staff_scoped(user) -> bool:
     """Employee/Doctor: WhatsApp threads limited to assigned leads."""
     return bool(user and getattr(user, "is_assigned_clinical_staff", lambda: False)())

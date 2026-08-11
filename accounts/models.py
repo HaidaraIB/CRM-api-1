@@ -91,6 +91,14 @@ class User(AbstractUser):
         default=False,
         help_text="When True, employee/supervisor may delete clients (customers).",
     )
+    whatsapp_chat_enabled = models.BooleanField(
+        default=True,
+        help_text="When False, this employee cannot access WhatsApp chats.",
+    )
+    whatsapp_call_enabled = models.BooleanField(
+        default=True,
+        help_text="When False, this employee cannot access WhatsApp calling.",
+    )
 
     def __str__(self):
         return self.username
@@ -501,6 +509,8 @@ class SupervisorPermission(models.Model):
     can_manage_services = models.BooleanField(default=False)
     can_manage_real_estate = models.BooleanField(default=False)
     can_manage_settings = models.BooleanField(default=False)
+    can_manage_whatsapp_chats = models.BooleanField(default=True)
+    can_manage_whatsapp_calls = models.BooleanField(default=True)
 
     class Meta:
         db_table = "supervisor_permissions"
@@ -524,6 +534,8 @@ class SupervisorPermission(models.Model):
             "manage_services": self.can_manage_services,
             "manage_real_estate": self.can_manage_real_estate,
             "manage_settings": self.can_manage_settings,
+            "manage_whatsapp_chats": self.can_manage_whatsapp_chats,
+            "manage_whatsapp_calls": self.can_manage_whatsapp_calls,
         }
         return permission_map.get(permission_name, False)
 

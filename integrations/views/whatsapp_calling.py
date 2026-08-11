@@ -47,6 +47,7 @@ from integrations.services.whatsapp_calling import (
 )
 from integrations.whatsapp_access import (
     user_can_access_client,
+    user_can_access_whatsapp_calls,
     user_sees_all_company_leads,
 )
 from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
@@ -187,6 +188,8 @@ def whatsapp_calls_list(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     qs = _company_calls_qs(request.user)
     status_filter = (request.query_params.get("status") or "").strip()
@@ -280,6 +283,8 @@ def whatsapp_calls_pending(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     agent_away = user_is_whatsapp_call_away(request.user)
     results = []
@@ -346,6 +351,8 @@ def whatsapp_calls_live(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     now = timezone.now()
     answered_cutoff = now - timedelta(hours=3)
@@ -432,6 +439,8 @@ def whatsapp_calls_live(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_detail(request, pk: int):
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
@@ -441,6 +450,8 @@ def whatsapp_call_detail(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_pre_accept(request, pk: int):
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
@@ -466,6 +477,8 @@ def whatsapp_call_pre_accept(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_accept(request, pk: int):
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
@@ -499,6 +512,8 @@ def whatsapp_call_accept(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_reject(request, pk: int):
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
@@ -518,6 +533,8 @@ def whatsapp_call_reject(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_terminate(request, pk: int):
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
@@ -569,6 +586,8 @@ def whatsapp_call_initiate(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     to = (request.data.get("to") or request.data.get("phone") or "").strip()
     sdp = (request.data.get("sdp") or "").strip()
@@ -662,6 +681,8 @@ def whatsapp_call_permission_request(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     to = (request.data.get("to") or request.data.get("phone") or "").strip()
     template_id = request.data.get("template_id")
@@ -805,6 +826,8 @@ def whatsapp_call_permission_request(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_permissions(request):
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     to = (request.query_params.get("to") or request.query_params.get("phone") or "").strip()
     if not to:
         return validation_error_response({"to": ["Required"]})
@@ -876,6 +899,8 @@ def whatsapp_calling_enable(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_recording_upload(request, pk: int):
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
@@ -945,6 +970,8 @@ def whatsapp_call_agent_status(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     if request.method == "GET":
         return success_response(serialize_agent_call_status(request.user))
@@ -975,6 +1002,8 @@ def whatsapp_call_agent_status_team(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     if not user_sees_all_company_leads(request.user):
         return error_response("Not allowed to view team call status", status_code=403)
 
@@ -1019,6 +1048,8 @@ def whatsapp_call_hours(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
+    if not user_can_access_whatsapp_calls(request.user):
+        return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     account_id = request.query_params.get("whatsapp_account_id") or request.data.get(
         "whatsapp_account_id"

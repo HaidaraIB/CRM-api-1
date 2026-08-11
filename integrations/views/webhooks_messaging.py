@@ -35,6 +35,7 @@ from ..policy import (
 from settings.models import SystemSettings
 from ..oauth_utils import MetaOAuth, META_GRAPH_API_BASE_URL
 from ..whatsapp_account_sync import resolve_whatsapp_account_for_api
+from ..whatsapp_access import user_can_access_whatsapp_chats
 from .templates_whatsapp import (
     build_whatsapp_template_components_for_client,
     count_template_body_placeholders,
@@ -195,6 +196,8 @@ def whatsapp_send_message(request):
     gate = _integration_gate(company, "whatsapp")
     if not gate["enabled"]:
         return error_response(gate["message"], code="integration_disabled", status_code=403)
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     # Plan gating: monthly usage only (integration access handled by integration gate).
     from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
     require_monthly_usage(
@@ -401,6 +404,8 @@ def whatsapp_send_media(request):
     gate = _integration_gate(company, "whatsapp")
     if not gate["enabled"]:
         return error_response(gate["message"], code="integration_disabled", status_code=403)
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
 
@@ -646,6 +651,8 @@ def whatsapp_send_location(request):
     gate = _integration_gate(company, "whatsapp")
     if not gate["enabled"]:
         return error_response(gate["message"], code="integration_disabled", status_code=403)
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
 
@@ -854,6 +861,9 @@ def whatsapp_message_attachment(request, pk):
 
     from integrations.whatsapp_access import require_client_whatsapp_access
 
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
+
     try:
         msg = LeadWhatsAppMessage.objects.select_related('client').get(
             pk=pk,
@@ -949,6 +959,8 @@ def whatsapp_session_window(request):
     gate = _integration_gate(company, "whatsapp")
     if not gate["enabled"]:
         return error_response(gate["message"], code="integration_disabled", status_code=403)
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     client_id = request.query_params.get('client_id')
     phone = (request.query_params.get('phone') or '').strip()
     resolved_client = None
@@ -1057,6 +1069,8 @@ def whatsapp_send_template(request):
     gate = _integration_gate(company, "whatsapp")
     if not gate["enabled"]:
         return error_response(gate["message"], code="integration_disabled", status_code=403)
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     from subscriptions.entitlements import require_monthly_usage, increment_monthly_usage
 
     require_monthly_usage(

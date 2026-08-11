@@ -99,6 +99,8 @@ class UserSerializer(serializers.ModelSerializer):
             "work_start_time",
             "work_end_time",
             "can_delete_clients",
+            "whatsapp_chat_enabled",
+            "whatsapp_call_enabled",
         ]
         read_only_fields = [
             "id",
@@ -202,6 +204,19 @@ class UserSerializer(serializers.ModelSerializer):
             )
             if not can_set_delete:
                 attrs.pop("can_delete_clients", None)
+
+        # Only company admins may grant/revoke WhatsApp chat/call access toggles.
+        wa_toggle_keys = ("whatsapp_chat_enabled", "whatsapp_call_enabled")
+        if any(k in attrs for k in wa_toggle_keys):
+            can_set_wa = bool(
+                user
+                and user.is_authenticated
+                and user.is_admin()
+                and (inst is None or inst.company_id == user.company_id)
+            )
+            if not can_set_wa:
+                for k in wa_toggle_keys:
+                    attrs.pop(k, None)
 
         schedule_keys = ("weekly_day_off", "work_start_time", "work_end_time")
         if any(k in attrs for k in schedule_keys):
@@ -429,6 +444,8 @@ class UserSerializer(serializers.ModelSerializer):
                 "can_manage_services": sp.can_manage_services,
                 "can_manage_real_estate": sp.can_manage_real_estate,
                 "can_manage_settings": sp.can_manage_settings,
+                "can_manage_whatsapp_chats": sp.can_manage_whatsapp_chats,
+                "can_manage_whatsapp_calls": sp.can_manage_whatsapp_calls,
             },
         }
     @extend_schema_field(serializers.BooleanField())
@@ -466,6 +483,8 @@ class UserListSerializer(serializers.ModelSerializer):
             "work_start_time",
             "work_end_time",
             "can_delete_clients",
+            "whatsapp_chat_enabled",
+            "whatsapp_call_enabled",
             "is_active",
             "email_verified",
             "date_joined",
@@ -666,6 +685,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             "is_superuser": self.user.is_superuser,
             "language": getattr(self.user, "language", None) or "ar",
             "can_delete_clients": bool(getattr(self.user, "can_delete_clients", False)),
+            "whatsapp_chat_enabled": bool(getattr(self.user, "whatsapp_chat_enabled", True)),
+            "whatsapp_call_enabled": bool(getattr(self.user, "whatsapp_call_enabled", True)),
         }
         
         # Add limited admin permissions if user is a limited admin
@@ -703,6 +724,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                         "can_manage_services": sp.can_manage_services,
                         "can_manage_real_estate": sp.can_manage_real_estate,
                         "can_manage_settings": sp.can_manage_settings,
+                        "can_manage_whatsapp_chats": sp.can_manage_whatsapp_chats,
+                        "can_manage_whatsapp_calls": sp.can_manage_whatsapp_calls,
                     },
                 }
             except SupervisorPermission.DoesNotExist:
@@ -746,6 +769,8 @@ def build_user_auth_payload(user, request=None):
         "is_company_owner": is_company_owner(user),
         "login_two_factor_enabled": bool(getattr(user, "login_two_factor_enabled", True)),
         "can_delete_clients": bool(getattr(user, "can_delete_clients", False)),
+        "whatsapp_chat_enabled": bool(getattr(user, "whatsapp_chat_enabled", True)),
+        "whatsapp_call_enabled": bool(getattr(user, "whatsapp_call_enabled", True)),
         "language": getattr(user, "language", None) or "ar",
     }
     try:
@@ -783,6 +808,8 @@ def build_user_auth_payload(user, request=None):
                     "can_manage_services": sp.can_manage_services,
                     "can_manage_real_estate": sp.can_manage_real_estate,
                     "can_manage_settings": sp.can_manage_settings,
+                    "can_manage_whatsapp_chats": sp.can_manage_whatsapp_chats,
+                    "can_manage_whatsapp_calls": sp.can_manage_whatsapp_calls,
                 },
             }
         except SupervisorPermission.DoesNotExist:
@@ -1540,6 +1567,8 @@ class SupervisorSerializer(serializers.ModelSerializer):
             'can_manage_services',
             'can_manage_real_estate',
             'can_manage_settings',
+            'can_manage_whatsapp_chats',
+            'can_manage_whatsapp_calls',
             'can_delete_clients',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -1602,6 +1631,8 @@ class CreateSupervisorSerializer(serializers.Serializer):
     can_manage_services = serializers.BooleanField(default=False)
     can_manage_real_estate = serializers.BooleanField(default=False)
     can_manage_settings = serializers.BooleanField(default=False)
+    can_manage_whatsapp_chats = serializers.BooleanField(default=True)
+    can_manage_whatsapp_calls = serializers.BooleanField(default=True)
     can_delete_clients = serializers.BooleanField(default=False)
 
     def validate_username(self, value):
@@ -1648,6 +1679,8 @@ class CreateSupervisorSerializer(serializers.Serializer):
             'can_manage_services': validated_data.pop('can_manage_services', False),
             'can_manage_real_estate': validated_data.pop('can_manage_real_estate', False),
             'can_manage_settings': validated_data.pop('can_manage_settings', False),
+            'can_manage_whatsapp_chats': validated_data.pop('can_manage_whatsapp_chats', True),
+            'can_manage_whatsapp_calls': validated_data.pop('can_manage_whatsapp_calls', True),
         }
         filter_inventory_permissions_for_company(perms, company)
         # Only company admins may grant delete permission (Create is admin-only via CanManageSupervisors).

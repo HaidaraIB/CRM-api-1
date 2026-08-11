@@ -28,6 +28,7 @@ from ..models import (
 )
 from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_BASE_URL
 from ..whatsapp_account_sync import resolve_whatsapp_account_for_api
+from ..whatsapp_access import user_can_access_whatsapp_chats
 from ..serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -130,6 +131,8 @@ def whatsapp_conversations_list(request):
     blocked = _integration_gate(company, "whatsapp")
     if blocked is not None:
         return blocked
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     if request.method == 'DELETE':
         client_id = request.query_params.get('client')
@@ -234,6 +237,8 @@ def whatsapp_unread_count(request):
     blocked = _integration_gate(company, "whatsapp")
     if blocked is not None:
         return blocked
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     qs = LeadWhatsAppMessage.objects.filter(
         client__company=company,
@@ -262,6 +267,8 @@ def whatsapp_mark_conversation_read(request):
     blocked = _integration_gate(company, "whatsapp")
     if blocked is not None:
         return blocked
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     client_id = request.data.get('client') or request.data.get('client_id')
     phone = (request.data.get('phone') or '').strip()
@@ -319,6 +326,8 @@ def whatsapp_contact_by_phone(request):
     blocked = _integration_gate(company, "whatsapp")
     if blocked is not None:
         return blocked
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     phone = (request.query_params.get('phone') or '').strip()
     if not phone:
         return error_response('phone is required', code='bad_request')
@@ -1222,6 +1231,8 @@ def whatsapp_limits(request):
     blocked = _integration_gate(company, "whatsapp")
     if blocked is not None:
         return blocked
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     wa, err_resp = _connected_wa_or_response(company)
     if err_resp is not None:
         return err_resp
