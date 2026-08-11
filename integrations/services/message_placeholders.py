@@ -367,7 +367,7 @@ def _getter_for_canonical(canonical: str) -> Getter:
 
 
 # Sample strings Meta example rows / parameter fallbacks
-_CANONICAL_SAMPLES: dict[str, str] = {
+CANONICAL_SAMPLES: dict[str, str] = {
     "customer_name": "Customer",
     "first_name": "Customer",
     "phone": "9647700000000",
@@ -388,12 +388,12 @@ _CANONICAL_SAMPLES: dict[str, str] = {
 }
 
 
-def build_meta_placeholder_defs() -> list[tuple[str, str, Getter]]:
+def build_meta_placeholder_defs() -> list[tuple[str, str, str, Getter]]:
     """
-    (regex, sample, getter) entries for left-to-right Meta {{n}} conversion.
+    (regex, canonical, sample, getter) entries for left-to-right Meta {{n}} conversion.
     Includes both [alias] and { alias } forms for each known placeholder.
     """
-    defs: list[tuple[str, str, Getter]] = []
+    defs: list[tuple[str, str, str, Getter]] = []
     for canonical, aliases in PLACEHOLDER_ALIAS_GROUPS:
         parts: list[str] = []
         for alias in aliases:
@@ -403,9 +403,24 @@ def build_meta_placeholder_defs() -> list[tuple[str, str, Getter]]:
         if not parts:
             continue
         pattern = "|".join(parts)
-        sample = _CANONICAL_SAMPLES.get(canonical, "Sample")
-        defs.append((pattern, sample, _getter_for_canonical(canonical)))
+        sample = CANONICAL_SAMPLES.get(canonical, "Sample")
+        defs.append((pattern, canonical, sample, _getter_for_canonical(canonical)))
     return defs
 
 
 META_PLACEHOLDER_DEFS = build_meta_placeholder_defs()
+
+# Reverse of CANONICAL_SAMPLES: recovers the variable behind a Meta example value
+# when a template was submitted before the map was persisted. Samples are not unique
+# ("Customer" covers customer_name and first_name) — first group wins, matching the
+# left-to-right precedence of PLACEHOLDER_ALIAS_GROUPS.
+SAMPLE_TO_CANONICAL: dict[str, str] = {}
+for _canonical, _aliases in PLACEHOLDER_ALIAS_GROUPS:
+    _sample = CANONICAL_SAMPLES.get(_canonical)
+    if _sample and _sample not in SAMPLE_TO_CANONICAL:
+        SAMPLE_TO_CANONICAL[_sample] = _canonical
+
+
+def canonical_for_sample(sample: str) -> Optional[str]:
+    """Meta example value (e.g. "Employee") -> canonical placeholder id."""
+    return SAMPLE_TO_CANONICAL.get((sample or "").strip())

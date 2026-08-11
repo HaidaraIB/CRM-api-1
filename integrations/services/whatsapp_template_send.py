@@ -15,7 +15,7 @@ from integrations.views.templates_whatsapp import (
     build_whatsapp_template_components_for_client,
     count_template_body_placeholders,
     meta_slug_template_name,
-    whatsapp_template_body_parameter_values_for_client,
+    template_body_parameter_values,
 )
 from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
 
@@ -49,7 +49,7 @@ def template_outbound_log_body(template: MessageTemplate, param_values: Optional
         if matches:
             parts = []
             last = 0
-            for i, (start, end, _sample, _getter) in enumerate(matches):
+            for i, (start, end, _canonical, _sample, _getter) in enumerate(matches):
                 parts.append(out[last:start])
                 parts.append(str(param_values[i]) if i < len(param_values) else "-")
                 last = end
@@ -99,9 +99,7 @@ def send_approved_whatsapp_template(
     if n_placeholders > 0 or header_needs > 0:
         if client is None:
             return False, None, "client_required_for_placeholders", None
-        param_values = whatsapp_template_body_parameter_values_for_client(
-            template.content or "", client
-        )
+        param_values = template_body_parameter_values(template, client)
         if n_placeholders > 0 and len(param_values) != n_placeholders:
             return False, None, "whatsapp_template_parameter_count", None
 

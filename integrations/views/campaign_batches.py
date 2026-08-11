@@ -2,7 +2,7 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
-from accounts.permissions import HasActiveSubscription
+from accounts.permissions import HasActiveSubscription, IsAdmin
 from crm.models import Client
 from crm_saas_api.responses import error_response, success_response
 from integrations.models import MessageCampaignBatch, MessageCampaignFailure, MessageSendSource
@@ -37,7 +37,7 @@ def _get_company_batch(request, batch_id: int):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
+@permission_classes([IsAuthenticated, HasActiveSubscription, IsAdmin])
 def create_campaign_batch(request):
     """POST /api/integrations/campaign-batches/"""
     company = request.user.company
@@ -68,7 +68,7 @@ def create_campaign_batch(request):
 
 
 @api_view(["PATCH"])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
+@permission_classes([IsAuthenticated, HasActiveSubscription, IsAdmin])
 def complete_campaign_batch(request, batch_id: int):
     """PATCH /api/integrations/campaign-batches/:id/complete/"""
     batch, err = _get_company_batch(request, batch_id)
@@ -95,7 +95,7 @@ def complete_campaign_batch(request, batch_id: int):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated, HasActiveSubscription])
+@permission_classes([IsAuthenticated, HasActiveSubscription, IsAdmin])
 def record_campaign_failure(request, batch_id: int):
     """POST /api/integrations/campaign-batches/:id/failures/"""
     batch, err = _get_company_batch(request, batch_id)

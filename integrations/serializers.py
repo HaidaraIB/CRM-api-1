@@ -514,10 +514,18 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
             'buttons',
             'meta_template_id',
             'meta_status',
+            'meta_variable_map',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'meta_template_id', 'meta_status', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id',
+            'meta_template_id',
+            'meta_status',
+            'meta_variable_map',
+            'created_at',
+            'updated_at',
+        ]
 
     def validate_name(self, value):
         if not value:

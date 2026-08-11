@@ -1069,6 +1069,15 @@ class MessageTemplate(models.Model):
         null=True,
         help_text="حالة القالب في Meta: PENDING, APPROVED, REJECTED",
     )
+    meta_variable_map = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "ترتيب متغيرات Meta كما أُرسلت للمراجعة: "
+            '{"body": ["employee_name", "customer_name"], "header": [...]} '
+            "— يُحدد قيمة كل {{n}} عند الإرسال حتى لو تغيّر نص القالب لاحقاً"
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

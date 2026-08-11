@@ -40,7 +40,7 @@ from .templates_whatsapp import (
     build_whatsapp_template_components_for_client,
     count_template_body_placeholders,
     meta_slug_template_name,
-    whatsapp_template_body_parameter_values_for_client,
+    template_body_parameter_values,
 )
 from ..serializers import (
     IntegrationAccountSerializer,
@@ -927,7 +927,7 @@ def _template_outbound_log_body(template, param_values=None) -> str:
         if matches:
             parts = []
             last = 0
-            for i, (start, end, _sample, _getter) in enumerate(matches):
+            for i, (start, end, _canonical, _sample, _getter) in enumerate(matches):
                 parts.append(out[last:start])
                 parts.append(str(param_values[i]) if i < len(param_values) else '-')
                 last = end
@@ -1187,9 +1187,7 @@ def whatsapp_send_template(request):
                     '(or pass body_parameters).',
                     code='bad_request',
                 )
-            param_values = whatsapp_template_body_parameter_values_for_client(
-                template.content or '', fill_client
-            )
+            param_values = template_body_parameter_values(template, fill_client)
             if n_placeholders > 0 and len(param_values) != n_placeholders:
                 return error_response(
                     'Could not resolve template placeholders for this client.',

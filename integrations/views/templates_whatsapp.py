@@ -16,6 +16,7 @@ from django.views.decorators.http import require_http_methods
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
+from rest_framework import permissions
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
@@ -378,23 +379,31 @@ def _company_placeholder_value(client) -> str:
     return _tenant_company_name(client) or _client_lead_company_name(client)
 
 
-def _format_template_parameter_value(client, getter, sample: str) -> str:
-    raw = getter(client) if getter else ''
-    s = str(raw or '').strip()
-    if not s:
-        if sample == 'Company':
-            s = _company_placeholder_value(client)
-        elif sample == 'Customer':
-            s = _client_customer_name(client)
-    if not s:
-        s = '-'
-    return s[:1024]
+def values_for_canonicals(canonicals, client) -> list:
+    """Parameter strings for an explicit canonical variable order (Meta {{1}}, {{2}}, …)."""
+    from integrations.services.message_placeholders import build_message_placeholder_values
+
+    if not canonicals:
+        return []
+    vals = build_message_placeholder_values(client)
+    out = []
+    for canonical in canonicals:
+        s = str(vals.get(canonical) or '').strip()
+        if not s:
+            if canonical in ('company_name', 'lead_company_name'):
+                s = _company_placeholder_value(client)
+            elif canonical in ('customer_name', 'first_name'):
+                s = _client_customer_name(client)
+        out.append((s or '-')[:1024])
+    return out
 
 
 def _positional_parameter_values_for_client(content: str, client) -> list:
-    """Fill {{1}}..{{n}} for Meta-imported bodies that have no [Bracket] markers.
+    """Fill {{1}}..{{n}} for Meta-imported bodies with no named markers and no stored variable map.
 
-    Order: customer, company, phone, employee, date, time, status, stage, channel, visit, profession…
+    Last-resort guess: customer, company, phone, employee, date, time, status, stage, …
+    Prefer `MessageTemplate.meta_variable_map` (recorded at submit / recovered on sync)
+    whenever the template object is available — see `template_body_parameter_values`.
     """
     from integrations.services.message_placeholders import build_message_placeholder_values
 
@@ -429,11 +438,6 @@ def _positional_parameter_values_for_client(content: str, client) -> list:
     return values
 
 
-def whatsapp_template_header_parameter_values_for_client(header_text: str, client) -> list:
-    """Text header {{n}} / bracket values for Cloud API template send."""
-    return whatsapp_template_body_parameter_values_for_client(header_text or '', client)
-
-
 def whatsapp_template_button_url_parameter_values(buttons, client) -> list:
     """
     Dynamic URL button suffix values (one text param per URL button that contains {{n}}).
@@ -466,7 +470,7 @@ def build_whatsapp_template_components_for_client(template, client, body_param_v
     header_type = (getattr(template, 'header_type', None) or '').strip().lower()
     header_text = (getattr(template, 'header_text', None) or '').strip()
     if header_type == 'text' and header_text:
-        header_vals = whatsapp_template_header_parameter_values_for_client(header_text, client)
+        header_vals = template_header_parameter_values(template, client)
         if header_vals:
             components.append(
                 {
@@ -477,9 +481,7 @@ def build_whatsapp_template_components_for_client(template, client, body_param_v
 
     body_vals = body_param_values
     if body_vals is None:
-        body_vals = whatsapp_template_body_parameter_values_for_client(
-            getattr(template, 'content', None) or '', client
-        )
+        body_vals = template_body_parameter_values(template, client)
     if body_vals:
         components.append(
             {
@@ -516,10 +518,13 @@ def _get_placeholder_defs():
 
 
 def _find_placeholders_in_order(content: str):
-    """Bracket/curly placeholders in left-to-right order (Meta requires {{1}}, {{2}}, ... by appearance)."""
+    """Bracket/curly placeholders in left-to-right order (Meta requires {{1}}, {{2}}, ... by appearance).
+
+    Each entry is (start, end, canonical, sample, getter).
+    """
     matches = []
     seen_spans = set()
-    for pattern, sample, getter in _get_placeholder_defs():
+    for pattern, canonical, sample, getter in _get_placeholder_defs():
         for m in re.finditer(pattern, content or '', re.IGNORECASE):
             span = (m.start(), m.end())
             if span in seen_spans:
@@ -528,9 +533,14 @@ def _find_placeholders_in_order(content: str):
             if any(not (span[1] <= s or span[0] >= e) for s, e in seen_spans):
                 continue
             seen_spans.add(span)
-            matches.append((m.start(), m.end(), sample, getter))
+            matches.append((m.start(), m.end(), canonical, sample, getter))
     matches.sort(key=lambda x: x[0])
     return matches
+
+
+def content_placeholder_canonicals(content: str) -> list:
+    """Canonical placeholder ids in the order they map to Meta {{1}}, {{2}}, …"""
+    return [canonical for _s, _e, canonical, _sample, _getter in _find_placeholders_in_order(content)]
 
 
 def _positional_variable_count(text: str) -> int:
@@ -571,7 +581,7 @@ def _content_to_meta_body(content):
     parts = []
     last = 0
     ordered_examples = []
-    for i, (start, end, sample, _getter) in enumerate(matches):
+    for i, (start, end, _canonical, sample, _getter) in enumerate(matches):
         parts.append(content[last:start])
         parts.append(f'{{{{{i + 1}}}}}')
         ordered_examples.append(sample)
@@ -690,20 +700,68 @@ def meta_slug_template_name(name: str, template_id=None) -> str:
     return f'template_{template_id}' if template_id is not None else 'template'
 
 
-def whatsapp_template_body_parameter_values_for_client(content: str, client) -> list:
+def whatsapp_template_body_parameter_values_for_client(content: str, client, canonicals=None) -> list:
     """
     Body parameter strings for Cloud API template send, same order as _content_to_meta_body / submit.
     client: crm.Client (or compatible with .name, .lead_company_name, .budget, .company).
+    canonicals: variable order recorded when the template was submitted to Meta; when given it
+    wins over re-deriving from `content`, which may since have been rewritten to positional
+    {{n}} by sync or reordered by an edit.
     """
+    if canonicals:
+        n = _positional_variable_count(content)
+        if not n:
+            n = len(_find_placeholders_in_order(content)) or len(canonicals)
+        values = values_for_canonicals(list(canonicals)[:n], client)
+        # Meta gained variables the map doesn't cover (edited at Meta): pad rather than
+        # guess — a placeholder dash beats sending someone else's field in that slot.
+        while len(values) < n:
+            values.append('-')
+        return values
     if not content:
         return []
     matches = _find_placeholders_in_order(content)
     if matches:
-        return [
-            _format_template_parameter_value(client, getter, sample)
-            for _start, _end, sample, getter in matches
-        ]
+        return values_for_canonicals(
+            [canonical for _start, _end, canonical, _sample, _getter in matches], client
+        )
     return _positional_parameter_values_for_client(content, client)
+
+
+def template_variable_map(template) -> dict:
+    """Stored {'body': [...canonical], 'header': [...]} recorded when submitting to Meta."""
+    raw = getattr(template, 'meta_variable_map', None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def build_template_variable_map(template) -> dict:
+    """Variable order the CRM is about to submit to Meta, derived from the named content."""
+    body = content_placeholder_canonicals(getattr(template, 'content', None) or '')
+    header = content_placeholder_canonicals(getattr(template, 'header_text', None) or '')
+    out = {}
+    if body:
+        out['body'] = body
+    if header:
+        out['header'] = header
+    return out
+
+
+def template_body_parameter_values(template, client) -> list:
+    """Body params for a stored template — stored variable map first, content second."""
+    return whatsapp_template_body_parameter_values_for_client(
+        getattr(template, 'content', None) or '',
+        client,
+        canonicals=template_variable_map(template).get('body'),
+    )
+
+
+def template_header_parameter_values(template, client) -> list:
+    """Text-header params for a stored template — stored variable map first, header text second."""
+    return whatsapp_template_body_parameter_values_for_client(
+        getattr(template, 'header_text', None) or '',
+        client,
+        canonicals=template_variable_map(template).get('header'),
+    )
 
 
 def count_template_body_placeholders(content: str) -> int:
@@ -784,6 +842,54 @@ def _parse_meta_template_components(components):
     return body, header_type, header_text, footer, buttons
 
 
+def _canonicals_from_meta_example(component: dict, example_key: str, text: str) -> list:
+    """Recover the CRM variable order from a Meta component's example row.
+
+    Submissions send our canonical sample strings ("Customer", "Employee", …) as the
+    example values, so an approved template still carries its {{n}} → variable mapping.
+    Used to repair templates submitted before the map was stored.
+    """
+    from integrations.services.message_placeholders import canonical_for_sample
+
+    n = _positional_variable_count(text)
+    if n <= 0:
+        return []
+    example = component.get('example') if isinstance(component, dict) else None
+    if not isinstance(example, dict):
+        return []
+    rows = example.get(example_key)
+    if example_key == 'body_text':
+        row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], list) else None
+    else:
+        row = rows if isinstance(rows, list) else None
+    if not row or len(row) != n:
+        return []
+    canonicals = [canonical_for_sample(str(v)) for v in row]
+    if any(c is None for c in canonicals):
+        return []
+    return canonicals
+
+
+def _variable_map_from_meta_components(components) -> dict:
+    """{'body': [...canonical], 'header': [...]} recovered from a Meta template payload."""
+    if not isinstance(components, list):
+        return {}
+    out = {}
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        ctype = (comp.get('type') or '').upper()
+        if ctype == 'BODY':
+            body = _canonicals_from_meta_example(comp, 'body_text', comp.get('text') or '')
+            if body:
+                out['body'] = body
+        elif ctype == 'HEADER' and (comp.get('format') or '').upper() == 'TEXT':
+            header = _canonicals_from_meta_example(comp, 'header_text', comp.get('text') or '')
+            if header:
+                out['header'] = header
+    return out
+
+
 def _fetch_all_meta_message_templates(waba_id: str, token: str):
     """List all WhatsApp message templates from Meta (handles paging). Returns (items, error_payload)."""
     fields = 'id,name,status,language,category,components'
@@ -820,12 +926,31 @@ def _connected_wa_or_response(company):
     )
 
 
+class IsCompanyOwnerForTemplateWrites(permissions.BasePermission):
+    """
+    Reading templates stays open to any signed-in staff — Chats (web + mobile) lists
+    approved templates to send inside a conversation. Authoring them belongs to the
+    Messaging Center, which is owner-only, so every write (including submit-to-Meta,
+    sync and clone) requires the company owner.
+    """
+
+    message = 'Only the company owner can manage message templates.'
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return bool(user.is_admin() and user.company is not None)
+
+
 class MessageTemplateViewSet(viewsets.ModelViewSet):
     """
     قوالب الرسائل لمركز المراسلات (واتساب و SMS).
     CRUD: GET/POST /api/integrations/templates/ , GET/PUT/PATCH/DELETE /api/integrations/templates/:id/
     """
-    permission_classes = [IsAuthenticated, HasActiveSubscription]
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsCompanyOwnerForTemplateWrites]
     serializer_class = MessageTemplateSerializer
 
     def get_queryset(self):
@@ -881,6 +1006,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         }
         category = category_map.get((template.category or '').lower(), 'UTILITY')
         body_text, example_values = _content_to_meta_body(template.content or '')
+        variable_map = build_template_variable_map(template)
         if not body_text or not body_text.strip():
             return error_response(
                 'Template content is empty.',
@@ -960,7 +1086,13 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             meta_status = (data.get('status') or 'PENDING').upper()
             template.meta_template_id = meta_id
             template.meta_status = meta_status
-            template.save(update_fields=['meta_template_id', 'meta_status'])
+            # Remember which CRM variable each {{n}} stands for: Meta keeps this numbering
+            # forever, while `content` can later be rewritten to positional {{n}} by sync
+            # or reordered by an edit. Without it, send-time params drift out of position.
+            template.meta_variable_map = variable_map
+            template.save(
+                update_fields=['meta_template_id', 'meta_status', 'meta_variable_map']
+            )
             return success_response(
                 data={
                     'meta_template_id': meta_id,
@@ -1134,10 +1266,24 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                     meta_tpl.get('components')
                 )
                 new_lang = (meta_tpl.get('language') or 'en_US').strip() or 'en_US'
+                # Record what each {{n}} means before touching content, so send-time
+                # params stay aligned with the numbering Meta approved.
+                if not template_variable_map(existing):
+                    recovered = _variable_map_from_meta_components(
+                        meta_tpl.get('components')
+                    ) or build_template_variable_map(existing)
+                    if recovered:
+                        existing.meta_variable_map = recovered
+                        update_fields.append('meta_variable_map')
+                        changed = True
+                # Meta returns the body as positional {{n}}. Overwriting an equivalent
+                # named body ("{ اسم الموظف }") with it would throw away the mapping.
                 if body and (existing.content or '') != body:
-                    existing.content = body
-                    update_fields.append('content')
-                    changed = True
+                    converted, _samples = _content_to_meta_body(existing.content or '')
+                    if (converted or '').strip() != body.strip():
+                        existing.content = body
+                        update_fields.append('content')
+                        changed = True
                 if (existing.language or '') != new_lang:
                     existing.language = new_lang
                     update_fields.append('language')
@@ -1147,9 +1293,11 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                     update_fields.append('header_type')
                     changed = True
                 if (existing.header_text or '') != (header_text or ''):
-                    existing.header_text = header_text or ''
-                    update_fields.append('header_text')
-                    changed = True
+                    converted_header, _hs = _content_to_meta_body(existing.header_text or '')
+                    if (converted_header or '').strip() != (header_text or '').strip():
+                        existing.header_text = header_text or ''
+                        update_fields.append('header_text')
+                        changed = True
                 if (existing.footer or '') != (footer or ''):
                     existing.footer = footer or ''
                     update_fields.append('footer')
@@ -1183,6 +1331,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 buttons=buttons,
                 meta_template_id=mid,
                 meta_status=new_status,
+                meta_variable_map=_variable_map_from_meta_components(meta_tpl.get('components')),
             )
             imported += 1
 
