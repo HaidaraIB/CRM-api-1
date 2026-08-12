@@ -1229,6 +1229,8 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         updated = 0
         linked = 0
         imported = 0
+        variable_maps_recovered = 0
+        variable_maps_unresolved: list[str] = []
         seen_meta_ids: set[str] = set()
         seen_names: set[str] = set()
 
@@ -1278,6 +1280,11 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                         existing.meta_variable_map = recovered
                         update_fields.append('meta_variable_map')
                         changed = True
+                        variable_maps_recovered += 1
+                    elif _positional_variable_count(body or existing.content or ''):
+                        # Positional body and nothing to recover from: send-time params
+                        # fall back to a positional guess that may not match Meta.
+                        variable_maps_unresolved.append(existing.name)
                 # Meta returns the body as positional {{n}}. Overwriting an equivalent
                 # named body ("{ اسم الموظف }") with it would throw away the mapping.
                 if body and (existing.content or '') != body:
@@ -1363,6 +1370,9 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 'removed': removed,
                 'waba_id': wa.waba_id,
                 'total_meta': len(meta_list),
+                # Diagnostics for {{n}} → CRM variable mapping.
+                'variable_maps_recovered': variable_maps_recovered,
+                'variable_maps_unresolved': variable_maps_unresolved,
             },
         )
 
