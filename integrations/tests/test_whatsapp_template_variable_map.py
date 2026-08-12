@@ -149,6 +149,35 @@ def test_every_placeholder_resolves_to_its_own_field():
     ]
 
 
+def test_unassigned_lead_uses_the_sender_for_employee_name():
+    """An inbound WhatsApp lead has no assignee — { اسم الموظف } must not render "-"."""
+
+    class Unassigned(FakeClient):
+        assigned_to = None
+
+    assert values_for_canonicals(
+        ["employee_name"], Unassigned(), sender_name="زينب نزار"
+    ) == ["زينب نزار"]
+
+
+def test_sender_wins_over_the_lead_assignee():
+    """Shared inbox: the message is signed by whoever actually wrote it."""
+    assert values_for_canonicals(
+        ["employee_name"], FakeClient(), sender_name="زينب نزار"
+    ) == ["زينب نزار"]
+
+
+def test_assignee_used_when_there_is_no_sender():
+    assert values_for_canonicals(["employee_name"], FakeClient()) == ["Ali Hassan"]
+
+
+def test_employee_name_without_assignee_or_fallback_is_dash():
+    class Unassigned(FakeClient):
+        assigned_to = None
+
+    assert values_for_canonicals(["employee_name"], Unassigned()) == ["-"]
+
+
 def test_empty_value_becomes_dash_not_a_neighbouring_field():
     class NoProfession(FakeClient):
         profession = ""

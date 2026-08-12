@@ -231,7 +231,7 @@ class TestReconcileUnappliedCompletedPayment:
         sub.refresh_from_db()
         assert (sub.end_date - now).days >= 28
 
-    def test_check_payment_status_reconciles_unapplied(self, company, plan, api_client):
+    def test_check_payment_status_reconciles_unapplied(self, company, plan, api_client, owner_user):
         from subscriptions.models import (
             BillingCycle,
             Payment,
@@ -260,6 +260,8 @@ class TestReconcileUnappliedCompletedPayment:
             tran_ref="cs_check_reconcile",
         )
 
+        # payment-status requires auth; any company member may poll it.
+        api_client.force_authenticate(user=owner_user)
         response = api_client.get(f"/api/v1/payment-status/{sub.id}/")
         assert response.status_code == 200
         data = api_body(response)

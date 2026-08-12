@@ -71,6 +71,33 @@ def test_owner_can_read_company_message_logs(authenticated_admin):
 
 
 @pytest.mark.django_db
+def test_employee_cannot_read_call_error_logs(authenticated_employee):
+    res = authenticated_employee.get(reverse('whatsapp_call_error_logs'))
+    assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_owner_can_read_call_error_logs(authenticated_admin):
+    res = authenticated_admin.get(reverse('whatsapp_call_error_logs'))
+    assert res.status_code == 200
+
+
+@pytest.mark.django_db
+def test_employee_can_report_client_call_error(authenticated_employee):
+    res = authenticated_employee.post(
+        reverse('whatsapp_call_client_errors'),
+        {
+            'error_code': 'whatsapp_mic_permission_denied',
+            'error_message': 'Permission denied by system',
+            'source': 'mic',
+            'to': '9647700000000',
+        },
+        format='json',
+    )
+    assert res.status_code in (200, 201)
+
+
+@pytest.mark.django_db
 def test_employee_cannot_start_a_campaign_batch(authenticated_employee):
     res = authenticated_employee.post(
         reverse('campaign_batches_create'), {'channel': 'whatsapp'}, format='json'

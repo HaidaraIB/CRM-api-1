@@ -590,6 +590,24 @@ def _apply_terminate(call: WhatsAppCall, call_obj: dict, updates: list[str]) -> 
     if errors and isinstance(errors, list):
         call.error_message = str(errors[0])[:2000]
         updates.append("error_message")
+        try:
+            from integrations.services.whatsapp_call_error_logs import log_whatsapp_call_error
+            from integrations.models import WhatsAppCallErrorSource
+
+            log_whatsapp_call_error(
+                company=call.company,
+                source=WhatsAppCallErrorSource.WEBHOOK.value,
+                error_code="whatsapp_call_webhook_error",
+                error_message=str(errors[0])[:2000],
+                agent=call.agent,
+                client=call.client,
+                peer_phone=call.peer_phone,
+                whatsapp_account=call.whatsapp_account,
+                whatsapp_call=call,
+                meta_details={"errors": errors[:5]},
+            )
+        except Exception:
+            logger.exception("Webhook call error log failed call=%s", call.id)
 
     if call.status in (WhatsAppCallStatus.RINGING,):
         if call.direction == WhatsAppCallDirection.INBOUND and not call.answered_at:

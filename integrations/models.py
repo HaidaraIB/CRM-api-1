@@ -1428,3 +1428,73 @@ class WhatsAppCall(models.Model):
     def __str__(self):
         return f"{self.meta_call_id} ({self.status})"
 
+
+class WhatsAppCallErrorSource(models.TextChoices):
+    INITIATE = "initiate", "Initiate"
+    PERMISSION_REQUEST = "permission_request", "Permission request"
+    ACCEPT = "accept", "Accept"
+    MIC = "mic", "Microphone"
+    WEBHOOK = "webhook", "Webhook"
+    OUT_OF_HOURS = "out_of_hours", "Out of hours"
+    WEBRTC = "webrtc", "WebRTC"
+
+
+class WhatsAppCallErrorLog(models.Model):
+    """Owner-facing audit of WhatsApp Cloud Calling failures (Meta, mic, OOH, etc.)."""
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="whatsapp_call_error_logs",
+    )
+    whatsapp_account = models.ForeignKey(
+        WhatsAppAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="call_error_logs",
+    )
+    whatsapp_call = models.ForeignKey(
+        WhatsAppCall,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="error_logs",
+    )
+    agent = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="whatsapp_call_error_logs",
+    )
+    client = models.ForeignKey(
+        "crm.Client",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="whatsapp_call_error_logs",
+    )
+    peer_phone = models.CharField(max_length=32, blank=True, default="")
+    source = models.CharField(
+        max_length=32,
+        choices=WhatsAppCallErrorSource.choices,
+        db_index=True,
+    )
+    error_code = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    error_message = models.TextField(blank=True, default="")
+    meta_details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "integrations_whatsapp_call_error_log"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["company", "-created_at"]),
+            models.Index(fields=["company", "source"]),
+            models.Index(fields=["company", "error_code"]),
+        ]
+
+    def __str__(self):
+        return f"{self.source}:{self.error_code or self.error_message[:40]}"
+

@@ -42,6 +42,7 @@ from .templates_whatsapp import (
     meta_slug_template_name,
     template_body_parameter_values,
 )
+from integrations.services.message_placeholders import _user_display_name
 from ..serializers import (
     IntegrationAccountSerializer,
     IntegrationAccountCreateSerializer,
@@ -1187,7 +1188,9 @@ def whatsapp_send_template(request):
                     '(or pass body_parameters).',
                     code='bad_request',
                 )
-            param_values = template_body_parameter_values(template, fill_client)
+            param_values = template_body_parameter_values(
+                template, fill_client, sender_name=_user_display_name(request.user)
+            )
             if n_placeholders > 0 and len(param_values) != n_placeholders:
                 return error_response(
                     'Could not resolve template placeholders for this client.',
@@ -1227,7 +1230,10 @@ def whatsapp_send_template(request):
     }
     if fill_client is not None:
         components = build_whatsapp_template_components_for_client(
-            template, fill_client, body_param_values=param_values if param_values else None
+            template,
+            fill_client,
+            body_param_values=param_values if param_values else None,
+            sender_name=_user_display_name(request.user),
         )
         if components:
             template_block['components'] = components

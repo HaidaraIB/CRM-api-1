@@ -1,5 +1,6 @@
 """Integration HTTP endpoints; URLconf uses ``from integrations.views import ...``."""
 from .message_logs import message_logs_list
+from .call_error_logs import whatsapp_call_client_errors, whatsapp_call_error_logs_list
 from .campaign_batches import (
     complete_campaign_batch,
     create_campaign_batch,
@@ -95,6 +96,8 @@ __all__ = [
     "LeadSMSMessageViewSet",
     "LeadWhatsAppMessageViewSet",
     "message_logs_list",
+    "whatsapp_call_error_logs_list",
+    "whatsapp_call_client_errors",
     "create_campaign_batch",
     "complete_campaign_batch",
     "record_campaign_failure",

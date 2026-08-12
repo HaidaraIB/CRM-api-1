@@ -12,11 +12,13 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import error_response, success_response, validation_error_response
+from integrations.services.whatsapp_call_error_logs import log_whatsapp_call_error
 from integrations.models import (
     MessageTemplate,
     WhatsAppAccount,
     WhatsAppCall,
     WhatsAppCallDirection,
+    WhatsAppCallErrorSource,
     WhatsAppCallRecordingStatus,
     WhatsAppCallStatus,
 )
@@ -56,13 +58,7 @@ from integrations.views.webhooks_messaging import _integration_gate
 logger = logging.getLogger(__name__)
 
 
-def _calling_error_response(exc: WhatsAppCallingError):
-    """
-    Map Graph API failures to CRM client responses.
-
-    Meta auth failures arrive as HTTP 401/403 — returning those to the SPA would
-    trigger JWT refresh / session wipe. Remap them to 502 with an explicit code.
-    """
+def _calling_error_code_and_message(exc: WhatsAppCallingError) -> tuple[str, str, dict | None]:
     graph_status = exc.status_code or 400
     body = exc.body if isinstance(exc.body, dict) else {}
     nested = body.get("error") if isinstance(body.get("error"), dict) else {}
@@ -70,44 +66,81 @@ def _calling_error_response(exc: WhatsAppCallingError):
     meta_msg = (nested.get("message") or str(exc) or "").strip()
 
     if graph_status in (401, 403):
-        return error_response(
+        return (
+            "whatsapp_token_invalid",
             meta_msg
             or "WhatsApp access token is invalid. Reconnect WhatsApp in Integrations.",
-            code="whatsapp_token_invalid",
-            details=exc.body,
-            status_code=502,
+            body or None,
         )
-
-    # Meta Calling / Cloud API phone eligibility
     if meta_code == 141000:
-        return error_response(
+        return (
+            "whatsapp_not_cloud_api_number",
             meta_msg
             or "This WhatsApp number is not eligible for Cloud Calling "
             "(often a coexistence / Business-app number, or not fully Cloud-API registered).",
-            code="whatsapp_not_cloud_api_number",
-            details=exc.body,
-            status_code=400,
+            body or None,
         )
     if meta_code == 138015:
-        return error_response(
+        return (
+            "whatsapp_calling_not_eligible",
             meta_msg
             or "Calling cannot be enabled for this phone number (messaging limit / eligibility).",
-            code="whatsapp_calling_not_eligible",
-            details=exc.body,
-            status_code=400,
+            body or None,
         )
     if meta_code == 138000:
-        return error_response(
+        return (
+            "whatsapp_calling_disabled",
             meta_msg or "Calling is not enabled for this phone number.",
-            code="whatsapp_calling_disabled",
-            details=exc.body,
-            status_code=400,
+            body or None,
         )
+    return (
+        "whatsapp_calling_error",
+        meta_msg or "WhatsApp calling request failed",
+        body or None,
+    )
+
+
+def _calling_error_response(
+    exc: WhatsAppCallingError,
+    *,
+    log_ctx: dict | None = None,
+):
+    """
+    Map Graph API failures to CRM client responses.
+
+    Meta auth failures arrive as HTTP 401/403 — returning those to the SPA would
+    trigger JWT refresh / session wipe. Remap them to 502 with an explicit code.
+    """
+    code, message, details = _calling_error_code_and_message(exc)
+    graph_status = exc.status_code or 400
+
+    if log_ctx:
+        log_whatsapp_call_error(
+            company=log_ctx.get("company"),
+            source=log_ctx.get("source") or WhatsAppCallErrorSource.INITIATE.value,
+            error_code=code,
+            error_message=message,
+            agent=log_ctx.get("agent"),
+            client=log_ctx.get("client"),
+            peer_phone=log_ctx.get("peer_phone") or "",
+            whatsapp_account=log_ctx.get("whatsapp_account"),
+            whatsapp_call=log_ctx.get("whatsapp_call"),
+            meta_details=details if isinstance(details, dict) else {},
+        )
+
+    if code == "whatsapp_token_invalid":
+        return error_response(message, code=code, details=exc.body, status_code=502)
+    if code in (
+        "whatsapp_not_cloud_api_number",
+        "whatsapp_calling_not_eligible",
+        "whatsapp_calling_disabled",
+    ):
+        return error_response(message, code=code, details=exc.body, status_code=400)
 
     client_status = graph_status if 400 <= graph_status < 500 else 502
     return error_response(
-        meta_msg or "WhatsApp calling request failed",
-        code="whatsapp_calling_error",
+        message,
+        code=code,
         details=exc.body,
         status_code=client_status,
     )
@@ -503,7 +536,18 @@ def whatsapp_call_accept(request, pk: int):
             sdp_type="answer",
         )
     except WhatsAppCallingError as exc:
-        return _calling_error_response(exc)
+        return _calling_error_response(
+            exc,
+            log_ctx={
+                "company": request.user.company,
+                "source": WhatsAppCallErrorSource.ACCEPT.value,
+                "agent": request.user,
+                "client": call.client,
+                "peer_phone": call.peer_phone,
+                "whatsapp_account": call.whatsapp_account,
+                "whatsapp_call": call,
+            },
+        )
     mark_call_answered(call, agent=request.user, answer_sdp=sdp)
     call.refresh_from_db()
     return success_response(_serialize_call(call, request))
@@ -628,8 +672,29 @@ def whatsapp_call_initiate(request):
         try:
             perms = get_call_permissions(wa, to_digits)
         except WhatsAppCallingError as exc:
-            return _calling_error_response(exc)
+            return _calling_error_response(
+                exc,
+                log_ctx={
+                    "company": request.user.company,
+                    "source": WhatsAppCallErrorSource.INITIATE.value,
+                    "agent": request.user,
+                    "client": client,
+                    "peer_phone": to_digits,
+                    "whatsapp_account": wa,
+                },
+            )
         if not call_permission_allows_start(perms):
+            log_whatsapp_call_error(
+                company=request.user.company,
+                source=WhatsAppCallErrorSource.INITIATE.value,
+                error_code="whatsapp_call_permission_required",
+                error_message="Call permission required. Send a call permission request first.",
+                agent=request.user,
+                client=client,
+                peer_phone=to_digits,
+                whatsapp_account=wa,
+                meta_details={"permissions": perms},
+            )
             return error_response(
                 "Call permission required. Send a call permission request first.",
                 status_code=403,
@@ -646,7 +711,17 @@ def whatsapp_call_initiate(request):
             sdp_type="offer",
         )
     except WhatsAppCallingError as exc:
-        return _calling_error_response(exc)
+        return _calling_error_response(
+            exc,
+            log_ctx={
+                "company": request.user.company,
+                "source": WhatsAppCallErrorSource.INITIATE.value,
+                "agent": request.user,
+                "client": client,
+                "peer_phone": to_digits,
+                "whatsapp_account": wa,
+            },
+        )
 
     meta_call_id = ""
     calls = body.get("calls") if isinstance(body, dict) else None
@@ -675,6 +750,21 @@ def whatsapp_call_initiate(request):
     return success_response(_serialize_call(call, request), status_code=201)
 
 
+DEFAULT_CALL_PERMISSION_BODY_EN = (
+    "We would like to call you on WhatsApp. Please allow calls from our business."
+)
+DEFAULT_CALL_PERMISSION_BODY_AR = (
+    "نود الاتصال بك عبر واتساب. يرجى السماح بالمكالمات من نشاطنا التجاري."
+)
+
+
+def default_call_permission_body(language: str | None = None) -> str:
+    lang = (language or "en").strip().lower()
+    if lang.startswith("ar"):
+        return DEFAULT_CALL_PERMISSION_BODY_AR
+    return DEFAULT_CALL_PERMISSION_BODY_EN
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_permission_request(request):
@@ -687,7 +777,8 @@ def whatsapp_call_permission_request(request):
     to = (request.data.get("to") or request.data.get("phone") or "").strip()
     template_id = request.data.get("template_id")
     template_name = (request.data.get("template_name") or "").strip()
-    language = (request.data.get("language") or "en").strip() or "en"
+    user_lang = (getattr(request.user, "language", None) or "ar").strip() or "ar"
+    language = (request.data.get("language") or user_lang or "en").strip() or "en"
     body_text = (request.data.get("body") or request.data.get("body_text") or "").strip()
     account_id = request.data.get("whatsapp_account_id")
 
@@ -766,23 +857,29 @@ def whatsapp_call_permission_request(request):
 
     try:
         if mode == "interactive":
+            cpr_body = body_text or default_call_permission_body(language)
             body = send_call_permission_request_interactive(
                 wa,
                 to=to,
-                body_text=body_text
-                or "We would like to call you on WhatsApp. Please allow calls from our business.",
+                body_text=cpr_body,
             )
-            preview_body = (
-                body_text
-                or "We would like to call you on WhatsApp. Please allow calls from our business."
-            ).strip() or "[call permission request]"
+            preview_body = cpr_body.strip() or "[call permission request]"
         else:
             body = send_call_permission_request(
                 wa, to=to, template_name=template_name, language_code=language
             )
             preview_body = "[call permission request]"
     except WhatsAppCallingError as exc:
-        return _calling_error_response(exc)
+        return _calling_error_response(
+            exc,
+            log_ctx={
+                "company": request.user.company,
+                "source": WhatsAppCallErrorSource.PERMISSION_REQUEST.value,
+                "agent": request.user,
+                "peer_phone": to,
+                "whatsapp_account": wa,
+            },
+        )
 
     # Persist into the chat thread so agents see the permission request (not a blank gap).
     try:

@@ -8,7 +8,6 @@ from django.views.decorators.http import require_http_methods
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from .models import IntegrationAccount, IntegrationLog, WhatsAppAccount, LeadWhatsAppMessage
-from crm.models import ClientEvent
 import json
 import hmac
 import hashlib
@@ -380,12 +379,8 @@ def process_whatsapp_message(message, phone_number_id):
             delivery_status='read',
         ).update(delivery_status='read', delivery_error=None)
 
-        ClientEvent.objects.create(
-            client=client,
-            event_type='whatsapp_message',
-            new_value=text_body[:255],
-            notes=f"WhatsApp message received: {message_type}",
-        )
+        # LeadWhatsAppMessage already drives the lead timeline — skip duplicate
+        # ClientEvent rows that stored English notes/stubs and confused RTL UIs.
 
         if account:
             IntegrationLog.objects.create(
@@ -892,12 +887,7 @@ def process_smb_message_echoes(value, waba_id=None):
             apply_meta_media_to_message(row, echo, access_token=access_token)
         row.save()
         touch_client_last_contacted(client)
-        ClientEvent.objects.create(
-            client=client,
-            event_type='whatsapp_message',
-            new_value=body[:255],
-            notes='WhatsApp Business app message (coexistence echo)',
-        )
+        # LeadWhatsAppMessage already drives the lead timeline — skip duplicate ClientEvent.
         logger.info(
             "smb_message_echoes stored: company_id=%s client_id=%s wam_id=%s",
             wa_account.company_id,

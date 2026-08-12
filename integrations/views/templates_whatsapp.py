@@ -379,21 +379,31 @@ def _company_placeholder_value(client) -> str:
     return _tenant_company_name(client) or _client_lead_company_name(client)
 
 
-def values_for_canonicals(canonicals, client) -> list:
-    """Parameter strings for an explicit canonical variable order (Meta {{1}}, {{2}}, …)."""
+def values_for_canonicals(canonicals, client, sender_name=None) -> list:
+    """Parameter strings for an explicit canonical variable order (Meta {{1}}, {{2}}, …).
+
+    sender_name: whoever is sending. { اسم الموظف } signs the message with them in
+    preference to the lead's assignee — in a shared inbox the customer expects the
+    name of the person actually writing. Falls back to the assignee when absent.
+    """
     from integrations.services.message_placeholders import build_message_placeholder_values
 
     if not canonicals:
         return []
     vals = build_message_placeholder_values(client)
+    sender = str(sender_name or '').strip()
     out = []
     for canonical in canonicals:
-        s = str(vals.get(canonical) or '').strip()
+        s = sender if (canonical == 'employee_name' and sender) else ''
+        if not s:
+            s = str(vals.get(canonical) or '').strip()
         if not s:
             if canonical in ('company_name', 'lead_company_name'):
                 s = _company_placeholder_value(client)
             elif canonical in ('customer_name', 'first_name'):
                 s = _client_customer_name(client)
+            elif canonical == 'employee_name':
+                s = str(sender_name or '').strip()
         out.append((s or '-')[:1024])
     return out
 
@@ -462,7 +472,9 @@ def whatsapp_template_button_url_parameter_values(buttons, client) -> list:
     return out
 
 
-def build_whatsapp_template_components_for_client(template, client, body_param_values=None) -> list:
+def build_whatsapp_template_components_for_client(
+    template, client, body_param_values=None, sender_name=None
+) -> list:
     """
     Build Meta template `components` array: header (text vars), body, dynamic URL buttons.
     """
@@ -470,7 +482,7 @@ def build_whatsapp_template_components_for_client(template, client, body_param_v
     header_type = (getattr(template, 'header_type', None) or '').strip().lower()
     header_text = (getattr(template, 'header_text', None) or '').strip()
     if header_type == 'text' and header_text:
-        header_vals = template_header_parameter_values(template, client)
+        header_vals = template_header_parameter_values(template, client, sender_name)
         if header_vals:
             components.append(
                 {
@@ -481,7 +493,7 @@ def build_whatsapp_template_components_for_client(template, client, body_param_v
 
     body_vals = body_param_values
     if body_vals is None:
-        body_vals = template_body_parameter_values(template, client)
+        body_vals = template_body_parameter_values(template, client, sender_name)
     if body_vals:
         components.append(
             {
@@ -700,7 +712,9 @@ def meta_slug_template_name(name: str, template_id=None) -> str:
     return f'template_{template_id}' if template_id is not None else 'template'
 
 
-def whatsapp_template_body_parameter_values_for_client(content: str, client, canonicals=None) -> list:
+def whatsapp_template_body_parameter_values_for_client(
+    content: str, client, canonicals=None, sender_name=None
+) -> list:
     """
     Body parameter strings for Cloud API template send, same order as _content_to_meta_body / submit.
     client: crm.Client (or compatible with .name, .lead_company_name, .budget, .company).
@@ -712,7 +726,7 @@ def whatsapp_template_body_parameter_values_for_client(content: str, client, can
         n = _positional_variable_count(content)
         if not n:
             n = len(_find_placeholders_in_order(content)) or len(canonicals)
-        values = values_for_canonicals(list(canonicals)[:n], client)
+        values = values_for_canonicals(list(canonicals)[:n], client, sender_name)
         # Meta gained variables the map doesn't cover (edited at Meta): pad rather than
         # guess — a placeholder dash beats sending someone else's field in that slot.
         while len(values) < n:
@@ -723,7 +737,9 @@ def whatsapp_template_body_parameter_values_for_client(content: str, client, can
     matches = _find_placeholders_in_order(content)
     if matches:
         return values_for_canonicals(
-            [canonical for _start, _end, canonical, _sample, _getter in matches], client
+            [canonical for _start, _end, canonical, _sample, _getter in matches],
+            client,
+            sender_name,
         )
     return _positional_parameter_values_for_client(content, client)
 
@@ -746,21 +762,23 @@ def build_template_variable_map(template) -> dict:
     return out
 
 
-def template_body_parameter_values(template, client) -> list:
+def template_body_parameter_values(template, client, sender_name=None) -> list:
     """Body params for a stored template — stored variable map first, content second."""
     return whatsapp_template_body_parameter_values_for_client(
         getattr(template, 'content', None) or '',
         client,
         canonicals=template_variable_map(template).get('body'),
+        sender_name=sender_name,
     )
 
 
-def template_header_parameter_values(template, client) -> list:
+def template_header_parameter_values(template, client, sender_name=None) -> list:
     """Text-header params for a stored template — stored variable map first, header text second."""
     return whatsapp_template_body_parameter_values_for_client(
         getattr(template, 'header_text', None) or '',
         client,
         canonicals=template_variable_map(template).get('header'),
+        sender_name=sender_name,
     )
 
 

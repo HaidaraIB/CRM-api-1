@@ -11,6 +11,7 @@ import requests
 
 from integrations.models import LeadWhatsAppMessage, MessageSendSource, MessageTemplate
 from integrations.oauth_utils import META_GRAPH_API_BASE_URL
+from integrations.services.message_placeholders import _user_display_name
 from integrations.views.templates_whatsapp import (
     build_whatsapp_template_components_for_client,
     count_template_body_placeholders,
@@ -95,11 +96,15 @@ def send_approved_whatsapp_template(
 
     n_placeholders = count_template_body_placeholders(template.content or "")
     header_needs = count_template_body_placeholders(getattr(template, "header_text", None) or "")
+    # { اسم الموظف } falls back to the sender when the lead has no assignee.
+    sender_name = _user_display_name(created_by) if created_by is not None else None
     param_values: list[str] = []
     if n_placeholders > 0 or header_needs > 0:
         if client is None:
             return False, None, "client_required_for_placeholders", None
-        param_values = template_body_parameter_values(template, client)
+        param_values = template_body_parameter_values(
+            template, client, sender_name=sender_name
+        )
         if n_placeholders > 0 and len(param_values) != n_placeholders:
             return False, None, "whatsapp_template_parameter_count", None
 
@@ -119,7 +124,10 @@ def send_approved_whatsapp_template(
     }
     if client is not None:
         components = build_whatsapp_template_components_for_client(
-            template, client, body_param_values=param_values if param_values else None
+            template,
+            client,
+            body_param_values=param_values if param_values else None,
+            sender_name=sender_name,
         )
         if components:
             template_block["components"] = components

@@ -41,10 +41,30 @@ _META_DAY = {
     "sunday": "SUNDAY",
 }
 
-DEFAULT_OUT_OF_HOURS_MESSAGE = (
+DEFAULT_OUT_OF_HOURS_MESSAGE_EN = (
     "Thank you for calling. We are currently outside business hours. "
     "Please send us a message and we will get back to you soon."
 )
+DEFAULT_OUT_OF_HOURS_MESSAGE_AR = (
+    "شكراً لاتصالك. نحن حالياً خارج ساعات العمل. "
+    "يرجى إرسال رسالة وسنعاود التواصل معك قريباً."
+)
+# Backward-compatible alias (English).
+DEFAULT_OUT_OF_HOURS_MESSAGE = DEFAULT_OUT_OF_HOURS_MESSAGE_EN
+
+
+def default_out_of_hours_message(language: str | None = None) -> str:
+    lang = (language or "en").strip().lower()
+    if lang.startswith("ar"):
+        return DEFAULT_OUT_OF_HOURS_MESSAGE_AR
+    return DEFAULT_OUT_OF_HOURS_MESSAGE_EN
+
+
+def out_of_hours_message_text(account: WhatsAppAccount, language: str | None = None) -> str:
+    text = (account.out_of_hours_message or "").strip()
+    if text:
+        return text
+    return default_out_of_hours_message(language)
 
 
 def user_is_whatsapp_call_away(user) -> bool:
@@ -166,11 +186,6 @@ def is_within_call_hours(account: WhatsAppAccount, *, when: Optional[datetime] =
     return minutes >= open_min or minutes < close_min
 
 
-def out_of_hours_message_text(account: WhatsAppAccount) -> str:
-    text = (account.out_of_hours_message or "").strip()
-    return text or DEFAULT_OUT_OF_HOURS_MESSAGE
-
-
 def build_meta_call_hours_payload(account: WhatsAppAccount) -> dict:
     weekly = normalize_weekly_schedule(account.call_hours_weekly)
     operating = []
@@ -255,10 +270,22 @@ def reject_inbound_out_of_hours(call: WhatsAppCall) -> WhatsAppCall:
         logger.warning("OOH Graph reject failed call=%s", call.id, exc_info=True)
 
     try:
+        lang = "ar"
+        company = getattr(account, "company", None)
+        if company is not None:
+            from accounts.models import Role, User
+
+            owner = (
+                User.objects.filter(company=company, role=Role.ADMIN.value)
+                .order_by("id")
+                .first()
+            )
+            if owner and getattr(owner, "language", None):
+                lang = owner.language
         send_plain_whatsapp_text(
             account,
             to=call.peer_phone,
-            body=out_of_hours_message_text(account),
+            body=out_of_hours_message_text(account, lang),
         )
     except Exception:
         logger.exception("OOH message send failed call=%s", call.id)
@@ -268,6 +295,23 @@ def reject_inbound_out_of_hours(call: WhatsAppCall) -> WhatsAppCall:
         call.ended_at = timezone.now()
     call.error_message = "out_of_hours"
     call.save(update_fields=["status", "ended_at", "error_message", "updated_at"])
+    try:
+        from integrations.services.whatsapp_call_error_logs import log_whatsapp_call_error
+        from integrations.models import WhatsAppCallErrorSource
+
+        log_whatsapp_call_error(
+            company=call.company,
+            source=WhatsAppCallErrorSource.OUT_OF_HOURS.value,
+            error_code="out_of_hours",
+            error_message="out_of_hours",
+            agent=call.agent,
+            client=call.client,
+            peer_phone=call.peer_phone,
+            whatsapp_account=account,
+            whatsapp_call=call,
+        )
+    except Exception:
+        logger.exception("OOH error log failed call=%s", call.id)
     ensure_client_call_for_whatsapp_call(call)
     return call
 
