@@ -325,8 +325,14 @@ class NotificationSettings(models.Model):
 
 class ReminderDispatchLog(models.Model):
     """
-    Persistent log for reminder dispatch attempts to prevent duplicates.
-    We store one row per (user, reminder-source object, minutes_before, scheduled_for, notification_type).
+    Persistent "exactly-once" ledger for scheduled notification dispatch.
+
+    One row per (user, source object, notification_type, scheduled_for, minutes_before,
+    dedupe_key). Originally built for the check_*_reminders commands, it is now the shared
+    mechanism for every cron-driven notification: the job computes a deterministic due
+    instant for each entity and claims it here, so re-running the job never re-notifies.
+
+    See `notifications.dispatch.claim_dispatch` for the helper all callers should use.
     """
 
     user = models.ForeignKey(
@@ -337,6 +343,15 @@ class ReminderDispatchLog(models.Model):
     notification_type = models.CharField(max_length=50, choices=NotificationType.choices)
     minutes_before = models.IntegerField(default=15)
     scheduled_for = models.DateTimeField(help_text="The original reminder datetime (e.g. reminder_date / follow_up_date)")
+    dedupe_key = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        help_text=(
+            "Extra discriminator for jobs that are not keyed purely on time "
+            "(e.g. 'no_follow_up_digest', 'budget_20'). Blank for plain reminders."
+        ),
+    )
 
     # Generic reference to the source object (ClientTask / Task / ClientCall / etc.)
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
@@ -365,6 +380,7 @@ class ReminderDispatchLog(models.Model):
                     "object_id",
                     "scheduled_for",
                     "minutes_before",
+                    "dedupe_key",
                 ],
                 name="unique_reminder_dispatch_per_user_object_time_offset_type",
             )

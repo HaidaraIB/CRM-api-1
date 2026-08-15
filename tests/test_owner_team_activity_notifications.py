@@ -228,10 +228,19 @@ def test_employee_creating_client_sends_new_lead_to_owner_not_team_activity(
 
 
 @pytest.mark.django_db
-def test_check_lead_no_follow_up_notifies_owner_via_team_activity(
+def test_check_lead_no_follow_up_notifies_assignee_and_owner_digest(
     company,
     employee_user,
+    subscription,
 ):
+    """
+    The owner now receives one aggregate digest rather than a per-lead team_activity push
+    (which is what flooded owners); the assignee still gets the per-lead alert.
+    """
+    company.no_follow_up_hours = 10
+    company.no_follow_up_digest_hour = timezone.now().hour
+    company.save(update_fields=["no_follow_up_hours", "no_follow_up_digest_hour"])
+
     lead = Client.objects.create(
         name="Stale Lead",
         company=company,
@@ -249,19 +258,33 @@ def test_check_lead_no_follow_up_notifies_owner_via_team_activity(
         "notifications.management.commands.check_lead_no_follow_up.notify_owner_team_activity",
         return_value=True,
     ) as owner_mock:
-        call_command("check_lead_no_follow_up", hours=6)
+        call_command("check_lead_no_follow_up")
 
         assignee_mock.assert_called_once()
         assignee_kwargs = assignee_mock.call_args.kwargs
         assert assignee_kwargs["user"] == employee_user
         assert assignee_kwargs["notification_type"] == NotificationType.LEAD_NO_FOLLOW_UP
         assert assignee_kwargs["data"]["lead_id"] == lead.id
+        assert assignee_kwargs["data"]["hours"] == 10
 
         owner_mock.assert_called_once()
         owner_args, owner_kwargs = owner_mock.call_args
-        assert owner_args[0] == employee_user
+        assert owner_args[0] is None  # aggregate digest has no single actor
         assert owner_args[1] == company
-        assert owner_kwargs["action"] == "no_follow_up"
-        assert owner_kwargs["lead_id"] == lead.id
-        assert owner_kwargs["lead_name"] == "Stale Lead"
-        assert owner_kwargs["hours"] >= 6
+        assert owner_kwargs["action"] == "no_follow_up_digest"
+        assert owner_kwargs["count"] == 1
+        assert owner_kwargs["employee_count"] == 1
+
+
+@pytest.mark.django_db
+def test_team_activity_no_follow_up_digest_templates():
+    ar = get_team_activity_text(
+        "ar", "no_follow_up_digest", count=5, employee_count=3
+    )["body"]
+    en = get_team_activity_text(
+        "en", "no_follow_up_digest", count=5, employee_count=3
+    )["body"]
+    assert "5" in ar and "3" in ar
+    assert "متابعة" in ar
+    assert "5" in en and "3" in en
+    assert "follow-up" in en

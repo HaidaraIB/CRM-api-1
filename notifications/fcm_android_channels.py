@@ -22,6 +22,7 @@ _TEAM_ACTIVITY_ACTION_CHANNELS: dict[str, str] = {
     "edit": "leads",
     "lead_created": "leads",
     "no_follow_up": "leads",
+    "no_follow_up_digest": "leads",
     # Employee actions on leads
     "call_logged": "tasks",
     "visit_logged": "tasks",

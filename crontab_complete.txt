@@ -65,8 +65,10 @@
 # مهام الإشعارات (Notification Cron Jobs)
 # ============================================
 
-# 7. فحص Leads بدون متابعة - 4 مرات في اليوم (كل 6 ساعات)
-0 */6 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_no_follow_up >> /var/log/crm-api-lead-no-follow-up.log 2>&1
+# 7. فحص Leads بدون متابعة - كل 15 دقيقة
+#    كل عميل يُنبَّه عند مرور مدة SLA الخاصة بشركته (Company.no_follow_up_hours) على آخر تواصل،
+#    وليس في ساعة ثابتة للجميع. الملخص اليومي للمالك يُرسل بتوقيت الشركة.
+*/15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_no_follow_up >> /var/log/crm-api-lead-no-follow-up.log 2>&1
 
 # 7b. AI lead analysis (OpenAI BYOK) - every 6 hours
 0 */6 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py run_ai_lead_analysis >> /var/log/crm-api-ai-analysis.log 2>&1
@@ -74,11 +76,11 @@
 # 8. فحص تذكيرات Leads - كل 15 دقيقة (نافذة 15 دقيقة لتفادي تفويت التذكيرات)
 */15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_reminders --minutes-before 15 --window-minutes 15 >> /var/log/crm-api-lead-reminders.log 2>&1
 
-# 9. فحص رسائل واتساب بانتظار الرد - كل ساعة
-0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_whatsapp_waiting_response >> /var/log/crm-api-whatsapp-waiting.log 2>&1
+# 9. فحص رسائل واتساب بانتظار الرد - كل 15 دقيقة (كل عميل حسب وقت استحقاقه)
+*/15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_whatsapp_waiting_response >> /var/log/crm-api-whatsapp-waiting.log 2>&1
 
-# 10. فحص أداء الحملات الإعلانية - يومياً في 10 صباحاً
-0 10 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_campaign_performance >> /var/log/crm-api-campaign-performance.log 2>&1
+# 10. فحص أداء الحملات الإعلانية - كل ساعة (يُرسل في الساعة 10 بتوقيت كل شركة)
+0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_campaign_performance --hour 10 >> /var/log/crm-api-campaign-performance.log 2>&1
 
 # 11. فحص تذكيرات المهام - كل 15 دقيقة (نافذة 15 دقيقة لتفادي تفويت التذكيرات)
 */15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_task_reminders --minutes-before 15 --window-minutes 15 >> /var/log/crm-api-task-reminders.log 2>&1
@@ -89,23 +91,29 @@
 # 12. فحص تذكيرات الصفقات - كل 15 دقيقة (نافذة 15 دقيقة لتفادي تفويت التذكيرات)
 */15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_deal_reminders --minutes-before 15 --window-minutes 15 >> /var/log/crm-api-deal-reminders.log 2>&1
 
-# 13. إرسال التقارير اليومية - يومياً في 9 صباحاً
-0 9 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_daily_report >> /var/log/crm-api-daily-report.log 2>&1
+# ملاحظة: المهام 13-16 تعمل كل ساعة وتُرسل في الساعة المحلية لكل شركة (Company.timezone)،
+# مع منع التكرار عبر ReminderDispatchLog. لا تُعِدها إلى ساعة ثابتة واحدة.
 
-# 14. إرسال التقارير الأسبوعية - أسبوعياً يوم الاثنين في 9 صباحاً
-0 9 * * 1 cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_weekly_report >> /var/log/crm-api-weekly-report.log 2>&1
+# 13. إرسال التقارير اليومية - كل ساعة (يُرسل في الساعة 9 بتوقيت كل شركة)
+0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_daily_report --hour 9 >> /var/log/crm-api-daily-report.log 2>&1
 
-# 15. إرسال إشعارات أفضل موظف - أسبوعياً يوم الاثنين في 10 صباحاً
-0 10 * * 1 cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_top_employee_notification >> /var/log/crm-api-top-employee.log 2>&1
+# 14. إرسال التقارير الأسبوعية - كل ساعة (يُرسل الاثنين الساعة 9 بتوقيت كل شركة)
+0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_weekly_report --hour 9 --weekday 0 >> /var/log/crm-api-weekly-report.log 2>&1
 
-# 16. فحص الاشتراكات المنتهية قريباً - يومياً في 9 صباحاً
-0 9 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_subscription_expiring >> /var/log/crm-api-subscription-expiring.log 2>&1
+# 15. إرسال إشعارات أفضل موظف - كل ساعة (يُرسل الاثنين الساعة 10 بتوقيت كل شركة)
+0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_top_employee_notification --hour 10 --weekday 0 >> /var/log/crm-api-top-employee.log 2>&1
+
+# 16. فحص الاشتراكات المنتهية قريباً - كل ساعة (يُرسل في الساعة 9 بتوقيت كل شركة)
+0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_subscription_expiring --hour 9 >> /var/log/crm-api-subscription-expiring.log 2>&1
 
 # 17. فحص الاشتراكات المنتهية - يومياً في منتصف الليل
 0 0 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_subscription_expired --deactivate >> /var/log/crm-api-subscription-expired.log 2>&1
 
 # 18. حذف الليدات التي بقيت في حالة معينة أكثر من المدة المحددة - كل ساعة
 0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py delete_leads_stale_in_status >> /var/log/crm-api-lead-stale-status-delete.log 2>&1
+
+# 18b. تنظيف سجل إرسال الإشعارات (ReminderDispatchLog) - يومياً في 3 صباحاً
+0 3 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py prune_dispatch_logs --days 90 >> /var/log/crm-api-prune-dispatch-logs.log 2>&1
 
 # ============================================
 # تكاملات Meta / WhatsApp (Integration tokens)

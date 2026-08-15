@@ -531,6 +531,11 @@ _TEAM_ACTIVITY_BODIES: Dict[str, Dict[str, str]] = {
         "ar": "تأخر الموظف {employee} في متابعة العميل المحتمل {lead} لمدة {hours} ساعة",
         "en": "Employee {employee} is overdue following up on lead {lead} for {hours} hours",
     },
+    # Daily roll-up sent to the owner instead of one push per overdue lead.
+    "no_follow_up_digest": {
+        "ar": "{count} عميل محتمل بحاجة إلى متابعة لدى {employee_count} موظف",
+        "en": "{count} leads need follow-up across {employee_count} employees",
+    },
     "unknown": {
         "ar": "قام الموظف {employee} بإجراء على العميل المحتمل {lead}: {detail}",
         "en": "Employee {employee} performed an action on lead {lead}: {detail}",
@@ -603,6 +608,8 @@ def get_team_activity_text(language: str, action: str, **kwargs: Any) -> Dict[st
         deal_title=kwargs.get("deal_title", ""),
         value=kwargs.get("value", ""),
         hours=kwargs.get("hours", ""),
+        count=kwargs.get("count", ""),
+        employee_count=kwargs.get("employee_count", ""),
     )
     return {"title": title, "body": body}
 

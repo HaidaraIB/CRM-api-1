@@ -61,6 +61,20 @@ class Company(models.Model):
         default=24,
         help_text="عدد الساعات قبل إعادة تعيين العميل (افتراضي: 24 ساعة)"
     )
+    # "No follow-up" alerting: each lead is evaluated against its own clock
+    # (last_contacted_at + no_follow_up_hours), not a fixed daily sweep.
+    no_follow_up_enabled = models.BooleanField(
+        default=True,
+        help_text="تنبيه الموظف عند تأخر متابعة العميل المحتمل"
+    )
+    no_follow_up_hours = models.IntegerField(
+        default=10,
+        help_text="عدد الساعات بدون متابعة قبل إرسال التنبيه (افتراضي: 10 ساعات)"
+    )
+    no_follow_up_digest_hour = models.IntegerField(
+        default=9,
+        help_text="ساعة إرسال الملخص اليومي للمالك بتوقيت الشركة (0-23، افتراضي: 9)"
+    )
     # After any paid conversion or expired/forfeited trial, user cannot start another time-limited trial.
     free_trial_consumed = models.BooleanField(default=False)
     timezone = models.CharField(

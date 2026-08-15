@@ -161,6 +161,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
             "auto_assign_algorithm": "least_busy" | "round_robin",
             "re_assign_enabled": true/false,
             "re_assign_hours": 24,
+            "no_follow_up_enabled": true/false,
+            "no_follow_up_hours": 10,
+            "no_follow_up_digest_hour": 9,
             "timezone": "Asia/Baghdad"
         }
         """
@@ -213,6 +216,41 @@ class CompanyViewSet(viewsets.ModelViewSet):
                     "re_assign_hours must be a valid integer.",
                     code="invalid_re_assign_hours",
                 )
+        no_follow_up_enabled = request.data.get('no_follow_up_enabled')
+        no_follow_up_hours = request.data.get('no_follow_up_hours')
+        no_follow_up_digest_hour = request.data.get('no_follow_up_digest_hour')
+
+        if no_follow_up_enabled is not None:
+            company.no_follow_up_enabled = bool(no_follow_up_enabled)
+        if no_follow_up_hours is not None:
+            try:
+                hours = int(no_follow_up_hours)
+                if hours < 1 or hours > 168:
+                    return error_response(
+                        "no_follow_up_hours must be between 1 and 168 hours.",
+                        code="invalid_no_follow_up_hours",
+                    )
+                company.no_follow_up_hours = hours
+            except (ValueError, TypeError):
+                return error_response(
+                    "no_follow_up_hours must be a valid integer.",
+                    code="invalid_no_follow_up_hours",
+                )
+        if no_follow_up_digest_hour is not None:
+            try:
+                digest_hour = int(no_follow_up_digest_hour)
+                if digest_hour < 0 or digest_hour > 23:
+                    return error_response(
+                        "no_follow_up_digest_hour must be between 0 and 23.",
+                        code="invalid_no_follow_up_digest_hour",
+                    )
+                company.no_follow_up_digest_hour = digest_hour
+            except (ValueError, TypeError):
+                return error_response(
+                    "no_follow_up_digest_hour must be a valid integer.",
+                    code="invalid_no_follow_up_digest_hour",
+                )
+
         if tz_value is not None:
             name = str(tz_value).strip() or "UTC"
             try:
@@ -229,6 +267,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
             'auto_assign_algorithm',
             're_assign_enabled',
             're_assign_hours',
+            'no_follow_up_enabled',
+            'no_follow_up_hours',
+            'no_follow_up_digest_hour',
             'timezone',
         ]
         company.save(update_fields=update_fields)

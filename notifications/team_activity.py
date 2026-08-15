@@ -24,7 +24,7 @@ def team_activity_settings_key(action: Optional[str]) -> str:
     key = (action or "").strip().lower()
     if key == "status_change":
         return _TEAM_ACTIVITY_STATUS_SETTINGS_KEY
-    if key == "no_follow_up":
+    if key in {"no_follow_up", "no_follow_up_digest"}:
         return _TEAM_ACTIVITY_OVERDUE_SETTINGS_KEY
     if key in {
         "call_logged",
@@ -69,16 +69,22 @@ def notify_owner_team_activity(
     without duplicating the DB row.
 
     Guardrails:
-    - actor and company are required
+    - company is required
     - skip self notifications (owner acting)
     - skip inactive owner
     - skip when owner disabled this team-activity category
+
+    ``actor`` may be None for aggregate notifications (e.g. the daily no-follow-up digest),
+    which summarise many employees and therefore have no single acting user. In that case
+    the self-notification guard does not apply.
     """
-    if not actor or not company:
+    if not company:
         return False
 
     owner_id = getattr(company, "owner_id", None)
-    if not owner_id or actor.pk == owner_id:
+    if not owner_id:
+        return False
+    if actor is not None and actor.pk == owner_id:
         return False
 
     try:
@@ -98,7 +104,7 @@ def notify_owner_team_activity(
         return False
 
     lang = normalize_notification_language(owner.language)
-    employee = actor.get_full_name() or actor.username
+    employee = (actor.get_full_name() or actor.username) if actor is not None else ""
     lead_display = (fields.get("lead") or fields.get("lead_name") or "").strip()
 
     text = get_team_activity_text(
@@ -109,7 +115,9 @@ def notify_owner_team_activity(
         **fields,
     )
 
-    payload: Dict[str, Any] = {"action": action, "employee_name": employee, **fields}
+    payload: Dict[str, Any] = {"action": action, **fields}
+    if employee:
+        payload["employee_name"] = employee
     if lead_display and "lead_name" not in payload:
         payload["lead_name"] = lead_display
     # Ensure lead_id is always present for mobile deep-link (stringified by FCM layer).
@@ -135,7 +143,7 @@ def notify_owner_team_activity(
             title=text["title"],
             body=text["body"],
             data=payload,
-            sender_role=getattr(actor, "role", None),
+            sender_role=getattr(actor, "role", None) if actor is not None else None,
             language=lang,
             skip_database_insert=True,
             skip_settings_check=True,  # already gated by category preference above

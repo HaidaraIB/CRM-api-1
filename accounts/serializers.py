@@ -291,6 +291,9 @@ class UserSerializer(serializers.ModelSerializer):
             ),
             "re_assign_enabled": company.re_assign_enabled,
             "re_assign_hours": company.re_assign_hours,
+            "no_follow_up_enabled": getattr(company, "no_follow_up_enabled", True),
+            "no_follow_up_hours": getattr(company, "no_follow_up_hours", 10),
+            "no_follow_up_digest_hour": getattr(company, "no_follow_up_digest_hour", 9),
             "free_trial_consumed": getattr(company, "free_trial_consumed", False),
             "timezone": getattr(company, "timezone", "UTC") or "UTC",
             "field_visit_enabled": getattr(

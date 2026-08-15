@@ -9,10 +9,10 @@ Usage:
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
-from django.contrib.contenttypes.models import ContentType
 from crm.models import Deal
+from notifications.dispatch import claim_dispatch
 from notifications.services import NotificationService
-from notifications.models import NotificationType, ReminderDispatchLog
+from notifications.models import NotificationType
 from accounts.event_emails import send_followup_reminder_email
 import logging
 
@@ -67,7 +67,6 @@ class Command(BaseCommand):
         sent_count = 0
         skipped_count = 0
         dedup_skipped = 0
-        ct = ContentType.objects.get_for_model(Deal)
 
         for deal in deals:
             if not deal.employee:
@@ -76,27 +75,28 @@ class Command(BaseCommand):
             user = deal.employee
             scheduled_for = deal.reminder_date
 
-            log_row, created = ReminderDispatchLog.objects.get_or_create(
-                user=user,
-                notification_type=NotificationType.DEAL_REMINDER,
-                content_type=ct,
-                object_id=str(deal.id),
-                scheduled_for=scheduled_for,
-                minutes_before=minutes_before,
-                defaults={"push_sent": False, "email_sent": False},
-            )
-            if not created and log_row.push_sent and log_row.email_sent:
-                dedup_skipped += 1
-                continue
-
             if dry_run:
+                # Claiming would write to the dispatch log, so never claim during a dry run.
                 self.stdout.write(
                     self.style.SUCCESS(
                         f'[DRY RUN] Would send reminder to {user.username} '
                         f'for deal {deal.id} ({deal.client.name})'
                     )
                 )
+                sent_count += 1
             else:
+                log_row = claim_dispatch(
+                    user=user,
+                    notification_type=NotificationType.DEAL_REMINDER,
+                    obj=deal,
+                    scheduled_for=scheduled_for,
+                    minutes_before=minutes_before,
+                    expect_email=True,
+                )
+                if log_row is None:
+                    dedup_skipped += 1
+                    continue
+
                 try:
                     NotificationService.send_notification(
                         user=user,
