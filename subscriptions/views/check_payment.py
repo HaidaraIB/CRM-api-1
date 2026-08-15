@@ -6,12 +6,9 @@ from rest_framework.permissions import IsAuthenticated
 from crm_saas_api.responses import error_response, success_response
 
 from ..models import Subscription, Payment, PaymentStatus
-from ..paytabs_utils import verify_paytabs_payment
-from ..stripe_utils import verify_stripe_payment
-from ..zaincash_utils import check_zaincash_payment_status
-from ..fib_utils import check_fib_payment_status
 from ..services.billing import finalize_completed_payment
 from ..services.checkout_auth import require_subscription_company_member
+from ..services.payment_completion import query_gateway_state
 from ..services.subscription_helpers import (
     _payment_amount_usd,
     reconcile_unapplied_completed_payment,
@@ -68,67 +65,28 @@ def check_payment_status(request, subscription_id):
             paytabs_status = "A"
             gateway_status = "success"
         elif payment and payment.tran_ref:
-            payment_gateway = payment.payment_method
-            if payment_gateway:
-                gateway_name = payment_gateway.name.lower()
+            # One re-query for every gateway: the adapter normalizes its own
+            # status vocabulary, so this endpoint no longer needs a branch per
+            # gateway (and can no longer silently omit one, as it did QiCard).
+            result = query_gateway_state(payment)
 
-                if "zain" in gateway_name or "zaincash" in gateway_name:
-                    try:
-                        result = check_zaincash_payment_status(payment.tran_ref)
-                        gateway_status = result.get("status", "pending")
-                        if gateway_status == "success":
-                            payment_status_value = PaymentStatus.COMPLETED.value
-                            _mark_completed_and_finalize(subscription, payment)
-                    except Exception as e:
-                        logger.warning("Could not verify Zain Cash payment: %s", e)
-                        if payment.payment_status == PaymentStatus.COMPLETED.value:
-                            gateway_status = "success"
-
-                elif "paytabs" in gateway_name:
-                    try:
-                        result = verify_paytabs_payment(payment.tran_ref)
-                        paytabs_status = result.get("payment_result", {}).get(
-                            "response_status"
-                        )
-                        if paytabs_status == "A":
-                            payment_status_value = PaymentStatus.COMPLETED.value
-                            _mark_completed_and_finalize(subscription, payment)
-                    except Exception as e:
-                        logger.warning("Could not verify payment with PayTabs: %s", e)
-                        if payment.payment_status == PaymentStatus.COMPLETED.value:
-                            paytabs_status = "A"
-
-                elif "stripe" in gateway_name:
-                    try:
-                        result = verify_stripe_payment(payment.tran_ref)
-                        stripe_status = result.get("stripe_payment_status")
-                        if stripe_status == "paid":
-                            gateway_status = "success"
-                            payment_status_value = PaymentStatus.COMPLETED.value
-                            _mark_completed_and_finalize(subscription, payment)
-                    except Exception as e:
-                        logger.warning("Could not verify Stripe payment: %s", e)
-                        if payment.payment_status == PaymentStatus.COMPLETED.value:
-                            gateway_status = "success"
-
-                elif "fib" in gateway_name or "first iraqi" in gateway_name:
-                    try:
-                        result = check_fib_payment_status(payment.tran_ref)
-                        fib_status = (result.get("status") or "").upper()
-                        gateway_status = fib_status.lower() if fib_status else "pending"
-                        if fib_status == "PAID":
-                            payment_status_value = PaymentStatus.COMPLETED.value
-                            _mark_completed_and_finalize(subscription, payment)
-                            gateway_status = "success"
-                        elif fib_status == "DECLINED":
-                            payment_status_value = PaymentStatus.FAILED.value
-                            if payment.payment_status != PaymentStatus.FAILED.value:
-                                payment.payment_status = PaymentStatus.FAILED.value
-                                payment.save(update_fields=["payment_status", "updated_at"])
-                    except Exception as e:
-                        logger.warning("Could not verify FIB payment: %s", e)
-                        if payment.payment_status == PaymentStatus.COMPLETED.value:
-                            gateway_status = "success"
+            if result.is_paid:
+                gateway_status = "success"
+                paytabs_status = "A"
+                payment_status_value = PaymentStatus.COMPLETED.value
+                _mark_completed_and_finalize(subscription, payment)
+            elif result.is_failed:
+                gateway_status = "failed"
+                payment_status_value = PaymentStatus.FAILED.value
+                if payment.payment_status != PaymentStatus.FAILED.value:
+                    payment.payment_status = PaymentStatus.FAILED.value
+                    payment.save(update_fields=["payment_status", "updated_at"])
+            elif result.state == "pending":
+                gateway_status = "pending"
+            elif payment.payment_status == PaymentStatus.COMPLETED.value:
+                # Gateway unreachable, but we already recorded this as paid.
+                gateway_status = "success"
+                paytabs_status = "A"
 
             if (
                 payment.payment_status == PaymentStatus.COMPLETED.value
@@ -161,8 +119,11 @@ def check_payment_status(request, subscription_id):
                 reconcile_unapplied_completed_payment(subscription)
                 subscription.refresh_from_db()
         except Exception:
-            # Never break status endpoint due to reconciliation
-            pass
+            # Never break the status endpoint because reconciliation failed,
+            # but do not let the failure disappear either.
+            logger.exception(
+                "Reconciliation failed for subscription_id=%s", subscription_id
+            )
 
         is_truly_active = subscription.is_truly_active()
         days_until_expiry = subscription.days_until_expiry()

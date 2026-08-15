@@ -98,7 +98,7 @@ class TestCreateSessionAuth:
         )
         assert res.status_code == 403
 
-    @patch("subscriptions.views.stripe_gateway.create_stripe_payment_session")
+    @patch("subscriptions.stripe_utils.create_stripe_payment_session")
     def test_create_stripe_ok_for_owner(
         self,
         mock_create,
@@ -128,7 +128,7 @@ class TestCreateSessionAuth:
 
 @pytest.mark.django_db
 class TestSessionReuse:
-    @patch("subscriptions.views.stripe_gateway.create_stripe_payment_session")
+    @patch("subscriptions.stripe_utils.create_stripe_payment_session")
     def test_reuse_pending_stripe_session(
         self,
         mock_create,

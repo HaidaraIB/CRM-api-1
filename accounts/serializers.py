@@ -1075,6 +1075,7 @@ class RegisterCompanySerializer(serializers.Serializer):
             last_name=owner_data['last_name'],
             phone=owner_data['phone'],
             role=Role.ADMIN.value,
+            login_two_factor_enabled=False,
         )
         owner.phone_verified = True
         from .email_registration_policy import effective_registration_email_verification_required

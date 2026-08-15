@@ -182,8 +182,9 @@ def create_zaincash_payment_session(
         try:
             error_data = e.response.json()
             error_detail = error_data.get("message") or error_data.get("error") or error_data.get("msg") or str(e)
-        except:
-            pass
+        except (ValueError, AttributeError, TypeError):
+            # Non-JSON or empty error body; error_detail already holds str(e).
+            logger.debug("Zain Cash error body was not JSON", exc_info=True)
         raise Exception(f"Zain Cash API error: {error_detail}")
     except requests.exceptions.RequestException as e:
         raise Exception(f"Zain Cash API error: {str(e)}")
@@ -307,8 +308,9 @@ def check_zaincash_payment_status(transaction_id: str, msisdn: str = ""):
         try:
             error_data = e.response.json()
             error_detail = error_data.get("message") or error_data.get("error") or error_data.get("msg") or str(e)
-        except:
-            pass
+        except (ValueError, AttributeError, TypeError):
+            # Non-JSON or empty error body; error_detail already holds str(e).
+            logger.debug("Zain Cash error body was not JSON", exc_info=True)
         raise Exception(f"Zain Cash status check error: {error_detail}")
     except requests.exceptions.RequestException as e:
         raise Exception(f"Zain Cash status check error: {str(e)}")
@@ -404,8 +406,8 @@ def test_zaincash_credentials(merchant_id: str, merchant_secret: str, environmen
                             "success": False,
                             "message": f"Invalid credentials: {error_msg}"
                         }
-                except:
-                    pass
+                except (ValueError, AttributeError, TypeError):
+                    logger.debug("Zain Cash error body was not JSON", exc_info=True)
                 # If it's a 400 but not about credentials, consider it a partial success
                 # (credentials work, but test transaction format might be wrong)
                 return {
@@ -417,8 +419,8 @@ def test_zaincash_credentials(merchant_id: str, merchant_secret: str, environmen
                 try:
                     error_data = response.json()
                     error_msg = error_data.get("message", error_msg) or error_data.get("error", error_msg)
-                except:
-                    pass
+                except (ValueError, AttributeError, TypeError):
+                    logger.debug("Zain Cash error body was not JSON", exc_info=True)
                 return {
                     "success": False,
                     "message": f"Connection failed: {error_msg}"

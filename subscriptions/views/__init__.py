@@ -2,6 +2,7 @@
 Subscription HTTP endpoints. Split from the former monolithic views module;
 imports remain ``from subscriptions.views import ...`` for URLconf compatibility.
 """
+from .alqaseh import create_alqaseh_payment, alqaseh_return, alqaseh_webhook
 from .check_payment import check_payment_status
 from .fib import create_fib_payment, fib_callback
 from .paytabs import create_paytabs_payment, paytabs_return, paytabs_callback
@@ -37,6 +38,9 @@ __all__ = [
     "cancel_pending_plan_change",
     "switch_subscription_plan_free",
     "check_payment_status",
+    "create_alqaseh_payment",
+    "alqaseh_return",
+    "alqaseh_webhook",
     "create_fib_payment",
     "fib_callback",
     "create_paytabs_payment",

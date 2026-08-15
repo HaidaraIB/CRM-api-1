@@ -8,7 +8,12 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
-from ..services import payment_gateway_test_response, deactivate_other_subscriptions_for_company
+from ..services import (
+    apply_exclusive_activation,
+    payment_gateway_test_response,
+    deactivate_other_subscriptions_for_company,
+)
+from ..gateway_config import merge_config_for_write
 from companies.models import Company
 from ..services.billing import is_plan_free, preview_plan_change
 from ..services.trial_eligibility import is_free_trial_plan, mark_company_free_trial_consumed
@@ -47,10 +52,7 @@ from accounts.permissions import (
     CanViewCompanyInvoicesOrManagePayments,
 )
 from ..utils import send_broadcast_email
-from ..zaincash_utils import test_zaincash_credentials
-from ..stripe_utils import test_stripe_credentials
-from ..qicard_utils import test_qicard_credentials
-from ..fib_utils import test_fib_credentials
+from ..gateways.registry import adapter_for_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -102,20 +104,6 @@ class PublicPaymentGatewayListView(generics.ListAPIView):
             status=PaymentGatewayStatus.ACTIVE.value,
             enabled=True
         ).order_by('name')
-
-
-def deactivate_other_subscriptions_for_company(company_id, exclude_subscription_id=None):
-    """Ensure only one subscription per company is active: deactivate all others for this company."""
-    qs = Subscription.objects.filter(company_id=company_id)
-    if exclude_subscription_id is not None:
-        qs = qs.exclude(pk=exclude_subscription_id)
-    updated = qs.filter(is_active=True).update(is_active=False)
-    if updated:
-        logger.info(
-            "Deactivated %s other subscription(s) for company_id=%s (only one active per company)",
-            updated,
-            company_id,
-        )
 
 
 @api_view(["POST"])
@@ -732,92 +720,44 @@ class PaymentGatewayViewSet(viewsets.ModelViewSet):
             else PaymentGatewayStatus.DISABLED.value
         )
         gateway.save()
+
+        # Card gateways are interchangeable and only one may be live, so enabling
+        # one switches the others off here rather than in a second client request.
+        disabled = apply_exclusive_activation(gateway)
         return success_response(
             data={
                 "status": f'Gateway {"enabled" if gateway.enabled else "disabled"}',
                 "enabled": gateway.enabled,
+                "disabled_gateways": disabled,
             },
         )
 
     @action(detail=True, methods=["post"])
     def test_connection(self, request, pk=None):
-        """Test gateway connection with provided credentials"""
+        """
+        Test gateway connection with the submitted credentials.
+
+        The client reads config back masked, so any field the operator did not
+        edit arrives as bullets; merge_config_for_write drops those and tests
+        against the stored credential instead.
+        """
         gateway = self.get_object()
-        config = request.data.get("config", gateway.config or {})
-        
-        gateway_name_lower = gateway.name.lower()
-        
-        if "zaincash" in gateway_name_lower or "zain cash" in gateway_name_lower:
-            # Test Zain Cash credentials
-            merchant_id = config.get("merchantId", "")
-            merchant_secret = config.get("merchantSecret", "")
-            environment = config.get("environment", "test")
-            msisdn = config.get("msisdn", "")
-            
-            if not merchant_id or not merchant_secret:
-                return error_response(
-                    "Merchant ID and Merchant Secret are required",
-                    code="bad_request",
-                    details={"success": False},
-                )
-            
-            result = test_zaincash_credentials(merchant_id, merchant_secret, environment, msisdn)
-            
-            return payment_gateway_test_response(result)
-        elif "stripe" in gateway_name_lower:
-            # Test Stripe credentials
-            secret_key = config.get("secretKey", "")
-            publishable_key = config.get("publishableKey", "")
-            
-            if not secret_key:
-                return error_response(
-                    "Secret Key is required",
-                    code="bad_request",
-                    details={"success": False},
-                )
-            
-            result = test_stripe_credentials(secret_key, publishable_key)
-            
-            return payment_gateway_test_response(result)
-        elif "qicard" in gateway_name_lower or "qi card" in gateway_name_lower or "qi-card" in gateway_name_lower:
-            # Test QiCard credentials
-            terminal_id = config.get("terminalId", "")
-            username = config.get("username", "")
-            password = config.get("password", "")
-            environment = config.get("environment", "test")
-            
-            if not terminal_id or not username or not password:
-                return error_response(
-                    "Terminal ID, Username, and Password are required",
-                    code="bad_request",
-                    details={"success": False},
-                )
-            
-            result = test_qicard_credentials(terminal_id, username, password, environment)
-            
-            return payment_gateway_test_response(result)
-        elif "fib" in gateway_name_lower or "first iraqi" in gateway_name_lower:
-            # Test FIB credentials
-            client_id = config.get("clientId", "")
-            client_secret = config.get("clientSecret", "")
-            environment = config.get("environment", "test")
-            
-            if not client_id or not client_secret:
-                return error_response(
-                    "Client ID and Client Secret are required",
-                    code="bad_request",
-                    details={"success": False},
-                )
-            
-            result = test_fib_credentials(client_id, client_secret, environment)
-            
-            return payment_gateway_test_response(result)
-        else:
-            # For other gateways, just validate that required fields are present
-            # (PayTabs, etc. would need their own test implementations)
+        config = merge_config_for_write(gateway.config, request.data.get("config"))
+
+        adapter = adapter_for_gateway(gateway)
+        if adapter is None:
             return success_response(
                 message="Credentials validated (no API test available for this gateway)",
                 data={"validated": True},
             )
+
+        result = adapter.test_credentials(config)
+        if not result.get("success"):
+            return error_response(
+                result.get("message") or "Credentials test failed",
+                code="bad_request",
+                details={"success": False},
+            )
+        return payment_gateway_test_response(result)
 
 

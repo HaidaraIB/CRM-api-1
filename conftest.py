@@ -20,6 +20,20 @@ def _tests_skip_api_key_gate(settings):
     settings.API_KEY_ADMIN = ""
 
 
+@pytest.fixture(autouse=True)
+def _tests_reset_throttle_state():
+    """
+    DRF stores throttle counters in the cache, which is process-wide and outlives
+    a single test. Without this, a test file that makes many anonymous requests
+    exhausts the bucket and later tests get 429 instead of their real status.
+    """
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+    cache.clear()
+
+
 @pytest.fixture
 def api_client():
     return APIClient()

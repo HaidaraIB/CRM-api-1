@@ -154,8 +154,9 @@ def create_paytabs_payment_session(
             detail = response.text
             try:
                 detail = response.json()
-            except Exception:
-                pass
+            except ValueError:
+                # Non-JSON error body; detail already holds the raw text.
+                logger.debug("PayTabs error body was not JSON", exc_info=True)
             logger.error(
                 "PayTabs payment/request failed status=%s detail=%s",
                 response.status_code,

@@ -31,7 +31,10 @@ def _store_previous_payment_status(sender, instance, **kwargs):
             old = Payment.objects.filter(pk=instance.pk).values_list("payment_status", flat=True).first()
             _previous_payment_status[instance.pk] = old
         except Exception:
-            pass
+            # A failed lookup only costs the transition check; never block the save.
+            logger.exception(
+                "Could not read previous payment_status for payment_id=%s", instance.pk
+            )
 
 
 def _get_owner_and_subscription(payment):
@@ -73,7 +76,8 @@ def on_payment_saved(sender, instance, created, **kwargs):
         try:
             owner.refresh_from_db(fields=["language"])
         except Exception:
-            pass
+            # Fall back to the in-memory language preference.
+            logger.debug("Could not refresh owner language", exc_info=True)
         language = get_email_language_for_user(owner, request=None, default="en")
         if just_completed:
             send_payment_success_email(owner, instance, subscription, language=language)

@@ -157,8 +157,9 @@ def create_qicard_payment_session(
             error_data = e.response.json()
             error_obj = error_data.get("error", {})
             error_detail = error_obj.get("description") or error_obj.get("message") or str(e)
-        except:
-            pass
+        except (ValueError, AttributeError, TypeError):
+            # Non-JSON or empty error body; error_detail already holds str(e).
+            logger.debug("QiCard error body was not JSON", exc_info=True)
         raise Exception(f"QiCard API error: {error_detail}")
     except requests.exceptions.RequestException as e:
         raise Exception(f"QiCard API error: {str(e)}")
@@ -229,8 +230,9 @@ def verify_qicard_payment(payment_id: str):
             error_data = e.response.json()
             error_obj = error_data.get("error", {})
             error_detail = error_obj.get("description") or error_obj.get("message") or str(e)
-        except:
-            pass
+        except (ValueError, AttributeError, TypeError):
+            # Non-JSON or empty error body; error_detail already holds str(e).
+            logger.debug("QiCard error body was not JSON", exc_info=True)
         raise Exception(f"QiCard status check error: {error_detail}")
     except requests.exceptions.RequestException as e:
         raise Exception(f"QiCard status check error: {str(e)}")
@@ -305,7 +307,7 @@ def test_qicard_credentials(terminal_id: str, username: str, password: str, envi
                     error_data = response.json()
                     error_obj = error_data.get("error", {})
                     error_msg = error_obj.get("description") or error_obj.get("message") or "Authentication failed"
-                except:
+                except (ValueError, AttributeError, TypeError):
                     error_msg = "Authentication failed"
                 return {
                     "success": False,
@@ -335,7 +337,7 @@ def test_qicard_credentials(terminal_id: str, username: str, password: str, envi
                         "success": True,
                         "message": "Credentials appear valid (authentication successful)"
                     }
-                except:
+                except (ValueError, AttributeError, TypeError):
                     return {
                         "success": True,
                         "message": "Credentials appear valid (authentication successful)"
@@ -346,7 +348,7 @@ def test_qicard_credentials(terminal_id: str, username: str, password: str, envi
                     error_data = response.json()
                     error_obj = error_data.get("error", {})
                     error_msg = error_obj.get("description") or error_obj.get("message") or f"API returned status {response.status_code}"
-                except:
+                except (ValueError, AttributeError, TypeError):
                     error_msg = f"API returned status {response.status_code}"
                 
                 # If it's a 5xx error, it's a server issue, not credentials

@@ -7,3 +7,7 @@ class SubscriptionsConfig(AppConfig):
 
     def ready(self):
         import subscriptions.signals  # noqa: F401
+        from subscriptions.gateways import autodiscover
+
+        # Import the gateway adapters so they register themselves.
+        autodiscover()

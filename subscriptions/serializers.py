@@ -3,10 +3,18 @@ from rest_framework import serializers
 
 from subscriptions.plan_constraints import validate_single_free_trial_and_free_forever_plans
 
+from .gateway_config import (
+    mask_gateway_config,
+    merge_config_for_write,
+    strip_masked_values,
+)
 from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
+from .services.gateway_activation import apply_exclusive_activation
 
 
-class CreatePaytabsPaymentSerializer(serializers.Serializer):
+class CreateCheckoutSessionSerializer(serializers.Serializer):
+    """Request body for every create-*-session endpoint."""
+
     subscription_id = serializers.IntegerField()
     plan_id = serializers.IntegerField(required=False, allow_null=True)
     billing_cycle = serializers.ChoiceField(
@@ -16,44 +24,13 @@ class CreatePaytabsPaymentSerializer(serializers.Serializer):
     )
 
 
-class CreateZaincashPaymentSerializer(serializers.Serializer):
-    subscription_id = serializers.IntegerField()
-    plan_id = serializers.IntegerField(required=False, allow_null=True)
-    billing_cycle = serializers.ChoiceField(
-        choices=['monthly', 'yearly'],
-        required=False,
-        allow_null=True
-    )
-
-
-class CreateStripePaymentSerializer(serializers.Serializer):
-    subscription_id = serializers.IntegerField()
-    plan_id = serializers.IntegerField(required=False, allow_null=True)
-    billing_cycle = serializers.ChoiceField(
-        choices=['monthly', 'yearly'],
-        required=False,
-        allow_null=True
-    )
-
-
-class CreateQicardPaymentSerializer(serializers.Serializer):
-    subscription_id = serializers.IntegerField()
-    plan_id = serializers.IntegerField(required=False, allow_null=True)
-    billing_cycle = serializers.ChoiceField(
-        choices=['monthly', 'yearly'],
-        required=False,
-        allow_null=True
-    )
-
-
-class CreateFibPaymentSerializer(serializers.Serializer):
-    subscription_id = serializers.IntegerField()
-    plan_id = serializers.IntegerField(required=False, allow_null=True)
-    billing_cycle = serializers.ChoiceField(
-        choices=['monthly', 'yearly'],
-        required=False,
-        allow_null=True
-    )
+# The five per-gateway serializers were byte-for-byte identical; these aliases
+# keep any external imports working.
+CreatePaytabsPaymentSerializer = CreateCheckoutSessionSerializer
+CreateZaincashPaymentSerializer = CreateCheckoutSessionSerializer
+CreateStripePaymentSerializer = CreateCheckoutSessionSerializer
+CreateQicardPaymentSerializer = CreateCheckoutSessionSerializer
+CreateFibPaymentSerializer = CreateCheckoutSessionSerializer
 
 
 class PlanSerializer(serializers.ModelSerializer):
@@ -446,6 +423,9 @@ class BroadcastListSerializer(serializers.ModelSerializer):
 
 
 class PaymentGatewaySerializer(serializers.ModelSerializer):
+    #: Gateways switched off because this one was enabled (see gateway_activation).
+    disabled_gateways = serializers.SerializerMethodField()
+
     class Meta:
         model = PaymentGateway
         fields = [
@@ -455,49 +435,66 @@ class PaymentGatewaySerializer(serializers.ModelSerializer):
             "status",
             "enabled",
             "config",
+            "disabled_gateways",
             "created_at",
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
-    
+
+    def get_disabled_gateways(self, obj):
+        return getattr(obj, "_disabled_gateways", [])
+
+    def to_representation(self, instance):
+        """Never return live credentials; secrets go out masked (see gateway_config)."""
+        data = super().to_representation(instance)
+        data["config"] = mask_gateway_config(instance.config)
+        return data
+
     def update(self, instance, validated_data):
         """
-        Custom update to merge config instead of replacing it completely
-        This ensures we don't lose existing configuration values
+        Merge config rather than replacing it, so a partial form submit does not
+        wipe unrelated keys, and drop values the client echoed back still masked
+        so an unedited secret field leaves the stored credential intact.
         """
         import logging
         logger = logging.getLogger(__name__)
-        
-        # Handle config merging
+
         if 'config' in validated_data:
             new_config = validated_data.pop('config')
-            existing_config = instance.config or {}
-            
-            # If new_config is empty dict, keep existing config (don't overwrite)
-            if new_config and isinstance(new_config, dict) and len(new_config) > 0:
-                # Merge new config with existing config
-                # Start with existing config, then update with new values
-                merged_config = {**existing_config, **new_config}
-                # Remove None values but keep empty strings and other falsy values that might be valid
-                cleaned_config = {k: v for k, v in merged_config.items() if v is not None}
-                validated_data['config'] = cleaned_config
+            real_edits = strip_masked_values(new_config)
+
+            if real_edits:
+                merged_config = merge_config_for_write(instance.config, real_edits)
+                validated_data['config'] = merged_config
                 logger.info(
                     "Updating PaymentGateway %s (%s) config keys=%s",
                     instance.id,
                     instance.name,
-                    sorted(cleaned_config.keys()),
+                    sorted(real_edits.keys()),
                 )
             else:
-                # If new_config is empty, keep existing config
+                # Nothing but masked/empty values came back - keep what is stored.
                 logger.info(
-                    "PaymentGateway %s config unchanged (empty update payload)",
+                    "PaymentGateway %s config unchanged (no unmasked values submitted)",
                     instance.id,
                 )
-                # Don't update config field - keep existing
-                # validated_data['config'] is not set, so existing config will be preserved
-        
-        # Update other fields normally
-        return super().update(instance, validated_data)
+
+        return self._enforce_exclusivity(super().update(instance, validated_data))
+
+    def create(self, validated_data):
+        return self._enforce_exclusivity(super().create(validated_data))
+
+    @staticmethod
+    def _enforce_exclusivity(instance):
+        """
+        A gateway saved as enabled switches its rivals off.
+
+        Lives here rather than only in the toggle_enabled action because a plain
+        PATCH {"enabled": true} reaches the model directly - that gap is how two
+        card gateways could end up live despite the admin panel's own checks.
+        """
+        instance._disabled_gateways = apply_exclusive_activation(instance)
+        return instance
 
 
 class PaymentGatewayListSerializer(serializers.ModelSerializer):
