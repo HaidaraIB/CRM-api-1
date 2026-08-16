@@ -16,8 +16,13 @@ from subscriptions.models import (
     Plan,
     Subscription,
 )
+from subscriptions.gateways.base import GatewayResult
 from subscriptions.services.billing import finalize_completed_payment
-from subscriptions.services.payment_completion import attach_checkout_session
+from subscriptions.services.payment_completion import (
+    _lock_payment_qs,
+    attach_checkout_session,
+    confirm_and_finalize_payment,
+)
 
 
 @pytest.fixture
@@ -404,3 +409,60 @@ class TestFinalizeLock:
         assert inactive_subscription.end_date == end_after_first
         assert end_after_first is not None
         assert end_after_first >= end_before
+
+
+@pytest.mark.django_db
+class TestConfirmLockQuery:
+    def test_for_update_targets_payment_row_only(self):
+        """Postgres: FOR UPDATE cannot lock the nullable target_plan LEFT JOIN."""
+        qs = _lock_payment_qs()
+        assert qs.query.select_for_update is True
+        assert qs.query.select_for_update_of == ("self",)
+
+    def test_confirm_with_target_plan_finalizes(
+        self, inactive_subscription, stripe_gateway, paid_plan
+    ):
+        payment = Payment.objects.create(
+            subscription=inactive_subscription,
+            amount=Decimal("29.00"),
+            currency="USD",
+            amount_usd=Decimal("29.00"),
+            payment_method=stripe_gateway,
+            payment_status=PaymentStatus.PENDING.value,
+            tran_ref="lock_1",
+            target_plan=paid_plan,
+            billing_cycle=BillingCycle.MONTHLY,
+        )
+        with patch(
+            "subscriptions.services.payment_completion.query_gateway_state",
+            return_value=GatewayResult("paid"),
+        ):
+            ok, reason = confirm_and_finalize_payment(payment, mark_failed=True)
+        assert ok is True
+        assert reason == "finalized"
+        payment.refresh_from_db()
+        assert payment.applied_at is not None
+
+    def test_confirm_without_target_plan_still_locks(
+        self, inactive_subscription, stripe_gateway
+    ):
+        payment = Payment.objects.create(
+            subscription=inactive_subscription,
+            amount=Decimal("29.00"),
+            currency="USD",
+            amount_usd=Decimal("29.00"),
+            payment_method=stripe_gateway,
+            payment_status=PaymentStatus.PENDING.value,
+            tran_ref="lock_2",
+            target_plan=None,
+            billing_cycle=BillingCycle.MONTHLY,
+        )
+        with patch(
+            "subscriptions.services.payment_completion.query_gateway_state",
+            return_value=GatewayResult("failed"),
+        ):
+            ok, reason = confirm_and_finalize_payment(payment, mark_failed=True)
+        assert ok is False
+        assert reason == "marked_failed"
+        payment.refresh_from_db()
+        assert payment.payment_status == PaymentStatus.FAILED.value

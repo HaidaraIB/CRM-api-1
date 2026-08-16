@@ -150,6 +150,19 @@ def is_gateway_payment_paid(payment: Payment) -> tuple[bool, Optional[dict]]:
     return result.is_paid, result.raw
 
 
+def _lock_payment_qs():
+    """
+    Row-lock the Payment table only.
+
+    ``target_plan`` is nullable, so select_related() emits a LEFT OUTER JOIN.
+    PostgreSQL rejects FOR UPDATE on the nullable side of an outer join
+    (psycopg2 FeatureNotSupported). ``of=("self",)`` locks payments only.
+    """
+    return Payment.objects.select_for_update(of=("self",)).select_related(
+        "subscription", "payment_method", "target_plan"
+    )
+
+
 @transaction.atomic
 def confirm_and_finalize_payment(
     payment: Payment,
@@ -161,9 +174,7 @@ def confirm_and_finalize_payment(
 
     If mark_failed and gateway reports a hard failure, marks FAILED.
     """
-    payment = Payment.objects.select_for_update().select_related(
-        "subscription", "payment_method", "target_plan"
-    ).get(pk=payment.pk)
+    payment = _lock_payment_qs().get(pk=payment.pk)
     subscription = payment.subscription
 
     if payment.applied_at is not None:
