@@ -7,6 +7,7 @@ from .models import (
     LeadStatus,
     CallMethod,
     VisitType,
+    Tag,
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
@@ -243,6 +244,44 @@ class VisitTypeListSerializer(serializers.ModelSerializer):
             "company_name",
             "is_active",
             "is_default",
+            "created_at",
+        ]
+
+
+@extend_schema_serializer(component_name="Tag")
+class TagSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = Tag
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
+            "company",
+            "company_name",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class TagListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for list views and nested client output"""
+    company_name = serializers.CharField(source="company.name", read_only=True)
+
+    class Meta:
+        model = Tag
+        fields = [
+            "id",
+            "name",
+            "description",
+            "color",
+            "company",
+            "company_name",
+            "is_active",
             "created_at",
         ]
 

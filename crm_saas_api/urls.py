@@ -83,6 +83,7 @@ from settings.views import (
     LeadStatusViewSet,
     CallMethodViewSet,
     VisitTypeViewSet,
+    TagViewSet,
     SystemBackupViewSet,
     SystemAuditLogViewSet,
     SystemSettingsViewSet,
@@ -168,6 +169,7 @@ router.register(r"settings/stages", LeadStageViewSet, basename="leadstage")
 router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
 router.register(r"settings/call-methods", CallMethodViewSet, basename="callmethod")
 router.register(r"settings/visit-types", VisitTypeViewSet, basename="visittype")
+router.register(r"settings/tags", TagViewSet, basename="tag")
 router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup")
 router.register(
     r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog"

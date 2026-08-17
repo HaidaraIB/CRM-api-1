@@ -105,6 +105,20 @@ def apply_client_list_filters(queryset, request, *, exclude_status=False):
         if comm_q:
             queryset = queryset.filter(comm_q)
 
+    # Tags are many-to-many: matching is OR ("any of the selected tags"),
+    # so the join can duplicate rows and needs an explicit distinct().
+    tag_values = _csv_values(params, "tags")
+    if tag_values:
+        tag_ids = [int(v) for v in tag_values if v.isdigit()]
+        tag_names = [v for v in tag_values if not v.isdigit()]
+        tag_q = Q()
+        if tag_ids:
+            tag_q |= Q(tags__id__in=tag_ids)
+        if tag_names:
+            tag_q |= Q(tags__name__in=tag_names)
+        if tag_q:
+            queryset = queryset.filter(tag_q).distinct()
+
     budget_min = _parse_decimal(params.get("budget_min"))
     budget_max = _parse_decimal(params.get("budget_max"))
     if budget_min is not None or budget_max is not None:
