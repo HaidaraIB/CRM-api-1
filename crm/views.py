@@ -62,6 +62,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         "type",
         "communication_way__name",
         "status__name",
+        "tags__name",
         "notes",
         "residence",
         "lead_company_name",
@@ -90,6 +91,7 @@ class ClientViewSet(viewsets.ModelViewSet):
                 "interested_developer", "interested_project", "interested_unit",
             ).prefetch_related(
                 "phone_numbers",
+                "tags",
                 "client_tasks__stage",
                 "client_calls__call_method",
                 "client_visits__visit_type",

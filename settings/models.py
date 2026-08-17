@@ -309,6 +309,29 @@ class VisitType(models.Model):
         return self.name
 
 
+class Tag(models.Model):
+    """Per-tenant secondary classification for leads (a lead may carry many)."""
+
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    color = models.CharField(max_length=7, default="#808080")  # Hex color
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="tags"
+    )
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_tag"
+        ordering = ["name"]
+        unique_together = ["name", "company"]
+
+    def __str__(self):
+        return self.name
+
+
 class SystemSettings(models.Model):
     """
     System-wide settings configuration.

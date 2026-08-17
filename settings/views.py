@@ -22,6 +22,7 @@ from .models import (
     LeadStatus,
     CallMethod,
     VisitType,
+    Tag,
     SMTPSettings,
     SystemBackup,
     SystemAuditLog,
@@ -41,6 +42,8 @@ from .serializers import (
     CallMethodListSerializer,
     VisitTypeSerializer,
     VisitTypeListSerializer,
+    TagSerializer,
+    TagListSerializer,
     SMTPSettingsSerializer,
     PlatformTwilioSettingsSerializer,
     PlatformWhatsAppSettingsSerializer,
@@ -236,6 +239,35 @@ class VisitTypeViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return VisitTypeListSerializer
         return VisitTypeSerializer
+
+
+class TagViewSet(viewsets.ModelViewSet):
+    """
+    Per-tenant lead tags (secondary classification, many per lead).
+    Admin/supervisor with can_manage_settings: full access; supervisor with can_manage_leads: read-only; employees: read-only.
+    """
+
+    queryset = Tag.objects.all()
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["name", "description"]
+    ordering_fields = ["name", "created_at"]
+    ordering = ["name"]
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = super().get_queryset()
+
+        return queryset.filter(company=user.company)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(company=user.company)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return TagListSerializer
+        return TagSerializer
 
 
 class SMTPSettingsViewSet(viewsets.ModelViewSet):

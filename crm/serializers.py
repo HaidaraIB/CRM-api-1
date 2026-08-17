@@ -150,6 +150,8 @@ from .models import (
     ClientEvent,
 )
 from .field_visit_uploads import validate_client_location_photo
+from settings.models import Tag
+from settings.serializers import TagListSerializer
 from settings.feature_policy import is_field_visit_allowed
 from .geo import (
     haversine_distance_meters,
@@ -337,6 +339,10 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         source="communication_way.name", read_only=True
     )
     status_name = serializers.CharField(source="status.name", read_only=True)
+    tags = serializers.PrimaryKeyRelatedField(
+        many=True, required=False, queryset=Tag.objects.all()
+    )
+    tags_detail = TagListSerializer(many=True, read_only=True, source="tags")
     phone_numbers = ClientPhoneNumberSerializer(many=True, read_only=True)
     last_feedback = serializers.SerializerMethodField()
     last_stage = serializers.SerializerMethodField()
@@ -369,6 +375,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "communication_way_name",
             "status",
             "status_name",
+            "tags",
+            "tags_detail",
             "budget",
             "budget_max",
             "phone_number",  # Keep for backward compatibility
@@ -458,6 +466,23 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                 raise serializers.ValidationError(
                     "Status must belong to the same company as the client."
                 )
+        return value
+
+    def validate_tags(self, value):
+        """Ensure every tag belongs to the same company as the client"""
+        if value:
+            company_id = None
+            if self.instance and self.instance.company_id:
+                company_id = self.instance.company_id
+            elif hasattr(self, "initial_data"):
+                company_id = self.initial_data.get("company")
+
+            if company_id:
+                for tag in value:
+                    if tag.company_id != company_id:
+                        raise serializers.ValidationError(
+                            "Tags must belong to the same company as the client."
+                        )
         return value
 
     def validate_assigned_to(self, value):
@@ -650,7 +675,9 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         from django.db import IntegrityError, transaction
 
         phone_numbers_data = self.initial_data.get("phone_numbers", [])
-        
+        # M2M cannot be passed to Client.objects.create() — apply after the row exists
+        tags_data = validated_data.pop("tags", None)
+
         # Don't auto-assign to current user unless explicitly provided or auto_assign is enabled
         # The signal will handle auto-assignment if enabled
         # Only set assigned_to if it's explicitly provided in the request
@@ -663,6 +690,9 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         try:
             with transaction.atomic():
                 client = Client.objects.create(**validated_data)
+
+                if tags_data is not None:
+                    client.tags.set(tags_data)
 
                 # Create phone numbers if provided
                 if phone_numbers_data:
@@ -686,6 +716,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
     def update(self, instance, validated_data):
         """Update client and handle phone numbers"""
         phone_numbers_data = self.initial_data.get("phone_numbers", None)
+        # M2M cannot be assigned via setattr() — apply after instance.save()
+        tags_data = validated_data.pop("tags", None)
         request = self.context.get('request')
         user = request.user if request else None
 
@@ -734,6 +766,20 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                     'old_value': old_assigned_name,
                     'new_value': new_assigned_name,
                     'notes': notes
+                })
+
+        if tags_data is not None:
+            old_tag_names = sorted(instance.tags.values_list("name", flat=True))
+            new_tag_names = sorted({tag.name for tag in tags_data})
+            if old_tag_names != new_tag_names:
+                added = [n for n in new_tag_names if n not in old_tag_names]
+                removed = [n for n in old_tag_names if n not in new_tag_names]
+                changes.append({
+                    "event_type": "tags_change",
+                    "old_value": ", ".join(old_tag_names),
+                    "new_value": ", ".join(new_tag_names),
+                    # Machine key — localized on the client when rendering the timeline
+                    "notes": f"tags_updated:+{','.join(added)}|-{','.join(removed)}",
                 })
 
         if (
@@ -832,6 +878,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
 
         try:
             with transaction.atomic():
+                if tags_data is not None:
+                    instance.tags.set(tags_data)
                 if phone_numbers_data is not None:
                     # Delete existing phone numbers
                     instance.phone_numbers.all().delete()
@@ -877,6 +925,10 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
         source="communication_way.name", read_only=True
     )
     status_name = serializers.CharField(source="status.name", read_only=True)
+    tags = serializers.PrimaryKeyRelatedField(
+        many=True, required=False, queryset=Tag.objects.all()
+    )
+    tags_detail = TagListSerializer(many=True, read_only=True, source="tags")
     phone_numbers = ClientPhoneNumberSerializer(many=True, read_only=True)
     last_feedback = serializers.SerializerMethodField()
     last_stage = serializers.SerializerMethodField()
@@ -907,6 +959,8 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
             "communication_way_name",
             "status",
             "status_name",
+            "tags",
+            "tags_detail",
             "budget",
             "budget_max",
             "phone_number",  # Keep for backward compatibility

@@ -93,6 +93,13 @@ class Client(models.Model):
         null=True,
         help_text="Current status of this client",
     )
+    # Secondary classification — unlike status, a client may carry many tags
+    tags = models.ManyToManyField(
+        "settings.Tag",
+        related_name="clients",
+        blank=True,
+        help_text="Secondary classification labels for this client",
+    )
 
     budget = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
     budget_max = models.DecimalField(

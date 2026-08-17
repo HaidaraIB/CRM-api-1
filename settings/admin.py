@@ -8,6 +8,7 @@ from .models import (
     SystemAuditLog,
     CallMethod,
     VisitType,
+    Tag,
     SystemSettings,
     BillingSettings,
 )
@@ -93,6 +94,14 @@ class CallMethodAdmin(admin.ModelAdmin):
 @admin.register(VisitType)
 class VisitTypeAdmin(admin.ModelAdmin):
     list_display = ['name', 'color', 'company', 'is_active', 'is_default', 'created_at', 'updated_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['name', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(Tag)
+class TagAdmin(admin.ModelAdmin):
+    list_display = ['name', 'color', 'company', 'is_active', 'created_at', 'updated_at']
     list_filter = ['is_active', 'created_at']
     search_fields = ['name', 'description']
     readonly_fields = ['created_at', 'updated_at']
