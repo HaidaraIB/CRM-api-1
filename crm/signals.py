@@ -255,12 +255,14 @@ def notify_new_lead(sender, instance, created, **kwargs):
         # Send notification to assigned employee if exists (skip self-assign)
         assignee = instance.assigned_to
         if assignee and assignee.pk != getattr(instance, "created_by_id", None):
-            NotificationService.send_notification(
+            NotificationService.send_notification_on_commit(
                 user=assignee,
                 notification_type=NotificationType.LEAD_ASSIGNED,
                 data={
                     'lead_id': instance.id,
                     'lead_name': instance.name,
+                    'invalidate': 'crm:leads',
+                    'client_id': str(instance.id),
                 }
             )
         
@@ -298,13 +300,15 @@ def handle_client_pre_save(sender, instance, **kwargs):
         assignee = instance.assigned_to
         if assignee and (actor is None or assignee.pk != actor.pk):
             try:
-                NotificationService.send_notification(
+                NotificationService.send_notification_on_commit(
                     user=assignee,
                     notification_type=NotificationType.LEAD_STATUS_CHANGED,
                     data={
                         'lead_id': instance.id,
                         'lead_name': instance.name,
                         'new_status': instance.status.name,
+                        'invalidate': 'crm:leads',
+                        'client_id': str(instance.id),
                     }
                 )
             except Exception as e:
@@ -335,12 +339,14 @@ def notify_lead_assignment_change(*, client, old_assignee, new_assignee, actor=N
 
     if new_assignee and new_assignee.pk != actor_id:
         try:
-            NotificationService.send_notification(
+            NotificationService.send_notification_on_commit(
                 user=new_assignee,
                 notification_type=NotificationType.LEAD_ASSIGNED,
                 data={
                     'lead_id': client.id,
                     'lead_name': client.name,
+                    'invalidate': 'crm:leads',
+                    'client_id': str(client.id),
                 }
             )
         except Exception as e:
@@ -348,12 +354,14 @@ def notify_lead_assignment_change(*, client, old_assignee, new_assignee, actor=N
 
     if old_assignee and old_assignee != new_assignee and old_assignee.pk != actor_id:
         try:
-            NotificationService.send_notification(
+            NotificationService.send_notification_on_commit(
                 user=old_assignee,
                 notification_type=NotificationType.LEAD_TRANSFERRED,
                 data={
                     'lead_id': client.id,
                     'lead_name': client.name,
+                    'invalidate': 'crm:leads',
+                    'client_id': str(client.id),
                 }
             )
         except Exception as e:
@@ -406,6 +414,7 @@ def notify_deal_created(sender, instance, created, **kwargs):
         payload = {
             'deal_id': instance.id,
             'deal_title': deal_title,
+            'invalidate': 'crm:deals',
         }
 
         recipients = []
@@ -418,7 +427,7 @@ def notify_deal_created(sender, instance, created, **kwargs):
         for recipient in recipients:
             if actor_id is not None and recipient.pk == actor_id:
                 continue
-            NotificationService.send_notification(
+            NotificationService.send_notification_on_commit(
                 user=recipient,
                 notification_type=NotificationType.DEAL_CREATED,
                 data=payload,
@@ -442,13 +451,14 @@ def notify_deal_closed(sender, instance, **kwargs):
                 # Deal closed/won — skip the acting user
                 if instance.employee and instance.employee.pk != actor_id:
                     try:
-                        NotificationService.send_notification(
+                        NotificationService.send_notification_on_commit(
                             user=instance.employee,
                             notification_type=NotificationType.DEAL_CLOSED,
                             data={
                                 'deal_id': instance.id,
                                 'deal_title': f'{instance.client.name} - {instance.value or 0}',
                                 'value': str(instance.value or 0),
+                                'invalidate': 'crm:deals',
                             }
                         )
                     except Exception as e:

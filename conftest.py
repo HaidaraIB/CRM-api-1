@@ -21,6 +21,28 @@ def _tests_skip_api_key_gate(settings):
 
 
 @pytest.fixture(autouse=True)
+def _execute_on_commit_in_tests(request):
+    """
+    pytest-django wraps tests in a transaction that never commits, so
+    transaction.on_commit callbacks would never run. Execute them immediately
+    unless the test opts into real commit semantics.
+    """
+    if request.node.get_closest_marker("real_on_commit"):
+        yield
+        return
+    from django.db import transaction as tx
+
+    original = tx.on_commit
+
+    def _immediate(func, using=None, robust=False):
+        func()
+
+    tx.on_commit = _immediate
+    yield
+    tx.on_commit = original
+
+
+@pytest.fixture(autouse=True)
 def _tests_reset_throttle_state():
     """
     DRF stores throttle counters in the cache, which is process-wide and outlives

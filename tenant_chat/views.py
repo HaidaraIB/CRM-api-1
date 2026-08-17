@@ -619,6 +619,7 @@ def _notify_recipient_chat_message(sender: User, recipient: User, message: ChatM
                 "conversation_id": message.conversation_id,
                 "message_id": message.id,
                 "sender_id": sender.id,
+                "invalidate": "tenant_chat:messages",
             },
             skip_settings_check=True,
             skip_database_insert=True,

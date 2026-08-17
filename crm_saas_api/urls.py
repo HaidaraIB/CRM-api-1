@@ -346,6 +346,7 @@ v1_patterns = [
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
     path("integrations/", include(integrations_urls)),
+    path("sync/", include("sync.urls")),
     path("crm/feature-policies/", feature_policy_view, name="feature_policy"),
     path("reports/employees/", EmployeeReportView.as_view(), name="reports_employees"),
     path("reports/teams/", TeamsReportView.as_view(), name="reports_teams"),

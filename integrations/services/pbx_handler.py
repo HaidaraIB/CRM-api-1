@@ -192,6 +192,7 @@ def _send_screen_pop(settings: PbxSettings, client, phone: str, record: PbxCallR
         "call_id": record.id,
         "pbx_uniqueid": record.uniqueid,
         "open_lead": bool(client),
+        "invalidate": "pbx:screen_pop",
     }
     # Known lead: show client name + phone. Unknown: let NotificationService
     # translate title/body per recipient language (phone is in data).
@@ -220,6 +221,7 @@ def _send_missed_call(settings: PbxSettings, client, phone: str, record: PbxCall
         "phone": phone,
         "call_id": record.id,
         "pbx_uniqueid": record.uniqueid,
+        "invalidate": "pbx:screen_pop",
     }
     NotificationService.send_notification_to_multiple(
         users,

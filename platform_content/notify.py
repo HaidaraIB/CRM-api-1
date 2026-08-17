@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import threading
 
+from django.db import transaction
+
 logger = logging.getLogger(__name__)
 
 NOTIFY_CHANNELS = frozenset({"push", "email", "both"})
@@ -118,7 +120,7 @@ def notify_company_owners_news_async(news_id: int, channels: str = "both") -> No
                 "Async news notify failed for news %s channels=%s", news_id, channels
             )
 
-    threading.Thread(target=_run, daemon=True).start()
+    transaction.on_commit(lambda: threading.Thread(target=_run, daemon=True).start())
 
 
 # Back-compat aliases (unused after manual notify; keep imports from breaking)

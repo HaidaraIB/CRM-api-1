@@ -146,6 +146,9 @@ META_CLIENT_ID=your-meta-client-id
 META_CLIENT_SECRET=your-meta-client-secret
 TIKTOK_CLIENT_ID=your-tiktok-client-id
 TIKTOK_CLIENT_SECRET=your-tiktok-client-secret
+
+# Shared cache across Gunicorn workers (required for Team Chat typing/presence)
+REDIS_URL=redis://127.0.0.1:6379/0
 ```
 
 #### 4.2 توليد SECRET_KEY

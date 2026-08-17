@@ -219,6 +219,7 @@ INSTALLED_APPS = [
     "platform_content",
     "tenant_chat",
     "company_library",
+    "sync",
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_q",
@@ -351,8 +352,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # ============================================================================
 # Cache (for OAuth state etc. - survives redirects from external sites)
 # ============================================================================
-# Cache: set REDIS_URL in production so subscription/maintenance caches are shared
-# across Gunicorn workers. Without it, LocMemCache is per-process and re-hits Postgres.
+# Cache: set REDIS_URL in production so subscription/maintenance caches AND
+# tenant-chat presence (typing indicators) are shared across Gunicorn workers.
+# Without it, LocMemCache is per-process — presence writes/reads miss each other.
 # ============================================================================
 _redis_url = os.getenv("REDIS_URL", "")
 if _redis_url:

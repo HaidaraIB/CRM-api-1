@@ -186,6 +186,8 @@ def notify_owner_new_lead(company, client) -> None:
                 "lead_name": client.name,
                 "campaign_name": client.campaign.name if client.campaign_id else "",
                 "added_by": added_by,
+                "invalidate": "crm:leads",
+                "client_id": str(client.id),
             },
             sender_role=None,
         )

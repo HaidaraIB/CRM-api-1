@@ -67,6 +67,8 @@ def notify_whatsapp_inbound(
             "phone": phone,
             "message_id": message_id or "",
             "message_preview": preview,
+            "invalidate": "whatsapp:conversations",
+            "client_id": str(client.id),
         }
 
         for user in recipients:

@@ -6,6 +6,7 @@ import os
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Q
 from .models import Notification, NotificationType, NotificationSettings
 from .translations import get_notification_text, normalize_notification_language
@@ -352,7 +353,24 @@ class NotificationService:
             logger.error(f"Error sending notification to {user.username}: {e}")
             # Inbox already saved; push failure must not undo that.
             return False
-    
+
+    @classmethod
+    def send_notification_on_commit(cls, user: "AbstractUser", **kwargs) -> None:
+        """Dispatch send_notification after the surrounding DB transaction commits."""
+        user_id = getattr(user, "pk", None)
+        if not user_id:
+            return
+        payload = dict(kwargs)
+
+        def _run():
+            try:
+                fresh = User.objects.get(pk=user_id)
+            except User.DoesNotExist:
+                return
+            cls.send_notification(fresh, **payload)
+
+        transaction.on_commit(_run)
+
     @classmethod
     def send_notification_to_multiple(
         cls,

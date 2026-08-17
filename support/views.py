@@ -2,6 +2,7 @@ import logging
 import threading
 from datetime import timedelta
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
@@ -57,7 +58,7 @@ def _send_support_ticket_emails_async(user_id, ticket_id, language):
                 "Failed to send support ticket emails (async): %s", e
             )
 
-    threading.Thread(target=_run, daemon=True).start()
+    transaction.on_commit(lambda: threading.Thread(target=_run, daemon=True).start())
 
 
 class SupportTicketViewSet(viewsets.ModelViewSet):
