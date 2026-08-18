@@ -299,6 +299,12 @@ class UserSerializer(serializers.ModelSerializer):
             "field_visit_enabled": getattr(
                 company, "field_visit_enabled", True
             ),
+            "arrival_escalation_enabled": getattr(
+                company, "arrival_escalation_enabled", True
+            ),
+            "arrival_escalation_minutes": getattr(
+                company, "arrival_escalation_minutes", 5
+            ),
         }
 
         try:
@@ -613,6 +619,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     "data_entry",
                     "doctor",
                     "reception",
+                    "call_center",
                 )
                 if is_employee_user:
                     raise serializers.ValidationError(

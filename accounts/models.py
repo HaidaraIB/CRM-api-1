@@ -16,6 +16,7 @@ class Role(Enum):
     DATA_ENTRY = "data_entry"
     RECEPTION = "reception"
     DOCTOR = "doctor"
+    CALL_CENTER = "call_center"
 
     @classmethod
     def choices(cls):
@@ -124,6 +125,9 @@ class User(AbstractUser):
 
     def is_data_entry(self):
         return self.role == Role.DATA_ENTRY.value
+
+    def is_call_center(self):
+        return self.role == Role.CALL_CENTER.value
 
     def is_supervisor(self):
         return self.role == Role.SUPERVISOR.value

@@ -114,6 +114,10 @@ def android_notification_channel_id(
         "lead_transferred",
         "lead_updated",
         "lead_reminder",
+        "customer_arrived",
+        "customer_arrival_acknowledged",
+        "customer_arrival_escalated",
+        "customer_arrival_assignee_off_shift",
     }:
         return "leads"
 

@@ -77,6 +77,46 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             'body': 'Lead {lead_name} has been transferred from you'
         }
     },
+    'customer_arrived': {
+        'ar': {
+            'title': 'وصل العميل',
+            'body': 'وصل العميل {lead_name} وينتظر في الاستقبال'
+        },
+        'en': {
+            'title': 'Customer Arrived',
+            'body': '{lead_name} has arrived and is waiting at reception'
+        }
+    },
+    'customer_arrival_acknowledged': {
+        'ar': {
+            'title': 'تم استلام إشعار الوصول',
+            'body': 'تم استلام إشعار وصول العميل {lead_name}'
+        },
+        'en': {
+            'title': 'Arrival Acknowledged',
+            'body': 'The arrival for {lead_name} has been acknowledged'
+        }
+    },
+    'customer_arrival_escalated': {
+        'ar': {
+            'title': 'عميل بانتظار الرد',
+            'body': 'العميل {lead_name} ما زال بانتظار الرد منذ الإعلان عن وصوله'
+        },
+        'en': {
+            'title': 'Customer Still Waiting',
+            'body': '{lead_name} is still waiting since the arrival was announced'
+        }
+    },
+    'customer_arrival_assignee_off_shift': {
+        'ar': {
+            'title': 'وصل العميل - الموظف المسؤول غير متاح',
+            'body': 'وصل العميل {lead_name} والموظف المسؤول عنه خارج أوقات الدوام'
+        },
+        'en': {
+            'title': 'Customer Arrived — Assignee Off Shift',
+            'body': '{lead_name} has arrived, but their assigned employee is off shift'
+        }
+    },
     'lead_updated': {
         'ar': {
             'title': 'تحديث عميل',

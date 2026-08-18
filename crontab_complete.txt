@@ -79,6 +79,9 @@
 # 9. فحص رسائل واتساب بانتظار الرد - كل 15 دقيقة (كل عميل حسب وقت استحقاقه)
 */15 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_whatsapp_waiting_response >> /var/log/crm-api-whatsapp-waiting.log 2>&1
 
+# 9b. تصعيد إشعارات وصول العميل (CALL_CENTER) غير المستلمة - كل دقيقة (SLA افتراضي 5 دقائق لكل شركة)
+* * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_arrival_escalations >> /var/log/crm-api-lead-arrival-escalations.log 2>&1
+
 # 10. فحص أداء الحملات الإعلانية - كل ساعة (يُرسل في الساعة 10 بتوقيت كل شركة)
 0 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_campaign_performance --hour 10 >> /var/log/crm-api-campaign-performance.log 2>&1
 

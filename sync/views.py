@@ -12,6 +12,8 @@ from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import success_response
 
 from .counts import (
+    arrivals_pending_for_user,
+    arrivals_waiting_for_user,
     news_unread_for_user,
     notifications_unread_for_user,
     pbx_screen_pop_for_user,
@@ -41,6 +43,8 @@ def build_digest(user) -> dict:
         "notifications_unread": notifications_unread_for_user(user),
         "news_unread": news_unread_for_user(user),
         "pbx_screen_pop": pbx_screen_pop_for_user(user),
+        "arrivals_pending": arrivals_pending_for_user(user),
+        "arrivals_waiting": arrivals_waiting_for_user(user),
     }
     version = hashlib.md5(
         json.dumps(payload, sort_keys=True, default=str).encode("utf-8")

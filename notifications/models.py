@@ -21,6 +21,16 @@ class NotificationType(models.TextChoices):
     LEAD_REMINDER = 'lead_reminder', 'Lead Reminder'
     TEAM_ACTIVITY = 'team_activity', 'Team Activity'
 
+    # Walk-in arrivals (CALL_CENTER)
+    CUSTOMER_ARRIVED = 'customer_arrived', 'Customer Arrived'
+    CUSTOMER_ARRIVAL_ACKNOWLEDGED = (
+        'customer_arrival_acknowledged', 'Customer Arrival Acknowledged'
+    )
+    CUSTOMER_ARRIVAL_ESCALATED = 'customer_arrival_escalated', 'Customer Arrival Escalated'
+    CUSTOMER_ARRIVAL_ASSIGNEE_OFF_SHIFT = (
+        'customer_arrival_assignee_off_shift', 'Customer Arrival Assignee Off Shift'
+    )
+
     # PBX / Telephony
     PBX_INCOMING_CALL = 'pbx_incoming_call', 'PBX Incoming Call'
     PBX_CALL_MISSED = 'pbx_call_missed', 'PBX Call Missed'

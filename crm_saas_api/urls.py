@@ -75,6 +75,7 @@ from crm.views import (
     ClientVisitViewSet,
     ClientFieldVisitViewSet,
     ClientEventViewSet,
+    LeadArrivalViewSet,
     feature_policy_view,
 )
 from settings.views import (
@@ -159,6 +160,7 @@ router.register(
     r"client-field-visits", ClientFieldVisitViewSet, basename="clientfieldvisit"
 )
 router.register(r"client-events", ClientEventViewSet, basename="clientevent")
+router.register(r"lead-arrivals", LeadArrivalViewSet, basename="leadarrival")
 
 router.register(r"deals", DealViewSet, basename="deal")
 router.register(r"tasks", TaskViewSet, basename="task")

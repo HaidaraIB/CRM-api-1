@@ -245,3 +245,25 @@ def authenticated_data_entry(api_client, data_entry_user, subscription):
     """APIClient authenticated as data_entry with an active subscription."""
     api_client.force_authenticate(user=data_entry_user)
     return api_client
+
+
+@pytest.fixture
+def call_center_user(company, db):
+    from accounts.models import User
+
+    return User.objects.create_user(
+        username="call_center_user",
+        email="callcenter@test.com",
+        password="testpass123",
+        first_name="Call",
+        last_name="Center",
+        company=company,
+        role="call_center",
+    )
+
+
+@pytest.fixture
+def authenticated_call_center(api_client, call_center_user, subscription):
+    """APIClient authenticated as call_center with an active subscription."""
+    api_client.force_authenticate(user=call_center_user)
+    return api_client

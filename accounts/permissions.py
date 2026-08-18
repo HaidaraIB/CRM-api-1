@@ -204,6 +204,11 @@ class CanAccessClient(permissions.BasePermission):
         if request.user.is_data_entry():
             return False
 
+        if request.user.is_call_center():
+            if request.method not in permissions.SAFE_METHODS:
+                return False
+            return getattr(obj, "company", None) == request.user.company
+
         if request.user.is_reception():
             if request.method == "DELETE":
                 return False
@@ -224,6 +229,26 @@ class CanAccessClient(permissions.BasePermission):
         return False
 
 
+class CanAnnounceLeadArrival(permissions.BasePermission):
+    """Who may POST a "customer arrived" announcement: call_center, admin, or a
+    supervisor with manage_leads. Reads (list/retrieve/pending) are scoped separately
+    in LeadArrivalViewSet.get_queryset; acknowledge checks membership in the view itself."""
+
+    message = "You do not have permission to announce lead arrivals."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(view, "action", None) != "create":
+            return True
+        return bool(
+            user.is_call_center()
+            or user.is_admin()
+            or (user.is_supervisor() and user.supervisor_has_permission("manage_leads"))
+        )
+
+
 class DenyDataEntryNonLeadAPI(permissions.BasePermission):
     """
     Data-entry users may only use client (lead) list/create and related settings.
@@ -237,6 +262,40 @@ class DenyDataEntryNonLeadAPI(permissions.BasePermission):
         if not user or not user.is_authenticated:
             return True
         return not user.is_data_entry()
+
+
+class DenyCallCenterWriteExceptCreate(permissions.BasePermission):
+    """
+    Call-center users may only read leads (search) and create new leads.
+    Update/delete and custom actions like assign_unassigned/bulk_assign are denied.
+    """
+
+    message = "This action is not available for call center users."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return True
+        if not user.is_call_center():
+            return True
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return request.method == "POST" and getattr(view, "action", None) == "create"
+
+
+class DenyCallCenterNonLeadAPI(permissions.BasePermission):
+    """
+    Call-center users may only use client (lead) list/create and related settings.
+    Deny deals, tasks, campaigns, and client activity APIs at the view level.
+    """
+
+    message = "This action is not available for call center users."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return True
+        return not user.is_call_center()
 
 
 class CanAccessDeal(permissions.BasePermission):

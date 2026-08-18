@@ -86,6 +86,15 @@ class Company(models.Model):
         default=True,
         help_text="Allow field visits (الزيارة الميدانية) for this company (subject to platform policy).",
     )
+    # Walk-in arrival escalation (CALL_CENTER "customer arrived" announcements).
+    arrival_escalation_enabled = models.BooleanField(
+        default=True,
+        help_text="Notify the owner and manage_leads supervisors when a walk-in arrival goes unacknowledged.",
+    )
+    arrival_escalation_minutes = models.PositiveSmallIntegerField(
+        default=5,
+        help_text="Minutes an arrival can stay unacknowledged before escalation (1-120).",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

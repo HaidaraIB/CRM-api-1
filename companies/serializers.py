@@ -32,6 +32,8 @@ class CompanySerializer(serializers.ModelSerializer):
             "free_trial_consumed",
             "timezone",
             "field_visit_enabled",
+            "arrival_escalation_enabled",
+            "arrival_escalation_minutes",
             "created_at",
             "updated_at",
         ]

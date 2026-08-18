@@ -895,3 +895,89 @@ class Campaign(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class LeadArrivalRouting(Enum):
+    """How an arrival was routed to its notified user(s)."""
+    EXISTING_ASSIGNEE = "existing_assignee"
+    AUTO_ASSIGNED = "auto_assigned"
+    OWNER_ASSIGNEE_OFF_SHIFT = "owner_assignee_off_shift"
+    OWNER_NO_ELIGIBLE = "owner_no_eligible"
+    UNROUTABLE = "unroutable"
+
+    @classmethod
+    def choices(cls):
+        return [(choice.value, choice.name) for choice in cls]
+
+
+class LeadArrival(models.Model):
+    """
+    A front-desk "customer arrived" announcement (CALL_CENTER role) for a walk-in lead.
+
+    State machine for the arrival lifecycle; kept separate from ClientEvent (immutable
+    timeline projection) and Notification (per-recipient delivery log) — see
+    docs/plan notes for why. `notified_users` is many-to-many because the
+    owner-off-shift and no-eligible-employee routings fan out to owner + supervisors.
+    """
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="lead_arrivals",
+    )
+    client = models.ForeignKey(
+        Client, on_delete=models.CASCADE, related_name="arrivals",
+    )
+    announced_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="announced_arrivals",
+        null=True,
+        blank=True,
+    )
+    announced_at = models.DateTimeField(default=timezone.now, db_index=True)
+    notes = models.TextField(blank=True, default="")
+    routing = models.CharField(max_length=32, choices=LeadArrivalRouting.choices())
+    lead_created = models.BooleanField(
+        default=False,
+        help_text="True when the desk created the lead in the same announce call.",
+    )
+    assignee_at_arrival = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+        help_text="Client.assigned_to at the moment this arrival was announced.",
+    )
+    notified_users = models.ManyToManyField(
+        "accounts.User", related_name="arrival_alerts", blank=True,
+    )
+    escalation_due_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Frozen at announce time from the company's escalation-minutes setting.",
+    )
+    escalated_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "crm_lead_arrival"
+        ordering = ["-announced_at"]
+        indexes = [
+            models.Index(fields=["company", "-announced_at"], name="arrival_company_announced_idx"),
+            models.Index(fields=["client", "-announced_at"], name="arrival_client_announced_idx"),
+            models.Index(
+                fields=["escalation_due_at", "acknowledged_at"],
+                name="arrival_escalation_due_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.client.name} arrived at {self.announced_at}"

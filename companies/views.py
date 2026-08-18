@@ -262,6 +262,26 @@ class CompanyViewSet(viewsets.ModelViewSet):
                 )
             company.timezone = name
 
+        arrival_escalation_enabled = request.data.get('arrival_escalation_enabled')
+        arrival_escalation_minutes = request.data.get('arrival_escalation_minutes')
+
+        if arrival_escalation_enabled is not None:
+            company.arrival_escalation_enabled = bool(arrival_escalation_enabled)
+        if arrival_escalation_minutes is not None:
+            try:
+                minutes = int(arrival_escalation_minutes)
+                if minutes < 1 or minutes > 120:
+                    return error_response(
+                        "arrival_escalation_minutes must be between 1 and 120.",
+                        code="invalid_arrival_escalation_minutes",
+                    )
+                company.arrival_escalation_minutes = minutes
+            except (ValueError, TypeError):
+                return error_response(
+                    "arrival_escalation_minutes must be a valid integer.",
+                    code="invalid_arrival_escalation_minutes",
+                )
+
         update_fields = [
             'auto_assign_enabled',
             'auto_assign_algorithm',
@@ -271,6 +291,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
             'no_follow_up_hours',
             'no_follow_up_digest_hour',
             'timezone',
+            'arrival_escalation_enabled',
+            'arrival_escalation_minutes',
         ]
         company.save(update_fields=update_fields)
         

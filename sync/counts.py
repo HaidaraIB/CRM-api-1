@@ -132,6 +132,50 @@ def news_unread_for_user(user) -> int:
     return qs.count()
 
 
+def arrivals_pending_for_user(user) -> int:
+    """Unacknowledged walk-in arrivals addressed to this user (any role)."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from crm.models import LeadArrival
+
+    if not user or not getattr(user, "company_id", None):
+        return 0
+    return LeadArrival.objects.filter(
+        company_id=user.company_id,
+        notified_users=user,
+        acknowledged_at__isnull=True,
+        announced_at__gte=timezone.now() - timedelta(hours=2),
+    ).distinct().count()
+
+
+def arrivals_waiting_for_user(user) -> int:
+    """Company-wide unacknowledged arrivals today; only meaningful for the front desk /
+    owner / manage_leads supervisors — everyone else gets 0 (this badges the board, not
+    a personal inbox, so scoping mirrors LeadArrivalViewSet's company-wide read branch)."""
+    from crm.models import LeadArrival
+    from crm.availability import local_now_for_company
+
+    if not user or not getattr(user, "company_id", None):
+        return 0
+    company = getattr(user, "company", None)
+    can_see_board = (
+        user.is_admin()
+        or user.is_reception()
+        or user.is_call_center()
+        or (user.is_supervisor() and user.supervisor_has_permission("manage_leads"))
+    )
+    if not can_see_board:
+        return 0
+    local_today = local_now_for_company(company).date()
+    return LeadArrival.objects.filter(
+        company_id=user.company_id,
+        acknowledged_at__isnull=True,
+        announced_at__date=local_today,
+    ).count()
+
+
 def pbx_screen_pop_for_user(user):
     n = (
         Notification.objects.filter(

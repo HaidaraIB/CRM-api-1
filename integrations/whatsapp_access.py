@@ -33,6 +33,8 @@ def user_can_access_whatsapp_chats(user) -> bool:
         return False
     if user.is_admin():
         return True
+    if user.is_call_center():
+        return False
     if user.is_supervisor():
         return user.supervisor_has_permission("manage_whatsapp_chats")
     return bool(getattr(user, "whatsapp_chat_enabled", True))
@@ -44,6 +46,8 @@ def user_can_access_whatsapp_calls(user) -> bool:
         return False
     if user.is_admin():
         return True
+    if user.is_call_center():
+        return False
     if user.is_supervisor():
         return user.supervisor_has_permission("manage_whatsapp_calls")
     return bool(getattr(user, "whatsapp_call_enabled", True))

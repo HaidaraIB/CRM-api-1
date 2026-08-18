@@ -1,16 +1,20 @@
-from django.db.models import Count
+from datetime import datetime, time, timedelta
+
+from django.db.models import Count, Q
 from django.utils import timezone
-from rest_framework import viewsets, filters, status
+from rest_framework import mixins, viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import (
     CanAccessClient, CanAccessDeal, CanAccessTask, DenyDataEntryNonLeadAPI,
+    DenyCallCenterNonLeadAPI, DenyCallCenterWriteExceptCreate, CanAnnounceLeadArrival,
     IsAdmin, HasActiveSubscription, IsAdminOrReadOnlyForEmployee,
     IsAdminOrSupervisorLeadsOrReadOnlyForEmployee,
 )
 from crm_saas_api.responses import success_response, error_response
 from crm_saas_api.utils import clean_int_query_param
+from .arrivals import announce_arrival, acknowledge_arrival, ArrivalCooldownActive
 from .models import (
     Client,
     Deal,
@@ -21,6 +25,7 @@ from .models import (
     ClientVisit,
     ClientFieldVisit,
     ClientEvent,
+    LeadArrival,
 )
 from accounts.models import User, Role
 from notifications.models import NotificationType
@@ -45,6 +50,7 @@ from .serializers import (
     ClientFieldVisitSerializer,
     ClientFieldVisitListSerializer,
     ClientEventSerializer,
+    LeadArrivalSerializer,
 )
 
 
@@ -52,7 +58,9 @@ class ClientViewSet(viewsets.ModelViewSet):
     """ViewSet for managing Client instances (CRUD)."""
 
     queryset = Client.objects.all()
-    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAccessClient]
+    permission_classes = [
+        IsAuthenticated, HasActiveSubscription, DenyCallCenterWriteExceptCreate, CanAccessClient,
+    ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = [
         "name",
@@ -105,6 +113,9 @@ class ClientViewSet(viewsets.ModelViewSet):
             return queryset.filter(company=user.company).distinct()
 
         if user.is_data_entry():
+            return queryset.filter(company=user.company).distinct()
+
+        if user.is_call_center():
             return queryset.filter(company=user.company).distinct()
 
         if user.is_assigned_clinical_staff():
@@ -478,7 +489,7 @@ class DealViewSet(viewsets.ModelViewSet):
 
     queryset = Deal.objects.all()
     permission_classes = [
-        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessDeal,
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, DenyCallCenterNonLeadAPI, CanAccessDeal,
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["client__name", "stage", "company__name"]
@@ -535,7 +546,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     queryset = Task.objects.all()
     permission_classes = [
-        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessTask,
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, DenyCallCenterNonLeadAPI, CanAccessTask,
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "stage__name", "deal__client__name"]
@@ -643,7 +654,7 @@ class ClientTaskViewSet(viewsets.ModelViewSet):
 
     queryset = ClientTask.objects.all()
     permission_classes = [
-        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessClient,
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, DenyCallCenterNonLeadAPI, CanAccessClient,
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "stage__name", "client__name"]
@@ -701,7 +712,7 @@ class ClientVisitViewSet(viewsets.ModelViewSet):
 
     queryset = ClientVisit.objects.all()
     permission_classes = [
-        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessClient,
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, DenyCallCenterNonLeadAPI, CanAccessClient,
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["summary", "visit_type__name", "client__name"]
@@ -746,6 +757,7 @@ class ClientFieldVisitViewSet(viewsets.ModelViewSet):
         IsAuthenticated,
         HasActiveSubscription,
         DenyDataEntryNonLeadAPI,
+        DenyCallCenterNonLeadAPI,
         CanAccessClient,
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -826,7 +838,7 @@ class ClientCallViewSet(viewsets.ModelViewSet):
 
     queryset = ClientCall.objects.all()
     permission_classes = [
-        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, CanAccessClient,
+        IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, DenyCallCenterNonLeadAPI, CanAccessClient,
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ["notes", "call_method__name", "client__name"]
@@ -908,10 +920,162 @@ class ClientEventViewSet(viewsets.ReadOnlyModelViewSet):
         if user.is_supervisor() and user.supervisor_has_permission("manage_leads"):
             return queryset.filter(client__company=user.company)
 
+        if user.is_call_center():
+            return queryset.filter(client__company=user.company)
+
         if user.is_assigned_clinical_staff():
             return queryset.filter(client__assigned_to=user)
 
         return queryset.none()
+
+
+class LeadArrivalViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Walk-in "customer arrived" announcements (CALL_CENTER front desk).
+
+    POST /lead-arrivals/               -> announce (create() override)
+    POST /lead-arrivals/{id}/acknowledge/ -> acknowledge
+    GET  /lead-arrivals/                -> today's company board (or ?date=)
+    GET  /lead-arrivals/pending/        -> current user's unacknowledged arrivals
+    """
+
+    queryset = LeadArrival.objects.all()
+    serializer_class = LeadArrivalSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription, CanAnnounceLeadArrival]
+
+    def get_queryset(self):
+        user = self.request.user
+        company = getattr(user, "company", None)
+        queryset = (
+            super()
+            .get_queryset()
+            .select_related("client", "announced_by", "acknowledged_by", "company")
+            .prefetch_related("notified_users")
+            .filter(company=company)
+        )
+
+        if (
+            user.is_admin()
+            or user.is_reception()
+            or user.is_call_center()
+            or (user.is_supervisor() and user.supervisor_has_permission("manage_leads"))
+        ):
+            pass  # company-wide, already filtered above
+        elif user.is_assigned_clinical_staff():
+            queryset = queryset.filter(
+                Q(notified_users=user) | Q(client__assigned_to=user)
+            ).distinct()
+        else:
+            return queryset.none()
+
+        if self.action == "list":
+            date_param = self.request.query_params.get("date")
+            from crm.availability import local_now_for_company
+
+            local_now = local_now_for_company(company)
+            if date_param:
+                try:
+                    target_date = datetime.strptime(date_param, "%Y-%m-%d").date()
+                except ValueError:
+                    target_date = local_now.date()
+            else:
+                target_date = local_now.date()
+            tz = local_now.tzinfo
+            day_start = datetime.combine(target_date, time.min, tzinfo=tz)
+            day_end = day_start + timedelta(days=1)
+            queryset = queryset.filter(announced_at__gte=day_start, announced_at__lt=day_end)
+
+            status_param = self.request.query_params.get("status")
+            if status_param == "waiting":
+                queryset = queryset.filter(acknowledged_at__isnull=True, escalated_at__isnull=True)
+            elif status_param == "acknowledged":
+                queryset = queryset.filter(acknowledged_at__isnull=False)
+            elif status_param == "escalated":
+                queryset = queryset.filter(acknowledged_at__isnull=True, escalated_at__isnull=False)
+
+            if self.request.query_params.get("mine"):
+                queryset = queryset.filter(
+                    Q(notified_users=user) | Q(announced_by=user)
+                ).distinct()
+
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        client_id = request.data.get("client")
+        if not client_id:
+            return error_response(
+                "client is required.", code="client_required",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        notes = request.data.get("notes") or ""
+
+        try:
+            arrival = announce_arrival(
+                client_id=client_id,
+                company=request.user.company,
+                actor=request.user,
+                notes=notes,
+            )
+        except Client.DoesNotExist:
+            return error_response(
+                "Lead not found.", code="lead_not_found",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        except ArrivalCooldownActive as exc:
+            return error_response(
+                "This customer's arrival was already announced recently.",
+                code="arrival_cooldown_active",
+                details={"arrival": LeadArrivalSerializer(exc.existing_arrival).data},
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        serializer = self.get_serializer(arrival)
+        return success_response(serializer.data, status_code=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def acknowledge(self, request, pk=None):
+        arrival = self.get_object()
+        user = request.user
+        is_notified = arrival.notified_users.filter(pk=user.pk).exists()
+        # Anyone who can see the company-wide board may confirm receipt on the
+        # recipient's behalf (e.g. the desk verbally confirmed the employee got it).
+        is_privileged = (
+            user.is_admin()
+            or user.is_call_center()
+            or user.is_reception()
+            or (user.is_supervisor() and user.supervisor_has_permission("manage_leads"))
+        )
+        if not (is_notified or is_privileged):
+            return error_response(
+                "You are not a recipient of this arrival.",
+                code="not_arrival_recipient",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        updated = acknowledge_arrival(arrival=arrival, actor=user)
+        serializer = self.get_serializer(updated)
+        return success_response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def pending(self, request):
+        user = request.user
+        queryset = (
+            LeadArrival.objects.filter(
+                company=user.company,
+                notified_users=user,
+                acknowledged_at__isnull=True,
+                announced_at__gte=timezone.now() - timedelta(hours=2),
+            )
+            .select_related("client", "announced_by")
+            .prefetch_related("notified_users")
+            .distinct()
+            .order_by("-announced_at")
+        )
+        serializer = self.get_serializer(queryset, many=True)
+        return success_response(serializer.data)
 
 
 from rest_framework.decorators import api_view, permission_classes

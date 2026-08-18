@@ -14,6 +14,7 @@ DEACTIVATABLE_EMPLOYEE_ROLES = frozenset(
         Role.DOCTOR.value,
         Role.RECEPTION.value,
         Role.DATA_ENTRY.value,
+        Role.CALL_CENTER.value,
     }
 )
 
@@ -22,6 +23,7 @@ ROLES_WITHOUT_LEAD_ASSIGNMENTS = frozenset(
     {
         Role.DATA_ENTRY.value,
         Role.RECEPTION.value,
+        Role.CALL_CENTER.value,
     }
 )
 

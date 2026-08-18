@@ -148,6 +148,7 @@ from .models import (
     ClientFieldVisit,
     ClientPhoneNumber,
     ClientEvent,
+    LeadArrival,
 )
 from .field_visit_uploads import validate_client_location_photo
 from settings.models import Tag
@@ -311,6 +312,60 @@ class ClientEventSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+
+class LeadArrivalSerializer(serializers.ModelSerializer):
+    """Read serializer for the arrivals board / pending list. Writes go through the
+    announce/acknowledge service functions in crm/arrivals.py, not this serializer."""
+
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    client_phone = serializers.CharField(source="client.phone_number", read_only=True)
+    announced_by_name = serializers.SerializerMethodField()
+    notified_user_names = serializers.SerializerMethodField()
+    acknowledged_by_name = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LeadArrival
+        fields = [
+            "id",
+            "client",
+            "client_name",
+            "client_phone",
+            "announced_by",
+            "announced_by_name",
+            "announced_at",
+            "notes",
+            "routing",
+            "lead_created",
+            "assignee_at_arrival",
+            "notified_user_names",
+            "escalation_due_at",
+            "escalated_at",
+            "acknowledged_at",
+            "acknowledged_by",
+            "acknowledged_by_name",
+            "status",
+        ]
+        read_only_fields = fields
+
+    def get_announced_by_name(self, obj):
+        user = obj.announced_by
+        return (user.get_full_name() or user.username) if user else None
+
+    def get_acknowledged_by_name(self, obj):
+        user = obj.acknowledged_by
+        return (user.get_full_name() or user.username) if user else None
+
+    def get_notified_user_names(self, obj):
+        return [u.get_full_name() or u.username for u in obj.notified_users.all()]
+
+    def get_status(self, obj):
+        if obj.acknowledged_at is not None:
+            return "acknowledged"
+        if obj.escalated_at is not None:
+            return "escalated"
+        return "waiting"
 
 
 class ClientPhoneNumberSerializer(serializers.ModelSerializer):
