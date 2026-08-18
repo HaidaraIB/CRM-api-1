@@ -1,7 +1,7 @@
 """
-Zain Cash adapter.
+Zain Cash adapter (Payment Gateway v2).
 
-Zain Cash is the odd one out: it redirects with a JWT signed by the merchant
+Zain Cash is the odd one out: it redirects with a JWT signed by the client
 secret, but its status API is keyed by the *transaction id* carried inside that
 token. `tran_ref` therefore always holds the transaction id, and the token is
 decoded on the way in - storing the token there (as the old return handler did)
@@ -25,7 +25,7 @@ from subscriptions.gateways.registry import register
 logger = logging.getLogger(__name__)
 
 _PAID = {"success", "completed"}
-_FAILED = {"failed", "cancelled", "canceled", "expired", "rejected"}
+_FAILED = {"failed", "cancelled", "canceled", "expired", "rejected", "refunded"}
 
 
 class ZaincashAdapter(BaseGatewayAdapter):
@@ -60,18 +60,9 @@ class ZaincashAdapter(BaseGatewayAdapter):
 
         payment_url = result.get("payment_url")
         if not payment_url:
-            from subscriptions.gateways.registry import find_gateway_row
-
-            row = find_gateway_row(self.slug)
-            environment = ((row.config if row else None) or {}).get(
-                "environment", "test"
+            raise GatewayError(
+                "Failed to create payment session: No redirect URL received"
             )
-            base = (
-                "https://api.zaincash.iq"
-                if environment == "live"
-                else "https://test.zaincash.iq"
-            )
-            payment_url = f"{base}/transaction/pay?id={transaction_id}"
 
         return CheckoutSession(tran_ref=str(transaction_id), checkout_url=payment_url)
 
@@ -118,18 +109,18 @@ class ZaincashAdapter(BaseGatewayAdapter):
     def test_credentials(self, config: dict) -> dict:
         from subscriptions.zaincash_utils import test_zaincash_credentials
 
-        merchant_id = config.get("merchantId", "")
-        merchant_secret = config.get("merchantSecret", "")
-        if not merchant_id or not merchant_secret:
+        client_id = config.get("clientId", "")
+        client_secret = config.get("clientSecret", "")
+        if not client_id or not client_secret:
             return {
                 "success": False,
-                "message": "Merchant ID and Merchant Secret are required",
+                "message": "Client ID and Client Secret are required",
             }
         return test_zaincash_credentials(
-            merchant_id,
-            merchant_secret,
+            client_id,
+            client_secret,
             config.get("environment", "test"),
-            config.get("msisdn", ""),
+            config.get("baseUrl", ""),
         )
 
 

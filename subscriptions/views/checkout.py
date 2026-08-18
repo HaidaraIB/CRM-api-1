@@ -70,9 +70,10 @@ def _default_urls(slug: str, subscription_id: int) -> tuple[str, str]:
     if slug == "fib":
         return "", f"{api_base}/api/payments/fib-callback/"
     if slug == "zaincash":
-        # Zain Cash redirects the browser to the frontend, which then posts the
-        # token back to zaincash-return.
-        return f"{frontend}/payment/success?subscription_id={subscription_id}", ""
+        # v2 requires separate successUrl/failureUrl; both point at the same
+        # backend endpoint since confirm_and_finalize_payment re-verifies with
+        # Zain Cash's inquiry API rather than trusting which redirect fired.
+        return f"{api_base}/api/payments/zaincash-return/?subscription_id={subscription_id}", ""
     if slug == "alqaseh":
         return (
             f"{api_base}/api/payments/alqaseh-return/?subscription_id={subscription_id}",

@@ -98,7 +98,7 @@ def qicard_gateway(db):
 
 @pytest.fixture
 def zaincash_gateway(db):
-    return _gateway("ZainCash", {"merchantId": "m", "merchantSecret": "s"})
+    return _gateway("ZainCash", {"clientId": "c", "clientSecret": "s"})
 
 
 def _pending_payment(subscription, gateway, plan, tran_ref, amount="29.00"):

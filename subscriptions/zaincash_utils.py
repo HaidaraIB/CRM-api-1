@@ -1,21 +1,37 @@
 """
-Zain Cash Payment Gateway Integration Utilities
+Zain Cash Payment Gateway Integration Utilities (Payment Gateway v2)
+
+Zain Cash's v2 gateway is OAuth2-fronted: every call except the token
+endpoint itself needs a bearer token obtained via a client_credentials grant
+(client_id/client_secret), not the self-signed merchant JWT the old v1 API
+used. The live base URL is issued per-merchant during onboarding - there is
+no fixed "https://api.zaincash.iq" to guess, unlike the UAT sandbox which is
+fixed at https://pg-api-uat.zaincash.iq.
 """
 
-import requests
-import json
+import logging
+import uuid
+from urllib.parse import urlencode
+
 import jwt
-import time
-from django.conf import settings
+import requests
+from django.core.cache import cache
+from django.db.models import Q
+
 from .models import PaymentGateway, PaymentGatewayStatus
-from settings.models import SystemSettings
+from .services.fx import usd_to_iqd
+
+logger = logging.getLogger(__name__)
+
+UAT_BASE_URL = "https://pg-api-uat.zaincash.iq"
+_TOKEN_SCOPE = "payment:read payment:write reverse:write"
+_TOKEN_CACHE_PREFIX = "zaincash_access_token:"
 
 
 def get_zaincash_gateway():
     """Get active Zain Cash payment gateway"""
     try:
         # Search for various name patterns: "zaincash", "zain cash", "zain-cash"
-        from django.db.models import Q
         gateway = PaymentGateway.objects.filter(
             Q(name__icontains="zaincash") | Q(name__icontains="zain cash") | Q(name__icontains="zain-cash"),
             status=PaymentGatewayStatus.ACTIVE.value,
@@ -26,6 +42,80 @@ def get_zaincash_gateway():
         return None
 
 
+def _base_url(config: dict) -> str:
+    """Resolve the API base URL for this gateway's configured environment."""
+    environment = config.get("environment", "test")
+    configured = (config.get("baseUrl") or "").strip()
+    if environment == "live":
+        if not configured:
+            raise ValueError(
+                "Zain Cash live base URL not configured - it is issued per-merchant "
+                "during onboarding and must be set in the gateway config"
+            )
+        return configured.rstrip("/")
+    return (configured or UAT_BASE_URL).rstrip("/")
+
+
+def _get_access_token(config: dict) -> str:
+    """
+    OAuth2 client_credentials access token, cached until shortly before expiry.
+
+    Every authenticated v2 call needs this bearer token; requesting a fresh one
+    per call would work but is unnecessary load, so it's cached per
+    (base_url, client_id) for `expires_in` minus a safety margin.
+    """
+    client_id = (config.get("clientId") or "").strip()
+    client_secret = (config.get("clientSecret") or "").strip()
+    if not client_id or not client_secret:
+        raise ValueError("Zain Cash credentials not configured")
+
+    base_url = _base_url(config)
+    cache_key = f"{_TOKEN_CACHE_PREFIX}{base_url}:{client_id}"
+    token = cache.get(cache_key)
+    if token:
+        return token
+
+    try:
+        response = requests.post(
+            f"{base_url}/oauth2/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data=urlencode(
+                {
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "scope": _TOKEN_SCOPE,
+                }
+            ),
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        error_detail = str(e)
+        try:
+            error_data = e.response.json()
+            error_detail = (
+                error_data.get("error_description")
+                or error_data.get("error")
+                or error_data.get("message")
+                or str(e)
+            )
+        except (ValueError, AttributeError, TypeError):
+            logger.debug("Zain Cash token error body was not JSON", exc_info=True)
+        raise Exception(f"Zain Cash authentication error: {error_detail}")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Zain Cash authentication error: {str(e)}")
+
+    result = response.json()
+    token = result.get("access_token")
+    if not token:
+        raise ValueError(f"Zain Cash did not return an access token. Response: {result}")
+
+    expires_in = int(result.get("expires_in") or 3600)
+    cache.set(cache_key, token, timeout=max(expires_in - 60, 60))
+    return token
+
+
 def create_zaincash_payment_session(
     amount: float,
     customer_email: str,
@@ -33,17 +123,23 @@ def create_zaincash_payment_session(
     customer_phone: str,
     subscription_id: str,
     return_url: str,
+    success_url: str = "",
+    failure_url: str = "",
 ):
     """
-    Create a payment session with Zain Cash
+    Create a payment session with Zain Cash (v2: POST .../transaction/init)
 
     Args:
         amount: Payment amount
-        customer_email: Customer email
-        customer_name: Customer name
-        customer_phone: Customer phone
+        customer_email: Customer email (unused by Zain Cash; kept for signature parity with other gateways)
+        customer_name: Customer name (unused by Zain Cash; kept for signature parity with other gateways)
+        customer_phone: Customer's wallet phone number (optional - Zain Cash
+            prompts for it on the payment page when omitted)
         subscription_id: Unique subscription ID
-        return_url: URL to redirect customer after payment
+        return_url: Fallback redirect URL used for both success and failure when
+            success_url/failure_url are not given
+        success_url: Where to send the customer after a successful payment
+        failure_url: Where to send the customer after a failed/cancelled payment
 
     Returns:
         dict: Response from Zain Cash API containing payment URL and transaction ID
@@ -54,136 +150,74 @@ def create_zaincash_payment_session(
         raise ValueError("Zain Cash payment gateway not found or not active")
 
     config = zaincash_gateway.config or {}
-    merchant_id = config.get("merchantId")
-    merchant_secret = config.get("merchantSecret")
-    msisdn = config.get("msisdn", "")  # Merchant wallet phone number (optional)
+    access_token = _get_access_token(config)
+    base_url = _base_url(config)
 
-    if not merchant_id or not merchant_secret:
-        raise ValueError("Zain Cash credentials not configured")
+    # Plans are priced in USD; Zain Cash settles in IQD, which has no minor unit
+    # in practice, so the amount is whole dinars.
+    amount_iqd = int(usd_to_iqd(amount))
+    logger.info("Zain Cash: converting USD %s to IQD %s", amount, amount_iqd)
 
-    merchant_id = merchant_id.strip()
-    merchant_secret = merchant_secret.strip()
-
-    # Determine API base URL based on environment
-    environment = config.get("environment", "test")
-    if environment == "live":
-        api_base_url = "https://api.zaincash.iq"
-    else:
-        api_base_url = "https://test.zaincash.iq"
-
-    # Zain Cash expects amount in IQD (Iraqi Dinar)
-    # If amount is in USD, convert to IQD using rate from database
-    # Also ensure amount is a number (not string) and meets minimum requirements
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    # Get USD to IQD rate from database settings
-    try:
-        system_settings = SystemSettings.get_settings()
-        USD_TO_IQD_RATE = float(system_settings.usd_to_iqd_rate)
-    except Exception as e:
-        logger.warning(f"Failed to get USD to IQD rate from database, using default 1300: {e}")
-        USD_TO_IQD_RATE = 1300  # Fallback to default rate
-    
-    # Check if amount seems to be in USD (typically < 1000 for subscription plans)
-    # If amount is less than 1000, assume it's USD and convert to IQD
-    if amount < 1000:
-        amount_iqd = amount * USD_TO_IQD_RATE
-        logger.info(f"Converting amount from USD {amount} to IQD {amount_iqd} (rate: {USD_TO_IQD_RATE})")
-    else:
-        # Assume already in IQD
-        amount_iqd = amount
-    
     # Zain Cash minimum amount is typically 1000 IQD
-    # Ensure amount meets minimum requirement
     if amount_iqd < 1000:
         raise ValueError(f"Amount {amount_iqd} IQD is below minimum of 1000 IQD")
-    
-    # Zain Cash API might require amount as integer (in smallest currency unit)
-    # IQD doesn't have smaller units, so we use the amount as-is
-    # But ensure it's a valid number format
-    # Try as integer first (no decimals), if that fails, use decimal
-    amount_iqd = float(amount_iqd)
-    
-    # Round to remove any floating point precision issues
-    # If amount is a whole number, use integer format
-    if amount_iqd == int(amount_iqd):
-        amount_iqd = int(amount_iqd)
-    else:
-        # Keep as float with 2 decimal places
-        amount_iqd = round(amount_iqd, 2)
-    
-    logger.info(f"Final amount for Zain Cash: {amount_iqd} IQD (type: {type(amount_iqd).__name__})")
-    
-    # Prepare JWT payload
+
+    success_url = success_url or return_url
+    failure_url = failure_url or return_url
+
     payload = {
-        "amount": amount_iqd,
-        "serviceType": "Subscription Payment",
-        "msisdn": msisdn,  # Merchant wallet phone number
+        "language": "ar",
+        "externalReferenceId": str(uuid.uuid4()),
         "orderId": f"SUB-{subscription_id}",
-        "redirectUrl": return_url,
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 3600,  # Token expires in 1 hour
+        "serviceType": config.get("serviceType", "Subscription"),
+        "amount": {"value": amount_iqd, "currency": "IQD"},
+        "redirectUrls": {
+            "successUrl": success_url,
+            "failureUrl": failure_url,
+        },
     }
+    phone = (customer_phone or "").strip()
+    if phone:
+        payload["customer"] = {"phone": phone}
 
-    # Encode JWT token
-    token = jwt.encode(payload, merchant_secret, algorithm="HS256")
-    # Ensure token is a string (PyJWT returns bytes in some versions)
-    if isinstance(token, bytes):
-        token = token.decode('utf-8')
-
-    # Prepare request data (Zain Cash expects form-urlencoded, not JSON)
-    from urllib.parse import urlencode
-    request_data = {
-        "token": token,
-        "merchantId": merchant_id,
-        "lang": "ar",  # Language: 'ar' or 'en'
-    }
-
-    # Make API request
-    api_url = f"{api_base_url}/transaction/init"
+    api_url = f"{base_url}/api/v2/payment-gateway/transaction/init"
     headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {access_token}",
     }
 
     try:
-        # Use data parameter with urlencode for form-urlencoded format
-        response = requests.post(
-            api_url,
-            data=urlencode(request_data),
-            headers=headers,
-            timeout=30,
-        )
+        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         result = response.json()
-        
-        # Log the response for debugging
-        import logging
-        logger = logging.getLogger(__name__)
+
         logger.info(f"Zain Cash API response: {result}")
-        
-        # Extract transaction ID from response
-        transaction_id = result.get("id")
+
+        details = result.get("transactionDetails") or {}
+        transaction_id = details.get("transactionId") or result.get("transactionId")
         if not transaction_id:
             raise ValueError(f"Zain Cash did not return transaction ID. Response: {result}")
-        
-        # Construct the payment URL that user should be redirected to
-        payment_url = f"{api_base_url}/transaction/pay?id={transaction_id}"
-        
-        # Return both the transaction ID and payment URL
+
+        payment_url = result.get("redirectUrl")
+        if not payment_url:
+            raise ValueError(f"Zain Cash did not return a redirect URL. Response: {result}")
+
         return {
             "id": transaction_id,
             "payment_url": payment_url,
             "transaction_id": transaction_id,
         }
     except requests.exceptions.HTTPError as e:
-        # Try to get error details from response
         error_detail = str(e)
         try:
             error_data = e.response.json()
-            error_detail = error_data.get("message") or error_data.get("error") or error_data.get("msg") or str(e)
+            error_detail = (
+                error_data.get("message")
+                or error_data.get("error")
+                or error_data.get("errorCode")
+                or str(e)
+            )
         except (ValueError, AttributeError, TypeError):
-            # Non-JSON or empty error body; error_detail already holds str(e).
             logger.debug("Zain Cash error body was not JSON", exc_info=True)
         raise Exception(f"Zain Cash API error: {error_detail}")
     except requests.exceptions.RequestException as e:
@@ -192,258 +226,195 @@ def create_zaincash_payment_session(
 
 def verify_zaincash_payment(token: str):
     """
-    Verify a Zain Cash payment transaction by decoding the JWT token
+    Verify a Zain Cash redirect/webhook JWT by decoding it with the client secret.
+
+    The v2 payload nests the transaction under "data" (eventType/data.transactionId/
+    data.currentStatus). This is flattened to {"id", "status", ...} so callers
+    (the gateway adapter, tests) keep working with a stable shape regardless of
+    Zain Cash's wire format.
 
     Args:
         token: JWT token returned from Zain Cash callback
 
     Returns:
-        dict: Decoded payment verification response
+        dict: {"id": transaction_id, "status": lowercase_status, "raw": decoded}
     """
-    # Validate that token is a JWT format (should have 3 segments separated by dots)
     if not token or token.count('.') != 2:
         raise ValueError(f"Invalid JWT token format. Expected 3 segments separated by dots, got: {token[:50]}...")
-    
+
     zaincash_gateway = get_zaincash_gateway()
 
     if not zaincash_gateway:
         raise ValueError("Zain Cash payment gateway not found or not active")
 
     config = zaincash_gateway.config or {}
-    merchant_secret = config.get("merchantSecret")
+    client_secret = (config.get("clientSecret") or "").strip()
 
-    if not merchant_secret:
+    if not client_secret:
         raise ValueError("Zain Cash credentials not configured")
 
-    merchant_secret = merchant_secret.strip()
-
     try:
-        # Decode JWT token
-        decoded = jwt.decode(token, merchant_secret, algorithms=["HS256"])
-        return decoded
+        decoded = jwt.decode(token, client_secret, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise Exception("Zain Cash token has expired")
     except jwt.InvalidTokenError as e:
         raise Exception(f"Invalid Zain Cash token: {str(e)}")
 
+    data = decoded.get("data") if isinstance(decoded.get("data"), dict) else decoded
+    transaction_id = data.get("transactionId") or decoded.get("id")
+    status_value = (data.get("currentStatus") or decoded.get("status") or "").lower()
+
+    return {"id": transaction_id, "status": status_value, "raw": decoded}
+
 
 def check_zaincash_payment_status(transaction_id: str, msisdn: str = ""):
     """
-    Check the status of a Zain Cash payment using the transaction ID
-    Based on Zain Cash API documentation example 3
-    
+    Check the status of a Zain Cash payment via the Inquiry API (v2).
+
     Args:
         transaction_id: The transaction ID returned from Zain Cash
-        msisdn: Optional merchant wallet phone number
-        
+        msisdn: Unused (kept for call-site compatibility; v2 inquiry needs
+            only the transaction ID and a bearer token)
+
     Returns:
-        dict: Payment status information from Zain Cash API
+        dict: {"status": lowercase_status, "raw": full_response}
     """
     zaincash_gateway = get_zaincash_gateway()
-    
+
     if not zaincash_gateway:
         raise ValueError("Zain Cash payment gateway not found or not active")
-    
+
     config = zaincash_gateway.config or {}
-    merchant_id = config.get("merchantId")
-    merchant_secret = config.get("merchantSecret")
-    msisdn = msisdn or config.get("msisdn", "")
-    
-    if not merchant_id or not merchant_secret:
-        raise ValueError("Zain Cash credentials not configured")
-    
-    merchant_id = merchant_id.strip()
-    merchant_secret = merchant_secret.strip()
-    
-    # Determine API base URL based on environment
-    environment = config.get("environment", "test")
-    if environment == "live":
-        api_base_url = "https://api.zaincash.iq"
-    else:
-        api_base_url = "https://test.zaincash.iq"
-    
-    # Build JWT payload for status check
-    payload = {
-        "id": transaction_id,
-        "msisdn": msisdn,
-        "iat": int(time.time()),
-        "exp": int(time.time()) + 14400,  # 4 hours expiry
-    }
-    
-    # Encode JWT token
-    token = jwt.encode(payload, merchant_secret, algorithm="HS256")
-    if isinstance(token, bytes):
-        token = token.decode('utf-8')
-    
-    # Prepare request data (form-urlencoded)
-    from urllib.parse import urlencode
-    request_data = {
-        "token": token,
-        "merchantId": merchant_id,
-    }
-    
-    # Make API request to check transaction status
-    api_url = f"{api_base_url}/transaction/get"
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    
-    import logging
-    logger = logging.getLogger(__name__)
-    
+    access_token = _get_access_token(config)
+    base_url = _base_url(config)
+
+    api_url = f"{base_url}/api/v2/payment-gateway/transaction/inquiry/{transaction_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+
     try:
-        response = requests.post(
-            api_url,
-            data=urlencode(request_data),
-            headers=headers,
-            timeout=30,
-        )
+        response = requests.get(api_url, headers=headers, timeout=30)
         response.raise_for_status()
         result = response.json()
-        
+
         logger.info(f"Zain Cash transaction status check response: {result}")
-        return result
+        status_value = (result.get("status") or "").lower()
+        return {"status": status_value, "raw": result}
     except requests.exceptions.HTTPError as e:
         error_detail = str(e)
         try:
             error_data = e.response.json()
-            error_detail = error_data.get("message") or error_data.get("error") or error_data.get("msg") or str(e)
+            error_detail = (
+                error_data.get("message")
+                or error_data.get("error")
+                or error_data.get("errorCode")
+                or str(e)
+            )
         except (ValueError, AttributeError, TypeError):
-            # Non-JSON or empty error body; error_detail already holds str(e).
             logger.debug("Zain Cash error body was not JSON", exc_info=True)
         raise Exception(f"Zain Cash status check error: {error_detail}")
     except requests.exceptions.RequestException as e:
         raise Exception(f"Zain Cash status check error: {str(e)}")
 
 
-def test_zaincash_credentials(merchant_id: str, merchant_secret: str, environment: str = "test", msisdn: str = ""):
+def test_zaincash_credentials(client_id: str, client_secret: str, environment: str = "test", base_url: str = ""):
     """
-    Test Zain Cash credentials by attempting to create a minimal test transaction
-    
+    Test Zain Cash credentials by actually requesting an OAuth2 access token.
+
+    This exercises the same auth path production calls use, unlike the old
+    v1 "send a throwaway transaction/init and treat any response as success"
+    check, which could report success for credentials that don't work.
+
     Args:
-        merchant_id: Merchant ID to test
-        merchant_secret: Merchant Secret to test
+        client_id: Client ID to test
+        client_secret: Client Secret to test
         environment: 'test' or 'live'
-        msisdn: Optional merchant wallet phone number
-    
+        base_url: API base URL. Required for 'live' (issued during onboarding);
+            defaults to the UAT sandbox for 'test'.
+
     Returns:
         dict: Test result with success status and message
     """
     try:
-        merchant_id = merchant_id.strip()
-        merchant_secret = merchant_secret.strip()
-        
-        if not merchant_id or not merchant_secret:
+        client_id = (client_id or "").strip()
+        client_secret = (client_secret or "").strip()
+
+        if not client_id or not client_secret:
             return {
                 "success": False,
-                "message": "Merchant ID and Merchant Secret are required"
+                "message": "Client ID and Client Secret are required",
             }
-        
-        # Determine API base URL based on environment
+
+        resolved_base = (base_url or "").strip()
         if environment == "live":
-            api_base_url = "https://api.zaincash.iq"
-        else:
-            api_base_url = "https://test.zaincash.iq"
-        
-        # Prepare a minimal test JWT payload (small amount for testing)
-        payload = {
-            "amount": 0.01,  # Minimal test amount
-            "serviceType": "Test Connection",
-            "msisdn": msisdn,
-            "orderId": f"TEST-{int(time.time())}",
-            "redirectUrl": "https://example.com/test",  # Dummy redirect URL for testing
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 3600,
-        }
-        
-        # Try to encode JWT token (this validates the secret)
-        try:
-            token = jwt.encode(payload, merchant_secret, algorithm="HS256")
-            if isinstance(token, bytes):
-                token = token.decode('utf-8')
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"Invalid Merchant Secret: {str(e)}"
-            }
-        
-        # Prepare request data
-        request_data = {
-            "token": token,
-            "merchantId": merchant_id,
-            "lang": "ar",
-        }
-        
-        # Make API request to test credentials
-        api_url = f"{api_base_url}/transaction/init"
-        headers = {
-            "Content-Type": "application/json",
-        }
-        
-        try:
-            response = requests.post(
-                api_url,
-                json=request_data,
-                headers=headers,
-                timeout=10,
-            )
-            
-            # If we get a response (even if it's an error about the test transaction),
-            # it means the credentials are valid and we can communicate with the API
-            if response.status_code == 200:
-                return {
-                    "success": True,
-                    "message": "Credentials are valid and connection successful"
-                }
-            elif response.status_code == 400:
-                # 400 might mean invalid request format, but credentials might still be valid
-                # Try to parse the error to see if it's about credentials
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get("message", "") or error_data.get("error", "")
-                    if "merchant" in error_msg.lower() or "invalid" in error_msg.lower():
-                        return {
-                            "success": False,
-                            "message": f"Invalid credentials: {error_msg}"
-                        }
-                except (ValueError, AttributeError, TypeError):
-                    logger.debug("Zain Cash error body was not JSON", exc_info=True)
-                # If it's a 400 but not about credentials, consider it a partial success
-                # (credentials work, but test transaction format might be wrong)
-                return {
-                    "success": True,
-                    "message": "Credentials appear valid (API connection successful)"
-                }
-            else:
-                error_msg = f"API returned status {response.status_code}"
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get("message", error_msg) or error_data.get("error", error_msg)
-                except (ValueError, AttributeError, TypeError):
-                    logger.debug("Zain Cash error body was not JSON", exc_info=True)
+            if not resolved_base:
                 return {
                     "success": False,
-                    "message": f"Connection failed: {error_msg}"
+                    "message": "Live base URL is required (issued by Zain Cash during onboarding)",
                 }
+        else:
+            resolved_base = resolved_base or UAT_BASE_URL
+        resolved_base = resolved_base.rstrip("/")
+
+        try:
+            response = requests.post(
+                f"{resolved_base}/oauth2/token",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data=urlencode(
+                    {
+                        "grant_type": "client_credentials",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "scope": _TOKEN_SCOPE,
+                    }
+                ),
+                timeout=10,
+            )
         except requests.exceptions.Timeout:
             return {
                 "success": False,
-                "message": "Connection timeout - please check your network connection"
+                "message": "Connection timeout - please check your network connection",
             }
         except requests.exceptions.ConnectionError:
             return {
                 "success": False,
-                "message": "Cannot connect to Zain Cash API - please check your network"
+                "message": "Cannot connect to Zain Cash API - please check your network",
             }
         except requests.exceptions.RequestException as e:
             return {
                 "success": False,
-                "message": f"Connection error: {str(e)}"
+                "message": f"Connection error: {str(e)}",
             }
-            
+
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("access_token"):
+                return {
+                    "success": True,
+                    "message": "Credentials are valid and connection successful",
+                }
+            return {
+                "success": False,
+                "message": f"Unexpected response from Zain Cash: {result}",
+            }
+
+        error_msg = f"API returned status {response.status_code}"
+        try:
+            error_data = response.json()
+            error_msg = (
+                error_data.get("error_description")
+                or error_data.get("error")
+                or error_data.get("message")
+                or error_msg
+            )
+        except (ValueError, AttributeError, TypeError):
+            logger.debug("Zain Cash error body was not JSON", exc_info=True)
+        return {
+            "success": False,
+            "message": f"Invalid credentials: {error_msg}",
+        }
+
     except Exception as e:
         return {
             "success": False,
-            "message": f"Test failed: {str(e)}"
+            "message": f"Test failed: {str(e)}",
         }
-
