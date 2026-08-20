@@ -1,4 +1,4 @@
-import multiprocessing
+import os
 
 bind = "127.0.0.1:8000"
 
@@ -7,15 +7,23 @@ bind = "127.0.0.1:8000"
 # This process does a lot of blocking outbound I/O inside the request cycle —
 # Meta Graph (WhatsApp media upload uses timeout=60), FCM, Twilio/OTPIQ, the
 # payment gateways, Resend. With sync workers, each of those calls occupies a
-# whole worker, so on a 2-vCPU box a handful of slow Graph calls could stall the
-# API for everyone. gthread lets a blocked call hold a thread instead of a slot.
+# whole worker, so a handful of slow Graph calls could stall the API for everyone.
+# gthread lets a blocked call hold a thread instead of a whole request slot.
 #
-# 3 workers x 4 threads = 12 concurrent requests on 2 vCPU. Workers are kept at
-# roughly the core count because the work is still GIL-bound Python once the I/O
-# returns; the threads are there to absorb waiting, not to add CPU throughput.
+# Sized explicitly rather than derived from cpu_count(), for two reasons:
+#   - cpu_count() reports the guest's logical CPUs, which on a VPS need not match
+#     the vCPU the plan actually bills, so the process count could change silently
+#     under the host's feet.
+#   - this box is shared. Another Django app (point_digital_marketing_manager_api)
+#     runs its own gunicorn here, plus Postgres, Redis and nginx, so the CRM does
+#     not get all the cores and should not size itself as though it does.
+#
+# 2 x 4 = 8 concurrent requests. Raise GUNICORN_WORKERS only after confirming
+# spare CPU — past the real core count, more workers add contention, not capacity.
+# The threads absorb I/O waiting; they do not add CPU throughput (GIL).
 worker_class = "gthread"
-workers = max(2, multiprocessing.cpu_count())
-threads = 4
+workers = int(os.getenv("GUNICORN_WORKERS", "2"))
+threads = int(os.getenv("GUNICORN_THREADS", "4"))
 
 # Above the longest outbound timeout in the codebase (whatsapp_media, 60s) so a
 # slow upstream returns an error from our own code rather than having the worker
