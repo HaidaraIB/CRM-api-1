@@ -24,6 +24,11 @@ from .phone_registration import register_phone_send_otp, register_phone_verify_o
 from .email_registration import register_email_send_otp, register_email_verify_otp
 from .tokens_users import CustomTokenObtainPairView, UserViewSet
 from .two_factor import request_two_factor_auth, verify_two_factor_auth
+from .work_sessions import (
+    WorkSessionPingView,
+    WorkSessionSummaryView,
+    WorkSessionTodayView,
+)
 from .pre_login_verification import (
     pre_login_email_change,
     pre_login_email_resend,
@@ -65,4 +70,7 @@ __all__ = [
     "remove_fcm_token_device",
     "update_language",
     "fcm_diagnostics_full",
+    "WorkSessionPingView",
+    "WorkSessionSummaryView",
+    "WorkSessionTodayView",
 ]

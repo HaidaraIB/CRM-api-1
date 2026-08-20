@@ -7,10 +7,10 @@ from datetime import datetime, time
 from decimal import Decimal
 from typing import Iterable
 
-from django.db.models import QuerySet
+from django.db.models import QuerySet, Sum
 from django.utils import timezone
 
-from accounts.models import Role, User
+from accounts.models import Role, User, WorkDaySummary
 from crm.models import Campaign, Client, ClientCall, Deal
 from settings.models import LeadStatus, StatusCategory
 
@@ -188,6 +188,39 @@ def _filter_calls(company, start_dt, end_dt):
     return qs
 
 
+def _worked_seconds_by_user(
+    company,
+    *,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    user_id: int | None = None,
+) -> dict[int, int]:
+    """
+    Measured CRM usage seconds per user for the range, as one grouped aggregate.
+
+    Filters on the raw parsed dates rather than :func:`_date_bounds`, because
+    ``work_date`` is already a company-local calendar date while ``_date_bounds``
+    builds aware datetimes in the Django server timezone. Company-local days are the
+    right semantics for "hours worked on 2026-08-20"; note this can diverge by up to
+    a day from the lead/call windows for tenants whose timezone isn't the server's.
+    """
+    qs = WorkDaySummary.objects.filter(company=company)
+    start = _parse_date(from_date)
+    end = _parse_date(to_date)
+    if start:
+        qs = qs.filter(work_date__gte=start)
+    if end:
+        qs = qs.filter(work_date__lte=end)
+    if user_id:
+        qs = qs.filter(user_id=user_id)
+    return {
+        row_user_id: total or 0
+        for row_user_id, total in qs.values("user_id")
+        .annotate(total=Sum("active_seconds"))
+        .values_list("user_id", "total")
+    }
+
+
 def _build_deals_by_assignee(company, clients: list[Client]) -> dict[int, list[Deal]]:
     client_ids = [client.id for client in clients]
     assignee_by_client = {client.id: client.assigned_to_id for client in clients}
@@ -222,6 +255,9 @@ def build_employee_or_team_rows(
     start_dt, end_dt = _date_bounds(from_date, to_date)
     calls = list(_filter_calls(company, start_dt, end_dt))
     deals_by_assignee = _build_deals_by_assignee(company, clients)
+    worked_seconds_by_user = _worked_seconds_by_user(
+        company, from_date=from_date, to_date=to_date, user_id=user_id
+    )
 
     leads_by_assignee: dict[int, list[Client]] = {}
     for client in clients:
@@ -283,19 +319,24 @@ def build_employee_or_team_rows(
             "won_deals": sum(1 for deal in user_deals if (deal.stage or "").lower() == "won"),
             "total_client_calls": len(user_calls),
             "total_activities": len(user_calls),
+            "worked_seconds": worked_seconds_by_user.get(user.id, 0),
             "following_leads": 0,
             "meeting_leads": 0,
         }
         row["following_leads"] = row["following"]
         row["meeting_leads"] = row["meeting"]
 
+        # Measured hours count as activity: without this, someone who logged time but
+        # was assigned no leads/deals/calls would disappear from the report entirely.
         if (
             row["total_leads"]
             or row["total_deals"]
             or row["total_calls"]
+            or row["worked_seconds"]
         ):
             rows.append(row)
 
+    total_worked_seconds = sum(row["worked_seconds"] for row in rows)
     summary = {
         "total_calls": sum(row["total_calls"] for row in rows),
         "answered_calls": sum(row["answered_calls"] for row in rows),
@@ -305,6 +346,10 @@ def build_employee_or_team_rows(
         "total_leads": sum(row["total_leads"] for row in rows),
         "total_activities": sum(row["total_activities"] for row in rows),
         "total_deals": sum(row["total_deals"] for row in rows),
+        "total_worked_seconds": total_worked_seconds,
+        "avg_worked_seconds_per_employee": (
+            total_worked_seconds // len(rows) if rows else 0
+        ),
     }
     return rows, summary
 

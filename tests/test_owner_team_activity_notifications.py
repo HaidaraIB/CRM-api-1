@@ -53,6 +53,147 @@ def test_notify_owner_team_activity_sends_to_owner(company, employee_user):
         assert Notification.objects.filter(user=company.owner, type=NotificationType.TEAM_ACTIVITY).exists()
 
 
+@pytest.fixture
+def supervisor_user(company, db):
+    from accounts.models import User
+
+    return User.objects.create_user(
+        username="supervisor_user",
+        email="supervisor@test.com",
+        password="testpass123",
+        first_name="Supervisor",
+        last_name="User",
+        company=company,
+        role="supervisor",
+    )
+
+
+def _make_supervisor_permission(supervisor_user, **overrides):
+    from accounts.models import SupervisorPermission
+
+    return SupervisorPermission.objects.create(user=supervisor_user, **overrides)
+
+
+@pytest.mark.django_db
+def test_notify_team_activity_sends_to_opted_in_supervisor(
+    company, employee_user, supervisor_user
+):
+    _make_supervisor_permission(supervisor_user, notify_team_activity_action=True)
+
+    with patch(
+        "notifications.team_activity.NotificationService.send_notification",
+        return_value=True,
+    ) as send_mock:
+        notify_owner_team_activity(
+            employee_user,
+            company,
+            action="call_logged",
+            lead_id=10,
+            lead_name="Test Lead",
+        )
+
+        recipients = [c.kwargs["user"] for c in send_mock.call_args_list]
+        assert company.owner in recipients
+        assert supervisor_user in recipients
+        assert Notification.objects.filter(
+            user=supervisor_user, type=NotificationType.TEAM_ACTIVITY
+        ).exists()
+
+
+@pytest.mark.django_db
+def test_notify_team_activity_skips_supervisor_not_opted_in(
+    company, employee_user, supervisor_user
+):
+    # Default SupervisorPermission has all notify_team_activity_* off.
+    _make_supervisor_permission(supervisor_user)
+
+    with patch(
+        "notifications.team_activity.NotificationService.send_notification",
+        return_value=True,
+    ) as send_mock:
+        notify_owner_team_activity(
+            employee_user,
+            company,
+            action="call_logged",
+            lead_id=10,
+            lead_name="Test Lead",
+        )
+
+        recipients = [c.kwargs["user"] for c in send_mock.call_args_list]
+        assert supervisor_user not in recipients
+        assert not Notification.objects.filter(
+            user=supervisor_user, type=NotificationType.TEAM_ACTIVITY
+        ).exists()
+
+
+@pytest.mark.django_db
+def test_notify_team_activity_skips_inactive_supervisor_permission(
+    company, employee_user, supervisor_user
+):
+    _make_supervisor_permission(
+        supervisor_user, is_active=False, notify_team_activity_action=True
+    )
+
+    with patch(
+        "notifications.team_activity.NotificationService.send_notification",
+        return_value=True,
+    ) as send_mock:
+        notify_owner_team_activity(
+            employee_user,
+            company,
+            action="call_logged",
+            lead_id=10,
+            lead_name="Test Lead",
+        )
+
+        recipients = [c.kwargs["user"] for c in send_mock.call_args_list]
+        assert supervisor_user not in recipients
+
+
+@pytest.mark.django_db
+def test_notify_team_activity_skips_acting_supervisor(company, supervisor_user):
+    _make_supervisor_permission(supervisor_user, notify_team_activity_action=True)
+
+    with patch(
+        "notifications.team_activity.NotificationService.send_notification",
+        return_value=True,
+    ) as send_mock:
+        notify_owner_team_activity(
+            supervisor_user,
+            company,
+            action="call_logged",
+            lead_id=10,
+            lead_name="Test Lead",
+        )
+
+        recipients = [c.kwargs["user"] for c in send_mock.call_args_list]
+        assert supervisor_user not in recipients
+
+
+@pytest.mark.django_db
+def test_notify_team_activity_supervisor_category_gating(
+    company, employee_user, supervisor_user
+):
+    """Supervisor opted into 'action' only should not receive a 'status_change' notification."""
+    _make_supervisor_permission(supervisor_user, notify_team_activity_action=True)
+
+    with patch(
+        "notifications.team_activity.NotificationService.send_notification",
+        return_value=True,
+    ) as send_mock:
+        notify_owner_team_activity(
+            employee_user,
+            company,
+            action="status_change",
+            lead_name="Test Lead",
+            old_status="New",
+            new_status="Contacted",
+        )
+
+        recipients = [c.kwargs["user"] for c in send_mock.call_args_list]
+        assert supervisor_user not in recipients
+
+
 @pytest.mark.django_db
 def test_team_activity_status_change_arabic_template():
     body = get_team_activity_text(

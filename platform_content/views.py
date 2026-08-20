@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from accounts.permissions import CanManageContent, HasActiveSubscription
 from crm_saas_api.responses import error_response, success_response
+from sync.cache import invalidate_badges
 
 from .models import GuideArticle, GuideCategory, NewsPost, PageHelpVideo, UserNewsReadState
 from .notify import NOTIFY_CHANNELS, notify_company_owners_news_async
@@ -165,6 +166,7 @@ class PublishedNewsPostViewSet(viewsets.ReadOnlyModelViewSet):
             user=request.user,
             defaults={"last_read_at": now},
         )
+        invalidate_badges(request.user.id)
         return success_response(
             data={"unread_count": 0, "last_read_at": now.isoformat()},
             status_code=status.HTTP_200_OK,

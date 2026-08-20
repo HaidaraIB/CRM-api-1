@@ -95,6 +95,16 @@ class Company(models.Model):
         default=5,
         help_text="Minutes an arrival can stay unacknowledged before escalation (1-120).",
     )
+    # Measured CRM usage time ("actual working hours"). Opt-in: this is employee
+    # monitoring, so it must never switch itself on for an existing tenant.
+    work_hours_tracking_enabled = models.BooleanField(
+        default=False,
+        help_text="Measure actual CRM usage time for staff from web/mobile activity.",
+    )
+    work_hours_idle_timeout_minutes = models.PositiveSmallIntegerField(
+        default=10,
+        help_text="Minutes of no activity before tracking pauses and the user is alerted (1-120).",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

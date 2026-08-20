@@ -164,7 +164,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
             "no_follow_up_enabled": true/false,
             "no_follow_up_hours": 10,
             "no_follow_up_digest_hour": 9,
-            "timezone": "Asia/Baghdad"
+            "timezone": "Asia/Baghdad",
+            "work_hours_tracking_enabled": true/false,
+            "work_hours_idle_timeout_minutes": 10
         }
         """
         from zoneinfo import ZoneInfo
@@ -282,6 +284,26 @@ class CompanyViewSet(viewsets.ModelViewSet):
                     code="invalid_arrival_escalation_minutes",
                 )
 
+        work_hours_tracking_enabled = request.data.get('work_hours_tracking_enabled')
+        work_hours_idle_timeout_minutes = request.data.get('work_hours_idle_timeout_minutes')
+
+        if work_hours_tracking_enabled is not None:
+            company.work_hours_tracking_enabled = bool(work_hours_tracking_enabled)
+        if work_hours_idle_timeout_minutes is not None:
+            try:
+                minutes = int(work_hours_idle_timeout_minutes)
+                if minutes < 1 or minutes > 120:
+                    return error_response(
+                        "work_hours_idle_timeout_minutes must be between 1 and 120.",
+                        code="invalid_work_hours_idle_timeout_minutes",
+                    )
+                company.work_hours_idle_timeout_minutes = minutes
+            except (ValueError, TypeError):
+                return error_response(
+                    "work_hours_idle_timeout_minutes must be a valid integer.",
+                    code="invalid_work_hours_idle_timeout_minutes",
+                )
+
         update_fields = [
             'auto_assign_enabled',
             'auto_assign_algorithm',
@@ -293,6 +315,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
             'timezone',
             'arrival_escalation_enabled',
             'arrival_escalation_minutes',
+            'work_hours_tracking_enabled',
+            'work_hours_idle_timeout_minutes',
         ]
         company.save(update_fields=update_fields)
         

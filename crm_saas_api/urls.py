@@ -62,6 +62,9 @@ from accounts.views import (
     remove_fcm_token_device,
     update_language,
     fcm_diagnostics_full,
+    WorkSessionPingView,
+    WorkSessionSummaryView,
+    WorkSessionTodayView,
 )
 from companies.views import CompanyViewSet
 from crm.report_views import EmployeeReportView, TeamsReportView, MarketingReportView, CallReportView
@@ -354,6 +357,9 @@ v1_patterns = [
     path("reports/teams/", TeamsReportView.as_view(), name="reports_teams"),
     path("reports/marketing/", MarketingReportView.as_view(), name="reports_marketing"),
     path("reports/calls/", CallReportView.as_view(), name="reports_calls"),
+    path("work-sessions/ping/", WorkSessionPingView.as_view(), name="work_session_ping"),
+    path("work-sessions/today/", WorkSessionTodayView.as_view(), name="work_session_today"),
+    path("work-sessions/summary/", WorkSessionSummaryView.as_view(), name="work_session_summary"),
     path("", include("notifications.urls")),
 ]
 

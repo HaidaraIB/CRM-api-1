@@ -60,22 +60,82 @@ class TestSyncDigest:
         assert other_body["whatsapp_unread"] == 1
         assert mine["whatsapp_unread"] == 1
 
-    def test_if_none_match_304_skips_recompute(self, authenticated_admin):
+    def test_if_none_match_304_reuses_cached_badges(self, authenticated_admin):
+        """
+        A matching ETag still returns an empty 304, and the expensive badge tier is
+        served from cache instead of rebuilt.
+
+        The live tier is deliberately NOT skipped: it is recomputed on every request
+        so a client holding an old ETag can never be 304'd past a newly ringing call.
+        """
+        from sync.views import build_live
+
         first = authenticated_admin.get("/api/v1/sync/digest/")
         assert first.status_code == status.HTTP_200_OK
-        data = api_body(first)
         etag = first["ETag"]
-        assert data["version"]
+        assert api_body(first)["version"]
         assert etag
 
-        with patch("sync.views.build_digest") as mocked:
+        with (
+            patch("sync.views.build_badges") as badges,
+            patch("sync.views.build_live", wraps=build_live) as live,
+        ):
             second = authenticated_admin.get(
                 "/api/v1/sync/digest/",
                 HTTP_IF_NONE_MATCH=etag,
             )
-            mocked.assert_not_called()
+            badges.assert_not_called()
+            live.assert_called_once()
+
         assert second.status_code == status.HTTP_304_NOT_MODIFIED
         assert second.content == b""
+
+    def test_live_change_breaks_etag_despite_cached_badges(
+        self, authenticated_admin, admin_user, company
+    ):
+        """A new walk-in must reach a client holding a valid ETag, badge cache or not."""
+        from crm.models import Client, LeadArrival, LeadArrivalRouting
+
+        first = authenticated_admin.get("/api/v1/sync/digest/")
+        etag = first["ETag"]
+        assert api_body(first)["arrivals_pending"] == 0
+
+        client = Client.objects.create(
+            name="Walk-in", company=company, priority="low", type="cold"
+        )
+        arrival = LeadArrival.objects.create(
+            company=company,
+            client=client,
+            routing=LeadArrivalRouting.EXISTING_ASSIGNEE.value,
+        )
+        arrival.notified_users.add(admin_user)
+
+        second = authenticated_admin.get(
+            "/api/v1/sync/digest/", HTTP_IF_NONE_MATCH=etag
+        )
+        assert second.status_code == status.HTTP_200_OK
+        assert api_body(second)["arrivals_pending"] == 1
+
+    def test_marking_read_invalidates_badge_cache(self, authenticated_admin, admin_user):
+        """Acting on a badge clears it now, not when the cache TTL happens to lapse."""
+        from notifications.models import Notification, NotificationType
+
+        Notification.objects.create(
+            user=admin_user,
+            type=NotificationType.NEW_LEAD,
+            title="n",
+            body="b",
+            read=False,
+        )
+        assert api_body(authenticated_admin.get("/api/v1/sync/digest/"))[
+            "notifications_unread"
+        ] == 1
+
+        authenticated_admin.post("/api/v1/notifications/mark_all_read/")
+
+        assert api_body(authenticated_admin.get("/api/v1/sync/digest/"))[
+            "notifications_unread"
+        ] == 0
 
     def test_whatsapp_gated_omits_count(self, authenticated_employee, employee_user):
         employee_user.whatsapp_chat_enabled = False

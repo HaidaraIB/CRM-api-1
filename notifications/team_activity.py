@@ -55,55 +55,39 @@ def _owner_allows_team_activity(owner, action: str) -> bool:
     return True
 
 
-def notify_owner_team_activity(
-    actor,
-    company,
-    *,
-    action: str,
-    **fields: Any,
-) -> bool:
+def _eligible_supervisors(company, action: str, actor):
     """
-    Notify company owner about a teammate activity (localized to owner's language).
-
-    Always persists a Notification row (when allowed by settings), then attempts FCM
-    without duplicating the DB row.
-
-    Guardrails:
-    - company is required
-    - skip self notifications (owner acting)
-    - skip inactive owner
-    - skip when owner disabled this team-activity category
-
-    ``actor`` may be None for aggregate notifications (e.g. the daily no-follow-up digest),
-    which summarise many employees and therefore have no single acting user. In that case
-    the self-notification guard does not apply.
+    Supervisors of ``company`` whose owner-managed SupervisorPermission opts them
+    into this team-activity category. Opt-in defaults to off (new capability).
     """
-    if not company:
-        return False
+    from accounts.models import Role, SupervisorPermission
 
-    owner_id = getattr(company, "owner_id", None)
-    if not owner_id:
-        return False
-    if actor is not None and actor.pk == owner_id:
-        return False
-
-    try:
-        owner = User.objects.get(pk=owner_id)
-    except User.DoesNotExist:
-        return False
-
-    if not getattr(owner, "is_active", False):
-        return False
-
-    if not _owner_allows_team_activity(owner, action):
-        logger.info(
-            "Owner team activity skipped (settings) company=%s action=%s",
-            getattr(company, "id", None),
-            action,
+    category_key = team_activity_settings_key(action)
+    actor_id = getattr(actor, "pk", None)
+    supervisors = (
+        User.objects.filter(company=company, role=Role.SUPERVISOR.value, is_active=True)
+        .exclude(pk=actor_id)
+        .select_related("supervisor_permissions")
+    )
+    eligible = []
+    for supervisor in supervisors:
+        permission: Optional["SupervisorPermission"] = getattr(
+            supervisor, "supervisor_permissions", None
         )
-        return False
+        if permission and permission.allows_team_activity(category_key):
+            eligible.append(supervisor)
+    return eligible
 
-    lang = normalize_notification_language(owner.language)
+
+def _send_team_activity_to_user(
+    recipient,
+    actor,
+    action: str,
+    fields: Dict[str, Any],
+    sender_role,
+) -> bool:
+    """Persist + push a team-activity notification to one recipient, localized to them."""
+    lang = normalize_notification_language(recipient.language)
     employee = (actor.get_full_name() or actor.username) if actor is not None else ""
     lead_display = (fields.get("lead") or fields.get("lead_name") or "").strip()
 
@@ -120,34 +104,88 @@ def notify_owner_team_activity(
         payload["employee_name"] = employee
     if lead_display and "lead_name" not in payload:
         payload["lead_name"] = lead_display
-    # Ensure lead_id is always present for mobile deep-link (stringified by FCM layer).
-    if "lead_id" in payload and payload["lead_id"] is not None:
-        payload["lead_id"] = payload["lead_id"]
 
     try:
         Notification.objects.create(
-            user=owner,
+            user=recipient,
             type=NotificationType.TEAM_ACTIVITY,
             title=text["title"],
             body=text["body"],
             data=payload,
         )
     except Exception as exc:
-        logger.error("Error saving owner team activity notification: %s", exc)
+        logger.error(
+            "Error saving team activity notification for user=%s: %s", recipient.pk, exc
+        )
         return False
 
     try:
         return NotificationService.send_notification(
-            user=owner,
+            user=recipient,
             notification_type=NotificationType.TEAM_ACTIVITY,
             title=text["title"],
             body=text["body"],
             data=payload,
-            sender_role=getattr(actor, "role", None) if actor is not None else None,
+            sender_role=sender_role,
             language=lang,
             skip_database_insert=True,
             skip_settings_check=True,  # already gated by category preference above
         )
     except Exception as exc:
-        logger.error("Error sending owner team activity push: %s", exc)
+        logger.error("Error sending team activity push to user=%s: %s", recipient.pk, exc)
         return False
+
+
+def notify_owner_team_activity(
+    actor,
+    company,
+    *,
+    action: str,
+    **fields: Any,
+) -> bool:
+    """
+    Notify the company owner, and any opted-in supervisors, about a teammate activity
+    (each localized to the recipient's own language).
+
+    Owner guardrails (unchanged):
+    - company is required
+    - skip self notifications (owner acting)
+    - skip inactive owner
+    - skip when owner disabled this team-activity category
+
+    Supervisors are notified independently of the owner's settings: each supervisor
+    only receives this category if the company owner explicitly enabled it for them
+    (SupervisorPermission.notify_team_activity_*, opt-in / default off).
+
+    ``actor`` may be None for aggregate notifications (e.g. the daily no-follow-up digest),
+    which summarise many employees and therefore have no single acting user. In that case
+    the self-notification guard does not apply.
+
+    Returns whether the owner's notification was sent (supervisor fan-out is best-effort
+    and does not affect the return value; existing callers ignore it either way).
+    """
+    if not company:
+        return False
+
+    sender_role = getattr(actor, "role", None) if actor is not None else None
+    owner_id = getattr(company, "owner_id", None)
+    owner_sent = False
+
+    if owner_id and not (actor is not None and actor.pk == owner_id):
+        owner = User.objects.filter(pk=owner_id).first()
+        if owner is not None and getattr(owner, "is_active", False):
+            if _owner_allows_team_activity(owner, action):
+                owner_sent = _send_team_activity_to_user(
+                    owner, actor, action, fields, sender_role
+                )
+            else:
+                logger.info(
+                    "Owner team activity skipped (settings) company=%s action=%s",
+                    getattr(company, "id", None),
+                    action,
+                )
+
+    for supervisor in _eligible_supervisors(company, action, actor):
+        _send_team_activity_to_user(supervisor, actor, action, fields, sender_role)
+
+    return owner_sent

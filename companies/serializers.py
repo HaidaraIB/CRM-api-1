@@ -34,6 +34,8 @@ class CompanySerializer(serializers.ModelSerializer):
             "field_visit_enabled",
             "arrival_escalation_enabled",
             "arrival_escalation_minutes",
+            "work_hours_tracking_enabled",
+            "work_hours_idle_timeout_minutes",
             "created_at",
             "updated_at",
         ]

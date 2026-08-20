@@ -244,110 +244,134 @@ class NotificationService:
             # pushes are unreliable on iOS and never play custom sounds from local handlers.
             tenant_chat_data_only = (data or {}).get("kind") == "tenant_chat"
 
-            success_count = 0
-            for token in user_tokens:
-                try:
-                    if tenant_chat_data_only:
-                        conversation_id = (data or {}).get("conversation_id")
-                        collapse_id = tenant_chat_apns_collapse_id(conversation_id)
-                        apns_headers: Dict[str, str] = {
-                            "apns-push-type": "alert",
-                            "apns-priority": "10",
-                        }
-                        if collapse_id:
-                            apns_headers["apns-collapse-id"] = collapse_id
-                        apns_aps_kwargs: Dict[str, Any] = {
-                            "alert": messaging.ApsAlert(title=title, body=body),
-                            "sound": tenant_chat_ios_sound_filename(),
-                        }
-                        thread_id = (
-                            str(conversation_id).strip()
-                            if conversation_id is not None
-                            and str(conversation_id).strip()
-                            else None
-                        )
-                        if thread_id:
-                            apns_aps_kwargs["thread_id"] = thread_id
-                        message = messaging.Message(
-                            data=message_data,
-                            token=token,
-                            android=messaging.AndroidConfig(priority="high"),
-                            apns=messaging.APNSConfig(
-                                headers=apns_headers,
-                                payload=messaging.APNSPayload(
-                                    aps=messaging.Aps(**apns_aps_kwargs),
-                                ),
-                            ),
-                        )
-                        logger.info(
-                            "FCM tenant_chat android=data-only ios_sound=%s collapse=%s",
-                            tenant_chat_ios_sound_filename(),
-                            collapse_id or "(none)",
-                        )
-                    else:
-                        # Android 8+: system-displayed FCM uses the *channel* sound, not the
-                        # legacy per-notification sound, when posting to the default FCM channel.
-                        # So we must send channel_id matching flutter_local_notifications channels
-                        # (created on first app open). If those channels do not exist yet, Android
-                        # may drop the notification — user must open the app once after install.
-                        # team_activity reuses category channels/sounds based on data.action.
-                        action = (data or {}).get("action")
-                        action_str = str(action) if action is not None else None
-                        channel_id = android_notification_channel_id(
-                            notification_type, action=action_str
-                        )
-                        sound_base = android_notification_raw_sound_basename(
-                            notification_type, action=action_str
-                        )
-                        ios_sound = ios_notification_sound_filename(
-                            notification_type, action=action_str
-                        )
-                        android_notif_kwargs: Dict[str, Any] = {
-                            "channel_id": channel_id,
-                        }
-                        if sound_base:
-                            android_notif_kwargs["sound"] = sound_base
-                        apns_aps_kwargs: Dict[str, Any] = {}
-                        if ios_sound:
-                            apns_aps_kwargs["sound"] = ios_sound
-                        message = messaging.Message(
-                            notification=notification_payload,
-                            data=message_data,
-                            token=token,
-                            android=messaging.AndroidConfig(
-                                priority="high",
-                                notification=messaging.AndroidNotification(
-                                    **android_notif_kwargs,
-                                ),
-                            ),
-                            apns=messaging.APNSConfig(
-                                headers={"apns-push-type": "alert", "apns-priority": "10"},
-                                payload=messaging.APNSPayload(
-                                    aps=messaging.Aps(**apns_aps_kwargs),
-                                ),
-                            ),
-                        )
-                        logger.info(
-                            "FCM android channel_id=%s android_sound=%s ios_sound=%s type=%s action=%s",
-                            channel_id,
-                            sound_base or "(default)",
-                            ios_sound or "(default)",
-                            notification_type,
-                            action_str or "(none)",
-                        )
-                    response = messaging.send(message)
-                    logger.info(
-                        f"Notification sent to {user.username} token={token[:12]}...: {response}"
-                    )
-                    success_count += 1
-                except messaging.UnregisteredError:
-                    logger.warning(
-                        f"FCM token for user {user.username} is invalid. Removing token."
-                    )
-                    user.remove_fcm_token(token)
-                    user.save(update_fields=["fcm_token", "fcm_tokens"])
+            # The payload is identical for every one of this user's devices — only the
+            # token differed. So it is built once and sent as a single multicast.
+            # Building it per token and calling messaging.send() in a loop cost one
+            # blocking HTTPS round-trip per device, inside the request; a team-wide
+            # fan-out could hold a Gunicorn worker for seconds.
+            if tenant_chat_data_only:
+                conversation_id = (data or {}).get("conversation_id")
+                collapse_id = tenant_chat_apns_collapse_id(conversation_id)
+                apns_headers: Dict[str, str] = {
+                    "apns-push-type": "alert",
+                    "apns-priority": "10",
+                }
+                if collapse_id:
+                    apns_headers["apns-collapse-id"] = collapse_id
+                apns_aps_kwargs: Dict[str, Any] = {
+                    "alert": messaging.ApsAlert(title=title, body=body),
+                    "sound": tenant_chat_ios_sound_filename(),
+                }
+                thread_id = (
+                    str(conversation_id).strip()
+                    if conversation_id is not None
+                    and str(conversation_id).strip()
+                    else None
+                )
+                if thread_id:
+                    apns_aps_kwargs["thread_id"] = thread_id
+                multicast = messaging.MulticastMessage(
+                    tokens=user_tokens,
+                    data=message_data,
+                    android=messaging.AndroidConfig(priority="high"),
+                    apns=messaging.APNSConfig(
+                        headers=apns_headers,
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(**apns_aps_kwargs),
+                        ),
+                    ),
+                )
+                logger.info(
+                    "FCM tenant_chat android=data-only ios_sound=%s collapse=%s",
+                    tenant_chat_ios_sound_filename(),
+                    collapse_id or "(none)",
+                )
+            else:
+                # Android 8+: system-displayed FCM uses the *channel* sound, not the
+                # legacy per-notification sound, when posting to the default FCM channel.
+                # So we must send channel_id matching flutter_local_notifications channels
+                # (created on first app open). If those channels do not exist yet, Android
+                # may drop the notification — user must open the app once after install.
+                # team_activity reuses category channels/sounds based on data.action.
+                action = (data or {}).get("action")
+                action_str = str(action) if action is not None else None
+                channel_id = android_notification_channel_id(
+                    notification_type, action=action_str
+                )
+                sound_base = android_notification_raw_sound_basename(
+                    notification_type, action=action_str
+                )
+                ios_sound = ios_notification_sound_filename(
+                    notification_type, action=action_str
+                )
+                android_notif_kwargs: Dict[str, Any] = {
+                    "channel_id": channel_id,
+                }
+                if sound_base:
+                    android_notif_kwargs["sound"] = sound_base
+                apns_aps_kwargs: Dict[str, Any] = {}
+                if ios_sound:
+                    apns_aps_kwargs["sound"] = ios_sound
+                multicast = messaging.MulticastMessage(
+                    tokens=user_tokens,
+                    notification=notification_payload,
+                    data=message_data,
+                    android=messaging.AndroidConfig(
+                        priority="high",
+                        notification=messaging.AndroidNotification(
+                            **android_notif_kwargs,
+                        ),
+                    ),
+                    apns=messaging.APNSConfig(
+                        headers={"apns-push-type": "alert", "apns-priority": "10"},
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(**apns_aps_kwargs),
+                        ),
+                    ),
+                )
+                logger.info(
+                    "FCM android channel_id=%s android_sound=%s ios_sound=%s type=%s action=%s",
+                    channel_id,
+                    sound_base or "(default)",
+                    ios_sound or "(default)",
+                    notification_type,
+                    action_str or "(none)",
+                )
 
-            return success_count > 0
+            batch = messaging.send_each_for_multicast(multicast)
+
+            # Responses are positionally aligned with the tokens we passed in.
+            stale_tokens = []
+            for token, resp in zip(user_tokens, batch.responses):
+                if resp.success:
+                    continue
+                if isinstance(resp.exception, messaging.UnregisteredError):
+                    stale_tokens.append(token)
+                else:
+                    logger.warning(
+                        "FCM send failed for %s token=%s...: %s",
+                        user.username,
+                        token[:12],
+                        resp.exception,
+                    )
+
+            if stale_tokens:
+                for token in stale_tokens:
+                    user.remove_fcm_token(token)
+                user.save(update_fields=["fcm_token", "fcm_tokens"])
+                logger.warning(
+                    "Removed %d invalid FCM token(s) for %s",
+                    len(stale_tokens),
+                    user.username,
+                )
+
+            logger.info(
+                "FCM multicast to %s: %d/%d delivered",
+                user.username,
+                batch.success_count,
+                len(user_tokens),
+            )
+            return batch.success_count > 0
 
         except Exception as e:
             logger.error(f"Error sending notification to {user.username}: {e}")

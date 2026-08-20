@@ -15,6 +15,7 @@ from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import error_response, validation_error_response
 from notifications.models import NotificationType
 from notifications.services import NotificationService
+from sync.cache import invalidate_badges
 
 from . import supabase_storage as chat_storage
 from .attachments import (
@@ -504,6 +505,7 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         if msg.id > cur_id:
             state.last_read_message = msg
             state.save(update_fields=["last_read_message", "updated_at"])
+            invalidate_badges(request.user.id)
         return Response(
             {
                 "last_read_message_id": state.last_read_message_id,

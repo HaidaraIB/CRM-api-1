@@ -21,6 +21,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
 from accounts.permissions import HasActiveSubscription
+from sync.cache import invalidate_badges
 from ..decorators import rate_limit_webhook
 from ..models import (
     IntegrationAccount, IntegrationLog, IntegrationPlatform,
@@ -308,6 +309,10 @@ def whatsapp_mark_conversation_read(request):
         direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
         is_read=False,
     ).update(is_read=True)
+    if updated:
+        # Only the caller's badge is refreshed eagerly. Teammates who can also see
+        # this client fall back to the normal TTL, which is what that tier is for.
+        invalidate_badges(request.user.id)
     return success_response(data={'marked': updated, 'client_id': client.id})
 
 

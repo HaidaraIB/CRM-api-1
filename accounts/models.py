@@ -53,6 +53,13 @@ class User(AbstractUser):
         ],
         default="unknown",
     )
+    # Crediting cursor for measured CRM usage time. Lives here rather than on
+    # WorkDaySummary because the first ping of a new local day has no day row yet.
+    work_last_ping_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="UTC timestamp of the last credited work-session ping (crediting cursor).",
+    )
     # Monday=0 .. Sunday=6 (datetime.weekday); null = no fixed weekly day off
     weekly_day_off = models.PositiveSmallIntegerField(
         null=True,
@@ -516,6 +523,21 @@ class SupervisorPermission(models.Model):
     can_manage_whatsapp_chats = models.BooleanField(default=True)
     can_manage_whatsapp_calls = models.BooleanField(default=True)
 
+    # Team-activity notification toggles (owner-controlled, mirrors the 3 categories
+    # the owner already gets via NotificationSettings.notification_types).
+    notify_team_activity_status = models.BooleanField(
+        default=False,
+        help_text="Notify this supervisor when a lead's status changes",
+    )
+    notify_team_activity_action = models.BooleanField(
+        default=False,
+        help_text="Notify this supervisor about team actions (calls, visits, tasks, deals won)",
+    )
+    notify_team_activity_overdue = models.BooleanField(
+        default=False,
+        help_text="Notify this supervisor about overdue / no-follow-up digests",
+    )
+
     class Meta:
         db_table = "supervisor_permissions"
         ordering = ["-created_at"]
@@ -542,6 +564,17 @@ class SupervisorPermission(models.Model):
             "manage_whatsapp_calls": self.can_manage_whatsapp_calls,
         }
         return permission_map.get(permission_name, False)
+
+    def allows_team_activity(self, category_key: str) -> bool:
+        """category_key is one of the team_activity_settings_key() outputs."""
+        if not self.is_active:
+            return False
+        category_map = {
+            "team_activity_status": self.notify_team_activity_status,
+            "team_activity_action": self.notify_team_activity_action,
+            "team_activity_overdue": self.notify_team_activity_overdue,
+        }
+        return category_map.get(category_key, False)
 
 
 class ImpersonationSession(models.Model):
@@ -583,3 +616,59 @@ class ImpersonationSession(models.Model):
 
     def __str__(self):
         return f"ImpersonationSession {self.code[:12]}..."
+
+
+class WorkDaySummary(models.Model):
+    """
+    Accumulated *measured* CRM usage per user per company-local day.
+
+    Written incrementally by the work-session ping (accounts/work_tracking.py): each
+    ping credits the elapsed interval since ``User.work_last_ping_at``, bucketed into
+    the company-local date at write time. Bucketing on write is what makes a session
+    that crosses local midnight split naturally (the 23:59 ping credits day D, the
+    00:01 ping credits D+1) and lets the report aggregate with no timezone math.
+
+    Distinct from ``User.work_start_time``/``work_end_time``, which are *schedule*
+    config for lead routing, not measurement.
+    """
+
+    company = models.ForeignKey(
+        "companies.Company",
+        on_delete=models.CASCADE,
+        related_name="work_day_summaries",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="work_days",
+    )
+    work_date = models.DateField(help_text="Local calendar date in the company's timezone.")
+    active_seconds = models.PositiveIntegerField(
+        default=0, help_text="Total measured usage seconds (web + mobile)."
+    )
+    web_seconds = models.PositiveIntegerField(default=0)
+    mobile_seconds = models.PositiveIntegerField(default=0)
+    first_activity_at = models.DateTimeField(help_text="UTC instant of the first credited ping.")
+    last_activity_at = models.DateTimeField(help_text="UTC instant of the most recent ping.")
+    ping_count = models.PositiveIntegerField(default=0)
+    idle_pause_count = models.PositiveSmallIntegerField(
+        default=0, help_text="Times the user resumed after exceeding the idle timeout."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounts_work_day_summary"
+        ordering = ["-work_date"]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "work_date"], name="uniq_work_day_per_user"),
+        ]
+        # The unique constraint's index serves the per-user "today" lookup; this one
+        # serves the company-wide range scan the Employees Report does.
+        # No active_seconds <= 86400 check: a DST fall-back day is legitimately 25h.
+        indexes = [
+            models.Index(fields=["company", "work_date"], name="workday_company_date_idx"),
+        ]
+
+    def __str__(self):
+        return f"WorkDaySummary(user={self.user_id}, date={self.work_date}, secs={self.active_seconds})"

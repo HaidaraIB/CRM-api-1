@@ -13,6 +13,7 @@ from .serializers import (
 )
 from .services import NotificationService
 from accounts.models import User
+from sync.cache import invalidate_badges
 import logging
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         """Mark a notification as read"""
         notification = self.get_object()
         notification.mark_as_read()
+        invalidate_badges(request.user.id)
         return success_response(message="Notification marked as read")
 
     @action(detail=True, methods=['delete'], url_path='delete')
@@ -84,6 +86,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         if notification.deleted_at is None:
             notification.deleted_at = timezone.now()
             notification.save(update_fields=['deleted_at'])
+            invalidate_badges(request.user.id)
         return success_response(message="Notification deleted")
 
     @action(detail=False, methods=['post'])
@@ -96,6 +99,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
                 deleted_at__isnull=True,
             )
         ).update(read=True, read_at=timezone.now())
+        invalidate_badges(request.user.id)
 
         return success_response(
             message=f"{count} notifications marked as read",

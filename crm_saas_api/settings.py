@@ -609,10 +609,23 @@ Q_CLUSTER = {
     "retry": 120,
     "queue_limit": 50,
     "bulk": 10,
-    "orm": "default",
     "catch_up": False,
     "sync": False,
 }
+
+# Broker: Redis in production, ORM as the fallback.
+#
+# The ORM broker makes the cluster poll Postgres in a loop for work that is almost
+# always absent — wasted queries on a box where the DB shares two cores with
+# Gunicorn. Redis is already required in production for the shared cache, so reuse
+# that connection via django_redis rather than configuring a second one.
+#
+# get_broker() (django_q/brokers/__init__.py) picks by precedence, so exactly one
+# of these keys may be present — setting both would silently keep the ORM broker.
+if _redis_url:
+    Q_CLUSTER["django_redis"] = "default"
+else:
+    Q_CLUSTER["orm"] = "default"
 
 # ============================================================================
 # Logging Configuration

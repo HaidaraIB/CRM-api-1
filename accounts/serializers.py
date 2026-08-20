@@ -305,6 +305,12 @@ class UserSerializer(serializers.ModelSerializer):
             "arrival_escalation_minutes": getattr(
                 company, "arrival_escalation_minutes", 5
             ),
+            "work_hours_tracking_enabled": getattr(
+                company, "work_hours_tracking_enabled", False
+            ),
+            "work_hours_idle_timeout_minutes": getattr(
+                company, "work_hours_idle_timeout_minutes", 10
+            ),
         }
 
         try:
@@ -1581,6 +1587,9 @@ class SupervisorSerializer(serializers.ModelSerializer):
             'can_manage_whatsapp_chats',
             'can_manage_whatsapp_calls',
             'can_delete_clients',
+            'notify_team_activity_status',
+            'notify_team_activity_action',
+            'notify_team_activity_overdue',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -1645,6 +1654,9 @@ class CreateSupervisorSerializer(serializers.Serializer):
     can_manage_whatsapp_chats = serializers.BooleanField(default=True)
     can_manage_whatsapp_calls = serializers.BooleanField(default=True)
     can_delete_clients = serializers.BooleanField(default=False)
+    notify_team_activity_status = serializers.BooleanField(default=False)
+    notify_team_activity_action = serializers.BooleanField(default=False)
+    notify_team_activity_overdue = serializers.BooleanField(default=False)
 
     def validate_username(self, value):
         if User.objects.filter(username__iexact=value).exists():
@@ -1692,6 +1704,9 @@ class CreateSupervisorSerializer(serializers.Serializer):
             'can_manage_settings': validated_data.pop('can_manage_settings', False),
             'can_manage_whatsapp_chats': validated_data.pop('can_manage_whatsapp_chats', True),
             'can_manage_whatsapp_calls': validated_data.pop('can_manage_whatsapp_calls', True),
+            'notify_team_activity_status': validated_data.pop('notify_team_activity_status', False),
+            'notify_team_activity_action': validated_data.pop('notify_team_activity_action', False),
+            'notify_team_activity_overdue': validated_data.pop('notify_team_activity_overdue', False),
         }
         filter_inventory_permissions_for_company(perms, company)
         # Only company admins may grant delete permission (Create is admin-only via CanManageSupervisors).
