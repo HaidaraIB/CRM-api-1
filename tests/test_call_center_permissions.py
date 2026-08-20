@@ -115,6 +115,46 @@ class TestCallCenterNonLeadAPIDenied:
 
 
 @pytest.mark.django_db
+class TestCallCenterLeadSettingsReadOnly:
+    """Lead search/create needs these lists (status, tag and channel pickers on the
+    create-lead form), so GET must succeed — but the role never edits settings."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/settings/statuses/",
+            "/api/v1/settings/stages/",
+            "/api/v1/settings/tags/",
+            "/api/v1/settings/call-methods/",
+            "/api/v1/settings/channels/",
+        ],
+    )
+    def test_can_read_lead_settings(self, authenticated_call_center, path):
+        response = authenticated_call_center.get(path)
+        assert response.status_code == status.HTTP_200_OK
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/settings/statuses/",
+            "/api/v1/settings/stages/",
+            "/api/v1/settings/tags/",
+            "/api/v1/settings/call-methods/",
+            "/api/v1/settings/channels/",
+        ],
+    )
+    def test_cannot_write_lead_settings(self, authenticated_call_center, company, path):
+        response = authenticated_call_center.post(
+            path, {"name": "Nope", "company": company.id}, format="json"
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_company_settings_still_denied(self, authenticated_call_center):
+        response = authenticated_call_center.get("/api/v1/settings/system/")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
 class TestCallCenterWhatsAppDenied:
     def test_whatsapp_chats_denied(self, call_center_user):
         from integrations.whatsapp_access import (

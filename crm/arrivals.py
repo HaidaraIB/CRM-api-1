@@ -203,6 +203,7 @@ def acknowledge_arrival(*, arrival, actor):
 
         announced_by = locked.announced_by
         if announced_by is not None and announced_by.id != actor.id:
+            lead_name = locked.client.name
             transaction.on_commit(
                 lambda: NotificationService.send_notification(
                     user=announced_by,
@@ -211,6 +212,7 @@ def acknowledge_arrival(*, arrival, actor):
                         "kind": "lead_arrival_ack",
                         "arrival_id": locked.id,
                         "lead_id": locked.client_id,
+                        "lead_name": lead_name,
                         "client_id": str(locked.client_id),
                         "invalidate": "crm:arrivals",
                     },

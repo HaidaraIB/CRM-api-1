@@ -195,6 +195,30 @@ class TestArrivalAcknowledge:
         assert second_ack.status_code == status.HTTP_200_OK
         assert api_body(second_ack)["acknowledged_at"] == acknowledged_at
 
+    def test_acknowledge_notifies_announcer_with_lead_name_in_body(
+        self, api_client, authenticated_call_center, company, employee_user, unassigned_client, subscription,
+        call_center_user,
+    ):
+        from notifications.models import Notification, NotificationType
+
+        unassigned_client.assigned_to = employee_user
+        unassigned_client.save(update_fields=["assigned_to"])
+        announce = authenticated_call_center.post(
+            "/api/v1/lead-arrivals/", {"client": unassigned_client.id}, format="json",
+        )
+        arrival_id = api_body(announce)["id"]
+
+        api_client.force_authenticate(user=employee_user)
+        api_client.post(f"/api/v1/lead-arrivals/{arrival_id}/acknowledge/")
+
+        ack_notification = Notification.objects.get(
+            user=call_center_user,
+            type=NotificationType.CUSTOMER_ARRIVAL_ACKNOWLEDGED,
+        )
+        assert ack_notification.data.get("lead_name") == unassigned_client.name
+        assert unassigned_client.name in ack_notification.body
+        assert ack_notification.body.strip() != ""
+
     def test_unrelated_employee_cannot_acknowledge(
         self, api_client, authenticated_call_center, company, employee_user, unassigned_client, subscription,
     ):

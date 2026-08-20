@@ -145,6 +145,8 @@ class IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee(permissions.BasePerm
     - Supervisor with can_manage_settings: full access.
     - Supervisor with can_manage_leads only: read (GET) so Leads/Activities pages can load.
     - Employee: read-only.
+    - Call center: read-only — the lead search/create surface needs these lists, and
+      DenyCallCenterNonLeadAPI already scopes the role to "lead APIs and related settings".
     """
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
@@ -158,6 +160,8 @@ class IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee(permissions.BasePerm
                 return True
             return False
         if request.user.is_data_entry():
+            return request.method in permissions.SAFE_METHODS
+        if request.user.is_call_center():
             return request.method in permissions.SAFE_METHODS
         if request.user.is_employee() or request.user.is_doctor() or request.user.is_reception():
             return request.method in permissions.SAFE_METHODS
