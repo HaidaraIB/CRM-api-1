@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
 from .models import Notification, NotificationType, NotificationSettings
+from .tasks import enqueue_push, push_queue_enabled
 from .translations import get_notification_text, normalize_notification_language
 from .fcm_android_channels import (
     android_notification_channel_id,
@@ -202,6 +203,53 @@ class NotificationService:
         if not allow_push:
             return False
 
+        # The inbox row above is already written, so delivery — the only part of this
+        # that touches the network — can be handed to a worker instead of holding the
+        # request open against Meta/Google.
+        #
+        # Off by default: with PUSH_QUEUE_ENABLED unset this calls straight through
+        # and behaves exactly as it did before. Turning it on requires a running
+        # qcluster; the flag is what lets the code deploy and the cluster start in
+        # either order without a window where pushes enqueue to nobody.
+        if push_queue_enabled():
+            if enqueue_push(
+                user_id=user.pk,
+                notification_type=notification_type,
+                title=title,
+                body=body,
+                data=data,
+                image_url=image_url,
+            ):
+                return True
+            # Broker unreachable. Fall through to inline delivery rather than drop
+            # the push — a slow request is recoverable, a silent loss is not.
+
+        return cls.deliver_push(
+            user,
+            notification_type=notification_type,
+            title=title,
+            body=body,
+            data=data,
+            image_url=image_url,
+        )
+
+    @classmethod
+    def deliver_push(
+        cls,
+        user: "AbstractUser",
+        notification_type: str,
+        title: Optional[str] = None,
+        body: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+        image_url: Optional[str] = None,
+    ) -> bool:
+        """
+        Send the FCM push for a notification whose inbox row is already persisted.
+
+        Split out of send_notification so the same code path runs inline or on the
+        django-q cluster. It therefore takes everything it needs as plain arguments
+        and derives nothing from request state — the worker has no request.
+        """
         if not cls.initialize():
             logger.warning(
                 "Firebase not initialized. Inbox saved; push not sent for %s.",

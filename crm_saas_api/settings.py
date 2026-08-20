@@ -613,6 +613,18 @@ Q_CLUSTER = {
     "sync": False,
 }
 
+# Send FCM pushes through the cluster instead of inline in the request.
+#
+# Default off, and deliberately a separate switch from the broker choice above: the
+# code can deploy while no cluster is running, and the flag can be turned off again
+# without a redeploy if the cluster misbehaves. Only turn this on once `qcluster` is
+# running, or pushes will queue with nothing draining them.
+PUSH_QUEUE_ENABLED = os.getenv("PUSH_QUEUE_ENABLED", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 # Broker: Redis in production, ORM as the fallback.
 #
 # The ORM broker makes the cluster poll Postgres in a loop for work that is almost

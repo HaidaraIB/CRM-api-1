@@ -149,7 +149,34 @@ TIKTOK_CLIENT_SECRET=your-tiktok-client-secret
 
 # Shared cache across Gunicorn workers (required for Team Chat typing/presence)
 REDIS_URL=redis://127.0.0.1:6379/0
+
+# Send FCM pushes on the django-q cluster instead of inline in the request.
+# Leave unset until crm-qcluster.service is running — see "Queued push delivery".
+# PUSH_QUEUE_ENABLED=true
 ```
+
+### الخطوة 8ب: تشغيل عامل المهام (Queued push delivery)
+
+إرسال إشعارات FCM كان يتم داخل طلب Gunicorn نفسه، أي أن أي بطء من Meta/Google
+يحجز عامل Gunicorn كاملاً. الآن يمكن تنفيذه على عامل منفصل (django-q cluster).
+
+الترتيب مهم: **شغّل العامل أولاً، ثم فعّل الراية.** لو فُعّلت الراية بدون عامل،
+ستتراكم الإشعارات في الطابور بلا من ينفّذها.
+
+```bash
+# 1) ثبّت الخدمة وشغّلها
+sudo cp /var/www/crm-api/deploy/crm-qcluster.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now crm-qcluster
+sudo systemctl status crm-qcluster --no-pager
+
+# 2) بعد التأكد أنها تعمل، فعّل الراية
+echo "PUSH_QUEUE_ENABLED=true" >> /var/www/crm-api/.env
+sudo systemctl restart crm-api
+```
+
+للتراجع: احذف السطر من `.env` وأعد تشغيل `crm-api`. لا حاجة لإعادة نشر الكود —
+الإرسال يعود فوراً إلى الوضع المباشر (inline).
 
 #### 4.2 توليد SECRET_KEY
 ```bash

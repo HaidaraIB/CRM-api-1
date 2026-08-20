@@ -1,0 +1,39 @@
+; django-q2 worker cluster for CRM API.
+;
+; Runs the outbound push sends that used to happen inline in a Gunicorn request.
+; Mirrors crm-api.service (same user, venv and WorkingDirectory) so both processes
+; read the same .env and resolve the same paths.
+;
+; Install:
+;   sudo cp /var/www/crm-api/deploy/crm-qcluster.service /etc/systemd/system/
+;   sudo systemctl daemon-reload
+;   sudo systemctl enable --now crm-qcluster
+;
+; This must be running BEFORE PUSH_QUEUE_ENABLED is set to true, otherwise pushes
+; enqueue with nothing draining them.
+
+[Unit]
+Description=CRM API django-q cluster (queued push delivery)
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/crm-api
+; Matches crm-api.service: /usr/bin must stay on PATH so system ffmpeg is visible.
+Environment="PATH=/var/www/crm-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/var/www/crm-api/venv/bin/python /var/www/crm-api/manage.py qcluster
+
+Restart=always
+RestartSec=5
+
+; A push is a transient notification, not a record — the inbox row is already
+; committed by the time anything is queued. If the cluster wedges, restarting it
+; is always preferable to letting it sit half-alive.
+WatchdogSec=0
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
