@@ -1,7 +1,12 @@
-"""Messaging Center is owner-only; staff keep read access to templates for Chats.
+"""Messaging Center template authoring and instant-send campaign batches are
+owner-only; staff keep read access to templates for Chats.
 
-The UI hides the page from employees, but the endpoints behind it are what actually
-protect company-wide message logs, campaign batches, and template authoring.
+Restricted staff roles (Employee, Doctor, Data Entry, Reception, Call Center)
+can now open Messaging Center too, but only through the submit-for-approval
+flow in integrations/tests/test_campaign_requests.py - they can read their own
+message logs (see test_employee_can_read_own_message_logs below) but still
+cannot author templates, start an instant-send campaign batch, or read call
+error logs.
 """
 
 import pytest
@@ -59,9 +64,10 @@ def test_employee_cannot_sync_templates_from_meta(authenticated_employee):
 
 
 @pytest.mark.django_db
-def test_employee_cannot_read_company_message_logs(authenticated_employee):
+def test_employee_can_read_own_message_logs(authenticated_employee):
+    """Scoped to their own sends only - see test_campaign_requests.py for the scoping test."""
     res = authenticated_employee.get(reverse('message_logs'))
-    assert res.status_code == 403
+    assert res.status_code == 200
 
 
 @pytest.mark.django_db

@@ -139,6 +139,18 @@ class User(AbstractUser):
     def is_supervisor(self):
         return self.role == Role.SUPERVISOR.value
 
+    def requires_campaign_approval(self) -> bool:
+        """
+        True for every staff role except Owner (admin), Super Admin, and Supervisor.
+        These roles may only submit Messaging Center bulk-send requests scoped to
+        their own assigned leads, subject to owner approval before anything sends.
+        """
+        return self.role not in (
+            Role.ADMIN.value,
+            Role.SUPER_ADMIN.value,
+            Role.SUPERVISOR.value,
+        )
+
     def has_role(self, role):
         return self.role == role
 

@@ -41,12 +41,26 @@ class NotificationType(models.TextChoices):
     WHATSAPP_SEND_FAILED = 'whatsapp_send_failed', 'WhatsApp Send Failed'
     WHATSAPP_WAITING_RESPONSE = 'whatsapp_waiting_response', 'WhatsApp Waiting Response'
     
-    # Campaign Notifications
+    # Campaign Notifications (lead-source / marketing-attribution Campaign)
     CAMPAIGN_PERFORMANCE = 'campaign_performance', 'Campaign Performance'
     CAMPAIGN_LOW_PERFORMANCE = 'campaign_low_performance', 'Campaign Low Performance'
     CAMPAIGN_STOPPED = 'campaign_stopped', 'Campaign Stopped'
     CAMPAIGN_BUDGET_ALERT = 'campaign_budget_alert', 'Campaign Budget Alert'
-    
+
+    # Messaging Center bulk-send campaign requests (distinct from the above)
+    MESSAGE_CAMPAIGN_REQUEST_SUBMITTED = (
+        'message_campaign_request_submitted', 'Message Campaign Request Submitted'
+    )
+    MESSAGE_CAMPAIGN_REQUEST_APPROVED = (
+        'message_campaign_request_approved', 'Message Campaign Request Approved'
+    )
+    MESSAGE_CAMPAIGN_REQUEST_REJECTED = (
+        'message_campaign_request_rejected', 'Message Campaign Request Rejected'
+    )
+    MESSAGE_CAMPAIGN_REQUEST_COMPLETED = (
+        'message_campaign_request_completed', 'Message Campaign Request Completed'
+    )
+
     # Team & Tasks
     TASK_CREATED = 'task_created', 'Task Created'
     TASK_REMINDER = 'task_reminder', 'Task Reminder'

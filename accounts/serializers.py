@@ -60,6 +60,7 @@ class UserSerializer(serializers.ModelSerializer):
     supervisor_permissions = serializers.SerializerMethodField()
     is_online = serializers.SerializerMethodField()
     is_company_owner = serializers.SerializerMethodField()
+    requires_campaign_approval = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -101,6 +102,7 @@ class UserSerializer(serializers.ModelSerializer):
             "can_delete_clients",
             "whatsapp_chat_enabled",
             "whatsapp_call_enabled",
+            "requires_campaign_approval",
         ]
         read_only_fields = [
             "id",
@@ -258,7 +260,10 @@ class UserSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.BooleanField())
     def get_is_company_owner(self, obj):
         return is_company_owner(obj)
-    
+
+    def get_requires_campaign_approval(self, obj):
+        return obj.requires_campaign_approval()
+
     def get_company(self, obj):
         """Return full company object with subscription information"""
         if not obj.company:

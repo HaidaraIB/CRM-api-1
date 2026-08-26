@@ -678,6 +678,23 @@ class MessageSendSource(models.TextChoices):
     AUTO_WELCOME = "auto_welcome", "Auto welcome"
 
 
+class CampaignBatchStatus(models.TextChoices):
+    """Lifecycle of a MessageCampaignBatch.
+
+    SENT is the default for owner/supervisor instant-send batches (unchanged
+    legacy behavior - the client-side loop sends immediately, then logs the
+    batch). The rest of the states belong to the restricted-staff
+    submit-for-approval flow.
+    """
+    SENT = "sent", "Sent"
+    PENDING_APPROVAL = "pending_approval", "Pending approval"
+    APPROVED = "approved", "Approved"
+    REJECTED = "rejected", "Rejected"
+    SENDING = "sending", "Sending"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+
+
 class MessageCampaignBatch(models.Model):
     """One bulk send action from Messaging Center → Message Campaign."""
 
@@ -707,11 +724,51 @@ class MessageCampaignBatch(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # --- Approval workflow (restricted staff submit-for-approval flow) ---
+    status = models.CharField(
+        max_length=20,
+        choices=CampaignBatchStatus.choices,
+        default=CampaignBatchStatus.SENT,
+    )
+    requires_approval = models.BooleanField(
+        default=False,
+        help_text="True only for the restricted-staff submit-for-approval flow.",
+    )
+    requested_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requested_campaign_batches",
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_campaign_batches",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, default="")
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    resubmitted_at = models.DateTimeField(null=True, blank=True)
+    audience_snapshot = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="[{client_id, phone_number, name}] frozen at submit/resubmit time.",
+    )
+    message_payload = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="SMS: {body}. WhatsApp: {template_id, phone_number_id, body_parameters}.",
+    )
+
     class Meta:
         db_table = "message_campaign_batches"
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["company", "created_at"]),
+            models.Index(fields=["company", "status", "-created_at"]),
         ]
 
     def __str__(self):

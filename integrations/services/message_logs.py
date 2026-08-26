@@ -155,8 +155,12 @@ def _matches_status(entry: dict, status: str) -> bool:
     return entry.get("status") == status
 
 
-def fetch_message_logs(company, params) -> dict:
-    """Return paginated outbound campaign message log entries."""
+def fetch_message_logs(company, params, *, restrict_to_user_id=None) -> dict:
+    """Return paginated outbound campaign message log entries.
+
+    restrict_to_user_id: when set (restricted staff roles), only that user's
+    own sends are returned - company-wide history stays owner/supervisor only.
+    """
     channel = (params.get("channel") or "all").strip().lower()
     status = (params.get("status") or "all").strip().lower()
     search = (params.get("search") or "").strip()
@@ -192,6 +196,11 @@ def fetch_message_logs(company, params) -> dict:
     fail_qs = MessageCampaignFailure.objects.filter(batch__company=company).select_related(
         "client", "batch"
     )
+
+    if restrict_to_user_id:
+        sms_qs = sms_qs.filter(created_by_id=restrict_to_user_id)
+        wa_qs = wa_qs.filter(created_by_id=restrict_to_user_id)
+        fail_qs = fail_qs.filter(batch__requested_by_id=restrict_to_user_id)
 
     if not include_sms:
         sms_qs = sms_qs.none()

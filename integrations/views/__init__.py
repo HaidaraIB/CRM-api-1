@@ -6,6 +6,14 @@ from .campaign_batches import (
     create_campaign_batch,
     record_campaign_failure,
 )
+from .campaign_requests import (
+    campaign_requests_approve,
+    campaign_requests_detail,
+    campaign_requests_list_create,
+    campaign_requests_pending,
+    campaign_requests_reject,
+    campaign_requests_resubmit,
+)
 from .templates_whatsapp import (
     MessageTemplateViewSet,
     whatsapp_conversations_list,

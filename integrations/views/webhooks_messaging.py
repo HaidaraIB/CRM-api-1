@@ -1222,104 +1222,6 @@ def whatsapp_send_template(request):
             code='whatsapp_no_access_token',
         )
 
-    language = (getattr(template, 'language', None) or 'en_US').strip() or 'en_US'
-    meta_name = meta_slug_template_name(template.name, template.id)
-    template_block = {
-        'name': meta_name,
-        'language': {'code': language},
-    }
-    if fill_client is not None:
-        components = build_whatsapp_template_components_for_client(
-            template,
-            fill_client,
-            body_param_values=param_values if param_values else None,
-            sender_name=_user_display_name(request.user),
-        )
-        if components:
-            template_block['components'] = components
-    elif param_values:
-        template_block['components'] = [
-            {
-                'type': 'body',
-                'parameters': [{'type': 'text', 'text': p[:1024]} for p in param_values],
-            }
-        ]
-
-    url = f"{META_GRAPH_API_BASE_URL}/{wa_account.phone_number_id}/messages"
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-    payload = {
-        'messaging_product': 'whatsapp',
-        'recipient_type': 'individual',
-        'to': to,
-        'type': 'template',
-        'template': template_block,
-    }
-    redacted_to = _redact_phone_e164(to)
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=15)
-    except requests.RequestException as e:
-        logger.warning(
-            "WhatsApp template send request error: phone_number_id=%s waba_id=%s to=%s error=%s",
-            wa_account.phone_number_id,
-            wa_account.waba_id,
-            redacted_to,
-            e,
-        )
-        return error_response(
-            "WhatsApp API request failed.",
-            code="bad_request",
-            details={"error": str(e), "graph_http_status": None},
-        )
-
-    graph_status = resp.status_code
-    if graph_status >= 400:
-        try:
-            err_body = resp.json()
-        except Exception:
-            err_body = {'error': getattr(resp, 'text', '') or str(resp)}
-        if isinstance(err_body, dict):
-            err_body['graph_http_status'] = graph_status
-            err_body['crm_template_name'] = meta_name
-            err_body['crm_template_language'] = language
-            err_body['crm_waba_id'] = wa_account.waba_id
-            err_body['crm_phone_number_id'] = wa_account.phone_number_id
-        else:
-            err_body = {'error': str(err_body), 'graph_http_status': graph_status}
-        logger.warning(
-            "WhatsApp template send failed: graph_status=%s phone_number_id=%s waba_id=%s "
-            "template=%s language=%s to=%s body=%s",
-            graph_status,
-            wa_account.phone_number_id,
-            wa_account.waba_id,
-            meta_name,
-            language,
-            redacted_to,
-            err_body,
-        )
-        return error_response(
-            "WhatsApp API request failed.",
-            code=_api_code_from_graph_error(err_body),
-            details=err_body if isinstance(err_body, dict) else {"error": str(err_body)},
-        )
-
-    try:
-        data = resp.json()
-    except ValueError:
-        return error_response(
-            "WhatsApp API returned invalid JSON.",
-            code="bad_request",
-            details={"graph_http_status": graph_status},
-        )
-
-    wam_id = (data.get('messages') or [{}])[0].get('id') if isinstance(data.get('messages'), list) else None
-    logger.info(
-        "WhatsApp template send ok: graph_status=%s phone_number_id=%s to=%s wam_id=%s template=%s",
-        graph_status,
-        wa_account.phone_number_id,
-        redacted_to,
-        wam_id,
-        meta_name,
-    )
     display = (wa_account.display_phone_number or '').replace(' ', '').replace('-', '')
     if display.startswith('+1555') or display.startswith('1555'):
         logger.warning(
@@ -1327,48 +1229,33 @@ def whatsapp_send_template(request):
             "Meta Developer Console (WhatsApp > API Setup) or complete Business Verification for "
             "production delivery.",
             wa_account.display_phone_number or display,
-            redacted_to,
+            _redact_phone_e164(to),
         )
 
-    increment_monthly_usage(company, "monthly_whatsapp_messages", requested_delta=1)
-    if wa_account.integration_account_id:
-        IntegrationLog.objects.create(
-            account_id=wa_account.integration_account_id,
-            action='whatsapp_template_sent',
-            status='success',
-            message=f'Template {meta_name} sent to {to}',
-            response_data=data,
-        )
+    from integrations.views.campaign_batches import resolve_campaign_batch
+    from integrations.services.whatsapp_send import send_whatsapp_template_message
 
-    preview = _template_outbound_log_body(template, param_values if param_values else None)
-    client = _resolve_whatsapp_client(
+    resolved_batch = resolve_campaign_batch(company, campaign_batch_id, send_source)
+    ok, wam_id, error_key, error_message, details = send_whatsapp_template_message(
         company,
-        client_id,
-        to,
-        integration_account=wa_account.integration_account,
-        create_if_missing=True,
+        wa_account,
+        to=to,
+        template=template,
+        param_values=param_values,
+        fill_client=fill_client,
+        sender_name=_user_display_name(request.user),
+        created_by=request.user,
+        send_source=send_source,
+        campaign_batch=resolved_batch,
     )
-    if client:
-        try:
-            from integrations.views.campaign_batches import resolve_campaign_batch
+    if not ok:
+        return error_response(
+            error_message or "WhatsApp API request failed.",
+            code=error_key or "bad_request",
+            details=details,
+        )
 
-            campaign_batch = resolve_campaign_batch(company, campaign_batch_id, send_source)
-            LeadWhatsAppMessage.objects.create(
-                client=client,
-                phone_number=to,
-                body=preview[:65535],
-                direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
-                whatsapp_message_id=wam_id,
-                phone_number_id=wa_account.phone_number_id,
-                delivery_status='sent',
-                created_by=request.user,
-                send_source=send_source,
-                campaign_batch=campaign_batch,
-            )
-        except Exception:
-            logger.exception("Failed to persist outbound WhatsApp template client_id=%s", client.id)
-
-    return success_response(data=data)
+    return success_response(data=details)
 
 
 # ==================== TikTok Lead Gen Webhook ====================

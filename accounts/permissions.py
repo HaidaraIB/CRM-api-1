@@ -84,6 +84,32 @@ class IsAdmin(permissions.BasePermission):
         )
 
 
+class CanSubmitCampaignRequest(permissions.BasePermission):
+    """
+    Any authenticated staff member of a company may submit/resubmit/list their own
+    Messaging Center campaign requests. Audience scoping (own leads only for
+    restricted roles) and role branching (owner/supervisor use the instant-send
+    flow instead) are enforced in the view, not here.
+    """
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.company_id
+        )
+
+
+class CanReviewCampaignRequest(permissions.BasePermission):
+    """Only the company owner may approve/reject a pending campaign request."""
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.company_id
+            and request.user.is_admin()
+        )
+
+
 class CanManageSupervisors(permissions.BasePermission):
     """Only company admin can manage supervisors (grant/revoke permissions)."""
     def has_permission(self, request, view):
