@@ -392,6 +392,11 @@ class ClientEvent(models.Model):
         null=True,
         help_text="Additional details about the event"
     )
+    reason = models.TextField(
+        blank=True,
+        null=True,
+        help_text="User-supplied justification, e.g. why a lead was moved to this status",
+    )
     created_by = models.ForeignKey(
         "accounts.User",
         on_delete=models.SET_NULL,

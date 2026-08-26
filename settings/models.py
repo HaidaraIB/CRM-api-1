@@ -102,6 +102,10 @@ class LeadStatus(models.Model):
         blank=True,
         help_text="If set, leads in this status longer than this many hours are deleted by a scheduled job.",
     )
+    requires_change_reason = models.BooleanField(
+        default=False,
+        help_text="If set, moving a lead into this status requires a written reason.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

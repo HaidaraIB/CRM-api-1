@@ -307,6 +307,7 @@ class ClientEventSerializer(serializers.ModelSerializer):
             "old_value",
             "new_value",
             "notes",
+            "reason",
             "created_by",
             "created_by_username",
             "created_at",
@@ -417,6 +418,16 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
     location_latitude = QuantizedCoordinateField(required=False, allow_null=True)
     location_longitude = QuantizedCoordinateField(required=False, allow_null=True)
     meta_qualification_error = serializers.SerializerMethodField()
+    # Write-only, not a model field: consumed in validate()/update() and stored on
+    # the resulting status_change ClientEvent.
+    status_change_reason = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        trim_whitespace=True,
+        max_length=1000,
+    )
 
     class Meta:
         model = Client
@@ -468,6 +479,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
             "last_feedback",
             "last_stage",
             "last_feedback_at",
+            "status_change_reason",
         ]
         read_only_fields = [
             "id",
@@ -661,6 +673,35 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                 )
             attrs["interested_developer"] = proj.developer
 
+    def _validate_status_change_reason(self, attrs):
+        """Statuses flagged in settings demand a written reason before a lead moves into them.
+
+        Only user-driven *changes* are covered: creation picks a status without any
+        prior one to justify, and automations (visit -> Visited, inbound leads,
+        scheduled jobs) write the FK directly without going through this serializer.
+        """
+        if self.instance is None or "status" not in attrs:
+            return
+
+        new_status = attrs["status"]
+        if new_status is None or new_status == self.instance.status:
+            return
+        if not getattr(new_status, "requires_change_reason", False):
+            return
+
+        reason = attrs.get("status_change_reason")
+        if reason and reason.strip():
+            return
+
+        raise serializers.ValidationError(
+            {
+                "status_change_reason": [
+                    "A reason is required to move a lead to this status."
+                ],
+                "error_key": "status_change_reason_required",
+            }
+        )
+
     def validate(self, attrs):
         budget = attrs["budget"] if "budget" in attrs else (self.instance.budget if self.instance else None)
         budget_max = (
@@ -679,6 +720,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
 
         self._validate_interested_real_estate(attrs)
         self._validate_location_pair(attrs)
+        self._validate_status_change_reason(attrs)
 
         request = self.context.get("request")
         company = None
@@ -732,6 +774,9 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         phone_numbers_data = self.initial_data.get("phone_numbers", [])
         # M2M cannot be passed to Client.objects.create() — apply after the row exists
         tags_data = validated_data.pop("tags", None)
+        # Accepted but unused on create: picking an initial status is not a "change",
+        # so there is nothing to justify and no status_change event to attach it to.
+        validated_data.pop("status_change_reason", None)
 
         # Don't auto-assign to current user unless explicitly provided or auto_assign is enabled
         # The signal will handle auto-assignment if enabled
@@ -773,6 +818,9 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
         phone_numbers_data = self.initial_data.get("phone_numbers", None)
         # M2M cannot be assigned via setattr() — apply after instance.save()
         tags_data = validated_data.pop("tags", None)
+        # Not a model field — validated in _validate_status_change_reason(), stored
+        # on the status_change ClientEvent below.
+        status_change_reason = validated_data.pop("status_change_reason", None)
         request = self.context.get('request')
         user = request.user if request else None
 
@@ -794,7 +842,8 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                     'event_type': 'status_change',
                     'old_value': old_status_name,
                     'new_value': new_status_name,
-                    'notes': f"Status changed from {old_status_name} to {new_status_name}"
+                    'notes': f"Status changed from {old_status_name} to {new_status_name}",
+                    'reason': (status_change_reason or '').strip() or None,
                 })
 
         if 'assigned_to' in validated_data:
@@ -925,6 +974,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                 old_value=change['old_value'],
                 new_value=change['new_value'],
                 notes=change['notes'],
+                reason=change.get('reason'),
                 created_by=user
             )
 

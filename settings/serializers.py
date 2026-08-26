@@ -129,6 +129,7 @@ class LeadStatusSerializer(serializers.ModelSerializer):
             "is_active",
             "automation_key",
             "auto_delete_after_hours",
+            "requires_change_reason",
             "created_at",
             "updated_at",
         ]
@@ -159,6 +160,7 @@ class LeadStatusListSerializer(serializers.ModelSerializer):
             "is_active",
             "automation_key",
             "auto_delete_after_hours",
+            "requires_change_reason",
             "created_at",
         ]
         read_only_fields = ["automation_key"]
