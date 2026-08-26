@@ -3,7 +3,7 @@ Map notification_type (DB / FCM data `type`) to Android notification channel id.
 
 Must stay in sync with crm_mobile `NotificationService._getChannelForType`
 channel ids: general, leads, deals, tasks, reminders, whatsapp, campaigns,
-reports, system, tenant_chat, team_activity.
+reports, system, tenant_chat, team_activity, arrival.
 
 For `team_activity`, the owner feed reuses the sound/channel of the related
 category based on `data.action` (e.g. call_logged -> tasks, deal_won -> deals).
@@ -31,6 +31,24 @@ _TEAM_ACTIVITY_ACTION_CHANNELS: dict[str, str] = {
     # Deals
     "deal_won": "deals",
 }
+
+
+# Walk-in arrivals announced from the reception desk (CALL_CENTER role). These ring
+# like an incoming call instead of chiming like a message — somebody has to walk out
+# and greet a customer standing at the desk. `customer_arrival_acknowledged` is
+# deliberately excluded: it is an after-the-fact receipt, not a summons.
+ARRIVAL_RING_NOTIFICATION_TYPES = frozenset(
+    {
+        "customer_arrived",
+        "customer_arrival_escalated",
+        "customer_arrival_assignee_off_shift",
+    }
+)
+
+
+def is_arrival_ring_notification_type(notification_type: str) -> bool:
+    """True for walk-in arrival pushes that must ring (call-style) on the device."""
+    return (notification_type or "").strip() in ARRIVAL_RING_NOTIFICATION_TYPES
 
 
 def team_activity_channel_for_action(action: Optional[str]) -> str:
@@ -103,6 +121,10 @@ def android_notification_channel_id(
     if not t:
         return "general"
 
+    # --- Walk-in arrivals (ringtone channel, not the leads chime) ---
+    if t in ARRIVAL_RING_NOTIFICATION_TYPES:
+        return "arrival"
+
     # --- Leads (core) ---
     if t in {
         "new_lead",
@@ -114,10 +136,7 @@ def android_notification_channel_id(
         "lead_transferred",
         "lead_updated",
         "lead_reminder",
-        "customer_arrived",
         "customer_arrival_acknowledged",
-        "customer_arrival_escalated",
-        "customer_arrival_assignee_off_shift",
     }:
         return "leads"
 

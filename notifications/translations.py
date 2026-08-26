@@ -79,11 +79,11 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
     'customer_arrived': {
         'ar': {
-            'title': 'وصل العميل',
+            'title': 'استقبال زبون',
             'body': 'وصل العميل {lead_name} وينتظر في الاستقبال'
         },
         'en': {
-            'title': 'Customer Arrived',
+            'title': 'Customer Reception',
             'body': '{lead_name} has arrived and is waiting at reception'
         }
     },

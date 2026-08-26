@@ -15,6 +15,7 @@ from .fcm_android_channels import (
     android_notification_channel_id,
     android_notification_raw_sound_basename,
     ios_notification_sound_filename,
+    is_arrival_ring_notification_type,
     tenant_chat_apns_collapse_id,
     tenant_chat_ios_sound_filename,
 )
@@ -292,6 +293,12 @@ class NotificationService:
             # pushes are unreliable on iOS and never play custom sounds from local handlers.
             tenant_chat_data_only = (data or {}).get("kind") == "tenant_chat"
 
+            # Walk-in arrivals: Android data-only for the same reason — a system-posted
+            # FCM notification can only play the channel sound once, while the Flutter
+            # handler posts it with FLAG_INSISTENT so the ringtone loops until the
+            # recipient reacts. iOS keeps the APNs alert (time-sensitive + custom sound).
+            arrival_ring = is_arrival_ring_notification_type(notification_type)
+
             # The payload is identical for every one of this user's devices — only the
             # token differed. So it is built once and sent as a single multicast.
             # Building it per token and calling messaging.send() in a loop cost one
@@ -333,6 +340,30 @@ class NotificationService:
                     "FCM tenant_chat android=data-only ios_sound=%s collapse=%s",
                     tenant_chat_ios_sound_filename(),
                     collapse_id or "(none)",
+                )
+            elif arrival_ring:
+                ios_sound = ios_notification_sound_filename(notification_type)
+                multicast = messaging.MulticastMessage(
+                    tokens=user_tokens,
+                    data=message_data,
+                    android=messaging.AndroidConfig(priority="high"),
+                    apns=messaging.APNSConfig(
+                        headers={"apns-push-type": "alert", "apns-priority": "10"},
+                        payload=messaging.APNSPayload(
+                            aps=messaging.Aps(
+                                alert=messaging.ApsAlert(title=title, body=body),
+                                sound=ios_sound,
+                                custom_data={
+                                    "interruption-level": "time-sensitive",
+                                },
+                            ),
+                        ),
+                    ),
+                )
+                logger.info(
+                    "FCM arrival ring android=data-only ios_sound=%s type=%s",
+                    ios_sound or "(default)",
+                    notification_type,
                 )
             else:
                 # Android 8+: system-displayed FCM uses the *channel* sound, not the
