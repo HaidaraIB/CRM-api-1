@@ -2,7 +2,7 @@ from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_serializer
 
 from accounts.models import Role
-from crm.availability import user_accepts_new_assignments
+from crm.availability import assignment_block_error, assignment_block_reason
 
 # Medical clinics: manual assignee may be clinical staff or company leadership.
 MEDICAL_ASSIGNEE_ROLES = frozenset(
@@ -758,13 +758,10 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                     and self.instance.assigned_to_id is not None
                     and self.instance.assigned_to_id == assignee.pk
                 )
-                if not same_as_before and not user_accepts_new_assignments(assignee):
-                    raise serializers.ValidationError(
-                        {
-                            "assigned_to": "Cannot assign to this user on their weekly day off.",
-                            "error_key": "employee_weekly_day_off",
-                        }
-                    )
+                if not same_as_before:
+                    reason = assignment_block_reason(assignee)
+                    if reason:
+                        raise serializers.ValidationError(assignment_block_error(reason))
         return attrs
 
     def create(self, validated_data):
@@ -1179,13 +1176,12 @@ class DealSerializer(CamelToSnakeMixin, serializers.ModelSerializer):
                     and self.instance.employee_id is not None
                     and self.instance.employee_id == emp.pk
                 )
-                if not same_as_before and not user_accepts_new_assignments(emp):
-                    raise serializers.ValidationError(
-                        {
-                            "employee": "Cannot assign to this user on their weekly day off.",
-                            "error_key": "employee_weekly_day_off",
-                        }
-                    )
+                if not same_as_before:
+                    reason = assignment_block_reason(emp)
+                    if reason:
+                        raise serializers.ValidationError(
+                            assignment_block_error(reason, field="employee")
+                        )
         return attrs
 
     def create(self, validated_data):

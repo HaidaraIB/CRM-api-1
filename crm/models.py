@@ -304,7 +304,8 @@ class Client(models.Model):
 
     def save(self, *args, **kwargs):
         """
-        Enforce weekly day off on assignee changes. bulk_update() bypasses save(); use normal
+        Enforce assignee availability (time off, weekly day off) on assignee changes.
+        bulk_update() bypasses save(); use normal
         save(update_fields=[...,'assigned_to',...]) for bulk assign so this always runs.
         """
         if self._state.adding and self.company_id and self.patient_file_number is None:
@@ -331,7 +332,10 @@ class Client(models.Model):
         ):
             from django.core.exceptions import ValidationError
 
-            from crm.availability import user_accepts_new_assignments
+            from crm.availability import (
+                assignment_block_error,
+                assignment_block_reason,
+            )
 
             old_aid = None
             if self.pk:
@@ -349,15 +353,9 @@ class Client(models.Model):
 
                     cal = Company.objects.filter(pk=self.company_id).first()
                 cal = cal or getattr(assignee, "company", None)
-                if not user_accepts_new_assignments(
-                    assignee, company_for_calendar=cal
-                ):
-                    raise ValidationError(
-                        {
-                            "assigned_to": "Cannot assign to this user on their weekly day off.",
-                            "error_key": "employee_weekly_day_off",
-                        }
-                    )
+                reason = assignment_block_reason(assignee, company_for_calendar=cal)
+                if reason:
+                    raise ValidationError(assignment_block_error(reason))
 
         super().save(*args, **kwargs)
 

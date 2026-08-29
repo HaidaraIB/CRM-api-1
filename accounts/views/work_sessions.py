@@ -14,6 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from accounts.permissions import HasActiveSubscription, is_impersonating
+from accounts.two_factor_policy import is_company_owner
 from accounts.work_tracking import (
     PING_INTERVAL_SECONDS,
     company_tracking_config,
@@ -60,7 +61,12 @@ class WorkSessionPingView(APIView):
 
         if not user_is_work_tracked(user):
             enabled, _ = company_tracking_config(getattr(user, "company", None))
-            reason = "tracking_disabled" if not enabled else "role_not_tracked"
+            if not enabled:
+                reason = "tracking_disabled"
+            elif is_company_owner(user):
+                reason = "owner_not_tracked"
+            else:
+                reason = "role_not_tracked"
             return success_response(data=_inert_payload(user, reason))
 
         result = credit_work_time(user, source=request.data.get("source"))

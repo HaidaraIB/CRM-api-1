@@ -205,7 +205,7 @@ def test_ping_noop_when_tracking_disabled(api_client, employee_user, subscriptio
     ["admin", "supervisor", "employee", "data_entry", "reception", "doctor", "call_center"],
 )
 def test_every_company_role_accrues(api_client, tracking_company, subscription, role):
-    """All company roles are tracked, owners/admins included."""
+    """All company roles are tracked, admins included (the owner is excluded by identity)."""
     staff = User.objects.create_user(
         username=f"tracked_{role}",
         email=f"tracked_{role}@test.com",
@@ -223,6 +223,30 @@ def test_every_company_role_accrues(api_client, tracking_company, subscription, 
     assert data["tracking_enabled"] is True
     assert data["credited_seconds"] == 60
     assert WorkDaySummary.objects.get(user=staff).active_seconds == 60
+
+
+@pytest.mark.django_db
+def test_company_owner_does_not_accrue(api_client, tracking_company, subscription):
+    """The owner reads these numbers, they are not measured by them."""
+    owner = User.objects.create_user(
+        username="tracking_owner",
+        email="tracking_owner@test.com",
+        password="testpass123",
+        company=tracking_company,
+        role="admin",
+    )
+    tracking_company.owner = owner
+    tracking_company.save(update_fields=["owner"])
+    _seed_cursor(owner, seconds_ago=60)
+    api_client.force_authenticate(user=owner)
+
+    response = api_client.post(reverse("work_session_ping"), {"source": "web"}, format="json")
+
+    assert response.status_code == status.HTTP_200_OK
+    data = api_body(response)
+    assert data["tracking_enabled"] is False
+    assert data["reason"] == "owner_not_tracked"
+    assert not WorkDaySummary.objects.filter(user=owner).exists()
 
 
 @pytest.mark.django_db

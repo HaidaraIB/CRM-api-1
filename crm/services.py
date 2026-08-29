@@ -4,7 +4,7 @@ Business logic for the CRM app, separated from HTTP/view concerns.
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from crm.availability import user_accepts_new_assignments
+from crm.availability import assignment_block_error, assignment_block_reason
 from .models import Client, ClientEvent
 
 
@@ -13,13 +13,9 @@ def assign_unassigned_clients(company, employee, triggered_by):
     Assign all unassigned clients of *company* to *employee*.
     Returns (assigned_count, employee_display_name).
     """
-    if employee and not user_accepts_new_assignments(employee):
-        raise ValidationError(
-            {
-                "assigned_to": "Cannot assign to this user on their weekly day off.",
-                "error_key": "employee_weekly_day_off",
-            }
-        )
+    reason = assignment_block_reason(employee) if employee else None
+    if reason:
+        raise ValidationError(assignment_block_error(reason))
     unassigned = list(Client.objects.filter(company=company, assigned_to__isnull=True))
     if not unassigned:
         return 0, None
@@ -61,13 +57,9 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
     Assign a list of clients (by ID) to *target_user* (or unassign if None).
     Returns the number of actually changed clients.
     """
-    if target_user and not user_accepts_new_assignments(target_user):
-        raise ValidationError(
-            {
-                "user_id": "Cannot assign to this user on their weekly day off.",
-                "error_key": "employee_weekly_day_off",
-            }
-        )
+    reason = assignment_block_reason(target_user) if target_user else None
+    if reason:
+        raise ValidationError(assignment_block_error(reason, field="user_id"))
     clients = list(
         Client.objects.filter(id__in=client_ids, company=company).select_related(
             "assigned_to"

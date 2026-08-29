@@ -32,6 +32,7 @@ from companies.models import Company
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
+from ..employee_availability import set_user_unavailable
 from ..employee_deactivation import (
     caller_can_deactivate_target,
     count_active_employees_for_quota,
@@ -288,6 +289,32 @@ class UserViewSet(viewsets.ModelViewSet):
             return success_response(message="Password changed successfully.")
 
         return validation_error_response(serializer.errors)
+
+    @action(detail=True, methods=["post"], url_path="availability")
+    def set_availability(self, request, pk=None):
+        """Quick toggle: mark a user unavailable for N minutes, or available again."""
+        target = self.get_object()
+        try:
+            user = set_user_unavailable(
+                actor=request.user,
+                target=target,
+                duration_minutes=request.data.get("duration_minutes"),
+            )
+        except PermissionError as exc:
+            return error_response(
+                str(exc),
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        except ValueError as exc:
+            return error_response(
+                str(exc),
+                code="invalid_target",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = self.get_serializer(user)
+        return success_response(data={"user": serializer.data})
 
     @action(detail=True, methods=["get"], url_path="deactivate-preview")
     def deactivate_preview(self, request, pk=None):

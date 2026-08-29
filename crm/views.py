@@ -388,7 +388,11 @@ class ClientViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def bulk_assign(self, request):
         """Assign multiple clients to a specific user or unassign them."""
-        from crm.availability import user_accepts_new_assignments
+        from crm.availability import (
+            assignment_block_error_key,
+            assignment_block_message,
+            assignment_block_reason,
+        )
         from django.utils import timezone
 
         client_ids = request.data.get("client_ids", [])
@@ -417,10 +421,11 @@ class ClientViewSet(viewsets.ModelViewSet):
                     code="not_found",
                     status_code=status.HTTP_404_NOT_FOUND,
                 )
-            if not user_accepts_new_assignments(target_user):
+            block_reason = assignment_block_reason(target_user)
+            if block_reason:
                 return error_response(
-                    "Cannot assign to this user on their weekly day off.",
-                    code="employee_weekly_day_off",
+                    assignment_block_message(block_reason),
+                    code=assignment_block_error_key(block_reason),
                     status_code=status.HTTP_400_BAD_REQUEST,
                 )
 

@@ -32,6 +32,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from accounts.models import Role, User, WorkDaySummary
+from accounts.two_factor_policy import is_company_owner
 
 try:  # Python 3.9+
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -52,12 +53,14 @@ PING_INTERVAL_SECONDS = 60
 # one dropped ping and nothing more. This is the anti-inflation bound.
 MAX_CREDIT_SECONDS = 120
 
-# Every company role is measured, including owners/admins. Derived from the enum
-# rather than listed, so a new role is tracked the day it is added.
+# Every company role is measured, admins included. Derived from the enum rather than
+# listed, so a new role is tracked the day it is added.
 #
-# super_admin is the only exclusion: it is the platform operator, not company staff,
-# and it has no company to attribute hours to. (Impersonated sessions are refused
-# separately in the ping view, so support work never lands on a tenant's numbers.)
+# super_admin is the only role-level exclusion: it is the platform operator, not
+# company staff, and it has no company to attribute hours to. (Impersonated sessions
+# are refused separately in the ping view, so support work never lands on a tenant's
+# numbers.) The company owner is excluded by identity, not by role — see
+# user_is_work_tracked.
 #
 # Mirrored on the clients by roleTracksWorkHours(), but enforced here.
 WORK_TRACKED_ROLES = frozenset(
@@ -112,6 +115,10 @@ def user_is_work_tracked(user) -> bool:
     company = getattr(user, "company", None)
     enabled, _ = company_tracking_config(company)
     if not enabled:
+        return False
+    # The owner is who these numbers are *for*: nobody audits their hours, and their
+    # row only adds noise to the company summary. Other admins still accrue.
+    if is_company_owner(user):
         return False
     return (getattr(user, "role", "") or "") in WORK_TRACKED_ROLES
 

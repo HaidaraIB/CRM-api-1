@@ -1,5 +1,13 @@
 """
-Lead/deal assignment availability from weekly day off and working hours (company-local calendar).
+Lead/deal assignment availability from time off, weekly day off and working hours
+(company-local calendar).
+
+Temporary unavailability comes in two self-expiring flavours, both distinct from
+``is_active=False`` deactivation (which revokes login and redistributes the book):
+  - ``time_off_start_date``/``time_off_end_date`` -> planned leave, inclusive company-local dates.
+  - ``unavailable_until``                         -> short ad-hoc absence, a timestamp.
+Both are folded into ``user_accepts_new_assignments``, so every caller of the predicates
+below inherits them without further wiring.
 
 Three "is this user available right now" predicates exist here and they answer different
 questions — pick carefully:
@@ -41,19 +49,113 @@ def local_today_weekday(company) -> int:
     return local_now_for_company(company).date().weekday()
 
 
+# Reasons a user is skipped by routing, most specific first.
+BLOCK_TIME_OFF = "time_off"
+BLOCK_UNAVAILABLE = "unavailable"
+BLOCK_WEEKLY_DAY_OFF = "weekly_day_off"
+
+
+def _calendar_company(user, company_for_calendar):
+    if company_for_calendar is not None:
+        return company_for_calendar
+    return getattr(user, "company", None)
+
+
+def user_is_on_time_off(user, company_for_calendar=None) -> bool:
+    """
+    True while today (company-local date) falls inside the user's planned leave window.
+    Both bounds are inclusive; a half-set window is ignored rather than guessed at.
+    """
+    if not user:
+        return False
+    start = getattr(user, "time_off_start_date", None)
+    end = getattr(user, "time_off_end_date", None)
+    if start is None or end is None:
+        return False
+    company = _calendar_company(user, company_for_calendar)
+    if not company:
+        return False
+    today = local_now_for_company(company).date()
+    return start <= today <= end
+
+
+def user_is_temporarily_unavailable(user) -> bool:
+    """True while the ad-hoc 'away' timestamp is still in the future (absolute, no TZ math)."""
+    if not user:
+        return False
+    until = getattr(user, "unavailable_until", None)
+    if not until:
+        return False
+    return until > dj_timezone.now()
+
+
+def user_is_on_weekly_day_off(user, company_for_calendar=None) -> bool:
+    """True if the user has a weekly day off and today (company TZ) is that weekday."""
+    if not user or getattr(user, "weekly_day_off", None) is None:
+        return False
+    company = _calendar_company(user, company_for_calendar)
+    if not company:
+        return False
+    return user.weekly_day_off == local_today_weekday(company)
+
+
+def assignment_block_reason(user, company_for_calendar=None) -> str | None:
+    """
+    Why this user cannot take a new assignment right now, or None if they can.
+
+    Planned leave wins over the ad-hoc away flag, which wins over the weekly day off —
+    the longer-lived reason is the more useful one to show an admin.
+    """
+    if not user:
+        return None
+    company = _calendar_company(user, company_for_calendar)
+    if user_is_on_time_off(user, company_for_calendar=company):
+        return BLOCK_TIME_OFF
+    if user_is_temporarily_unavailable(user):
+        return BLOCK_UNAVAILABLE
+    if user_is_on_weekly_day_off(user, company_for_calendar=company):
+        return BLOCK_WEEKLY_DAY_OFF
+    return None
+
+
+# Keeps the pre-existing employee_weekly_day_off key so clients already handling it don't break.
+_BLOCK_ERRORS = {
+    BLOCK_TIME_OFF: (
+        "Cannot assign to this user while they are on time off.",
+        "employee_time_off",
+    ),
+    BLOCK_UNAVAILABLE: (
+        "Cannot assign to this user while they are marked unavailable.",
+        "employee_unavailable",
+    ),
+    BLOCK_WEEKLY_DAY_OFF: (
+        "Cannot assign to this user on their weekly day off.",
+        "employee_weekly_day_off",
+    ),
+}
+
+
+def assignment_block_message(reason: str) -> str:
+    return _BLOCK_ERRORS[reason][0]
+
+
+def assignment_block_error_key(reason: str) -> str:
+    return _BLOCK_ERRORS[reason][1]
+
+
+def assignment_block_error(reason: str, field: str = "assigned_to") -> dict:
+    """Serializer/ValidationError payload for a reason from assignment_block_reason."""
+    message, error_key = _BLOCK_ERRORS[reason]
+    return {field: message, "error_key": error_key}
+
+
 def user_accepts_new_assignments(user, company_for_calendar=None) -> bool:
     """
-    False if user has weekly_day_off set and today (in company TZ) is that weekday.
+    False while the user is on planned time off, flagged temporarily unavailable, or on
+    their weekly day off (all evaluated in company TZ where date-based).
     If company_for_calendar is set, "today" uses that company's timezone (e.g. the lead's company).
     """
-    if not user or getattr(user, "weekly_day_off", None) is None:
-        return True
-    company = company_for_calendar if company_for_calendar is not None else getattr(
-        user, "company", None
-    )
-    if not company:
-        return True
-    return user.weekly_day_off != local_today_weekday(company)
+    return assignment_block_reason(user, company_for_calendar=company_for_calendar) is None
 
 
 def _time_in_window(now_t: time, start: time, end: time) -> bool:

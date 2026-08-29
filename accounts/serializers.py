@@ -43,6 +43,32 @@ from datetime import timedelta
 from django.utils import timezone
 
 
+def build_availability_payload(user):
+    """
+    Routing availability for *user*, shared by the detail and list serializers.
+
+    ``until`` is the date they return from planned leave, or the timestamp the ad-hoc
+    unavailability expires; null for a weekly day off, which needs no end marker.
+    """
+    from crm.availability import (
+        BLOCK_TIME_OFF,
+        BLOCK_UNAVAILABLE,
+        assignment_block_reason,
+    )
+
+    reason = assignment_block_reason(user)
+    until = None
+    if reason == BLOCK_TIME_OFF:
+        until = user.time_off_end_date.isoformat()
+    elif reason == BLOCK_UNAVAILABLE:
+        until = user.unavailable_until.isoformat()
+    return {
+        "accepts_new_assignments": reason is None,
+        "reason": reason,
+        "until": until,
+    }
+
+
 class UserSerializer(serializers.ModelSerializer):
     is_me = serializers.SerializerMethodField()
     company_name = serializers.CharField(source="company.name", read_only=True)
@@ -61,6 +87,7 @@ class UserSerializer(serializers.ModelSerializer):
     is_online = serializers.SerializerMethodField()
     is_company_owner = serializers.SerializerMethodField()
     requires_campaign_approval = serializers.SerializerMethodField()
+    availability = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -99,6 +126,10 @@ class UserSerializer(serializers.ModelSerializer):
             "weekly_day_off",
             "work_start_time",
             "work_end_time",
+            "time_off_start_date",
+            "time_off_end_date",
+            "unavailable_until",
+            "availability",
             "can_delete_clients",
             "whatsapp_chat_enabled",
             "whatsapp_call_enabled",
@@ -112,6 +143,8 @@ class UserSerializer(serializers.ModelSerializer):
             "phone_verified",
             "fcm_token",
             "fcm_tokens",
+            # Set through the users/<id>/availability/ action, never by a plain PATCH.
+            "unavailable_until",
         ]
         extra_kwargs = {
             "email": {"required": True},
@@ -220,11 +253,40 @@ class UserSerializer(serializers.ModelSerializer):
                 for k in wa_toggle_keys:
                     attrs.pop(k, None)
 
-        schedule_keys = ("weekly_day_off", "work_start_time", "work_end_time")
+        schedule_keys = (
+            "weekly_day_off",
+            "work_start_time",
+            "work_end_time",
+            "time_off_start_date",
+            "time_off_end_date",
+        )
         if any(k in attrs for k in schedule_keys):
             if not self._can_set_schedule_fields(user, inst):
                 for k in schedule_keys:
                     attrs.pop(k, None)
+
+        # Time off is a window: both bounds together, or both cleared. An open-ended
+        # start would never expire, which is what deactivation is for.
+        if "time_off_start_date" in attrs or "time_off_end_date" in attrs:
+            off_start = attrs["time_off_start_date"] if "time_off_start_date" in attrs else (
+                getattr(inst, "time_off_start_date", None) if inst else None
+            )
+            off_end = attrs["time_off_end_date"] if "time_off_end_date" in attrs else (
+                getattr(inst, "time_off_end_date", None) if inst else None
+            )
+            if (off_start is None) != (off_end is None):
+                raise serializers.ValidationError(
+                    {
+                        "time_off_start_date": "Both time_off_start_date and time_off_end_date are required together, or clear both.",
+                        "time_off_end_date": "Both time_off_start_date and time_off_end_date are required together, or clear both.",
+                    }
+                )
+            if off_start is not None and off_end is not None and off_end < off_start:
+                raise serializers.ValidationError(
+                    {
+                        "time_off_end_date": "time_off_end_date cannot be before time_off_start_date.",
+                    }
+                )
 
         start = attrs["work_start_time"] if "work_start_time" in attrs else (
             getattr(inst, "work_start_time", None) if inst else None
@@ -248,6 +310,16 @@ class UserSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+
+    @extend_schema_field(serializers.DictField())
+    def get_availability(self, obj):
+        """
+        Whether this user can receive new leads right now, and why not.
+
+        ``reason`` is one of time_off / unavailable / weekly_day_off (null when available);
+        ``until`` is when they become available again, so the UI can say "On leave until ...".
+        """
+        return build_availability_payload(obj)
 
     @extend_schema_field(serializers.BooleanField())
     def get_is_me(self, obj):
@@ -483,6 +555,7 @@ class UserListSerializer(serializers.ModelSerializer):
     company_timezone = serializers.SerializerMethodField()
     is_me = serializers.SerializerMethodField()
     is_online = serializers.SerializerMethodField()
+    availability = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -502,6 +575,10 @@ class UserListSerializer(serializers.ModelSerializer):
             "weekly_day_off",
             "work_start_time",
             "work_end_time",
+            "time_off_start_date",
+            "time_off_end_date",
+            "unavailable_until",
+            "availability",
             "can_delete_clients",
             "whatsapp_chat_enabled",
             "whatsapp_call_enabled",
@@ -533,6 +610,10 @@ class UserListSerializer(serializers.ModelSerializer):
         if not obj.last_seen_at:
             return False
         return (timezone.now() - obj.last_seen_at) <= timedelta(seconds=90)
+
+    @extend_schema_field(serializers.DictField())
+    def get_availability(self, obj):
+        return build_availability_payload(obj)
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):

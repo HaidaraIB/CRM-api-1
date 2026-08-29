@@ -77,6 +77,25 @@ class User(AbstractUser):
         blank=True,
         help_text="Daily work end time (company timezone). Must be set together with work_start_time.",
     )
+    # Temporary unavailability, on top of weekly_day_off / work hours. Both self-expiring:
+    # the user keeps full access, they are only skipped by lead/arrival routing.
+    # Planned leave, inclusive, in company-local dates. Set/cleared together.
+    time_off_start_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="First day of time off (company timezone, inclusive). Set together with time_off_end_date.",
+    )
+    time_off_end_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Last day of time off (company timezone, inclusive). Set together with time_off_start_date.",
+    )
+    # Short ad-hoc absence ("stepping out"), expires on its own.
+    unavailable_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When set and in the future, user receives no new lead assignments or arrival routing.",
+    )
     whatsapp_call_away_until = models.DateTimeField(
         null=True,
         blank=True,
