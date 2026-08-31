@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
-
 from django.core.cache import cache
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes
@@ -12,6 +9,7 @@ from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import success_response
 
 from .cache import BADGES_CACHE_TTL, badges_cache_key
+from .version import digest_token
 from .counts import (
     arrivals_pending_for_user,
     arrivals_waiting_for_user,
@@ -23,23 +21,29 @@ from .counts import (
     whatsapp_unread_for_user,
 )
 
-# The digest is polled every 5s by every open tab, so it is the single hottest
-# endpoint on the platform. Its eight counts are not equally urgent, and caching
-# them as one blob forced a choice between stale alerts and rebuilding all of them
-# on every poll (the previous 4s TTL against a 5s poll never hit, so it was always
-# the latter).
+# The digest is polled every few seconds by every open tab, so it is the single
+# hottest endpoint on the platform — and the overwhelmingly common answer is
+# "nothing changed". Two mechanisms keep that answer cheap.
 #
-# So they are split by how fresh they actually need to be:
+# 1. The version token (sync/version.py). Every write path that can move a count
+#    bumps a counter in the cache; the token folds those counters together. A
+#    client that sends a matching token back in If-None-Match is answered with a
+#    bare 304 after one cache read and *zero* database queries. This is where
+#    almost all of the savings come from.
 #
-#   live   — drives toasts/modals (ringing call, screen pop, walk-in arrival).
-#            Must reflect the current poll, so it is rebuilt every request.
-#   badges — sidebar unread counts. Nobody notices a badge that is half a minute
-#            behind, and this tier holds the expensive queries (tenant_chat_unread
-#            scans message history), so it is cached per user and invalidated
-#            eagerly by whatever clears the count (see sync/cache.py).
+#    An earlier version hashed the built payload instead, which meant the whole
+#    digest had to be computed before it could be compared — the 304 saved bytes
+#    but not a single query, and no client sent the header anyway.
 #
-# Net effect at the same 5s poll: the badge tier is built ~2x/min instead of
-# 12x/min per user, with no added latency on anything a user is waiting for.
+# 2. Tiering, for the rebuilds that do happen. The counts are not equally urgent:
+#
+#      live   — drives toasts/modals (ringing call, screen pop, walk-in arrival).
+#      badges — sidebar unread counts. This tier holds the expensive queries
+#               (tenant_chat_unread scans message history), so it is cached under
+#               a token-derived key, which any bump rotates (see sync/cache.py).
+#
+# Freshness is unchanged: a real event bumps the counter and surfaces on the very
+# next poll. The token's time bucket bounds the damage if a bump is ever missed.
 
 
 def _etag_token(raw: str) -> str:
@@ -71,25 +75,18 @@ def build_badges(user) -> dict:
     }
 
 
-def build_digest(user) -> dict:
-    """
-    Full digest, badge tier served from cache when warm.
+def build_digest(user, token: str | None = None) -> dict:
+    """Full digest, badge tier served from cache when warm."""
+    if token is None:
+        token = digest_token(user)
 
-    ``version`` still hashes the merged payload, so the ETag keeps changing
-    whenever any field changes — a client holding a 304 is never shown a stale
-    live count.
-    """
-    badges = cache.get(badges_cache_key(user.id))
+    key = badges_cache_key(user.id, token)
+    badges = cache.get(key)
     if not isinstance(badges, dict):
         badges = build_badges(user)
-        cache.set(badges_cache_key(user.id), badges, BADGES_CACHE_TTL)
+        cache.set(key, badges, BADGES_CACHE_TTL)
 
-    payload = {**badges, **build_live(user)}
-    version = hashlib.md5(
-        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()[:6]
-    payload["version"] = version
-    return payload
+    return {**badges, **build_live(user), "version": token}
 
 
 @api_view(["GET"])
@@ -97,15 +94,17 @@ def build_digest(user) -> dict:
 def sync_digest(request):
     user = request.user
     inm = _etag_token(request.META.get("HTTP_IF_NONE_MATCH", ""))
-    data = build_digest(user)
+    token = digest_token(user)
 
-    if inm and inm == data["version"]:
+    # Deliberately before build_digest: the point of the token is that this branch
+    # costs one cache read and no database work.
+    if inm and inm == token:
         resp = HttpResponse(status=304)
-        resp["ETag"] = f'"{data["version"]}"'
+        resp["ETag"] = f'"{token}"'
         resp["Cache-Control"] = "no-store"
         return resp
 
     return success_response(
-        data=data,
-        headers={"ETag": f'"{data["version"]}"', "Cache-Control": "no-store"},
+        data=build_digest(user, token),
+        headers={"ETag": f'"{token}"', "Cache-Control": "no-store"},
     )

@@ -5,3 +5,6 @@ class SyncConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "sync"
     verbose_name = "Client sync digest"
+
+    def ready(self):
+        import sync.signals  # noqa: F401

@@ -420,9 +420,16 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
     ],
+    # The user rate is not just a ceiling, it is a per-request cost: DRF's
+    # SimpleRateThrottle keeps a list of one timestamp per request in the window
+    # and pickles the whole thing in and out of the cache on *every* authenticated
+    # request. At 600/minute that is a 600-element list moved twice per request,
+    # on the most-executed cache operation in the stack. A heavy real user peaks
+    # around 100/minute, so 300 leaves ample headroom at a quarter of the cost —
+    # raise DRF_THROTTLE_USER if a legitimate workload ever approaches it.
     "DEFAULT_THROTTLE_RATES": {
         "anon": _drf_throttle_rate("DRF_THROTTLE_ANON", "30/minute"),
-        "user": _drf_throttle_rate("DRF_THROTTLE_USER", "600/minute"),
+        "user": _drf_throttle_rate("DRF_THROTTLE_USER", "300/minute"),
         "auth": _drf_throttle_rate("DRF_THROTTLE_AUTH", "5/minute"),
     },
     "DEFAULT_PAGINATION_CLASS": "crm_saas_api.pagination.FlexiblePageNumberPagination",
@@ -629,13 +636,27 @@ PUSH_QUEUE_ENABLED = os.getenv("PUSH_QUEUE_ENABLED", "").strip().lower() in (
 #
 # The ORM broker makes the cluster poll Postgres in a loop for work that is almost
 # always absent — wasted queries on a box where the DB shares two cores with
-# Gunicorn. Redis is already required in production for the shared cache, so reuse
-# that connection via django_redis rather than configuring a second one.
+# Gunicorn. Redis is already required in production for the shared cache, so point
+# the cluster at the same URL rather than configuring a second connection.
+#
+# Passed as a URL string, NOT via the "django_redis" key. That key routes through
+# django_q.brokers.redis_broker.get_connection(), which needs the `django-redis`
+# package to honour it:
+#
+#     if django_redis and Conf.DJANGO_REDIS: ...
+#
+# We use Django's own RedisCache backend and do not install django-redis, so that
+# guard is always False and the setting is silently ignored — leaving django-q to
+# fall through to `redis.StrictRedis(**{})`, i.e. localhost:6379 db 0 with no
+# password. On a shared box that is the wrong database, or a connection refused if
+# Redis requires auth, and either way it fails quietly at runtime rather than at
+# startup. A URL string takes the `redis.from_url` path instead, which is the same
+# connection the cache uses.
 #
 # get_broker() (django_q/brokers/__init__.py) picks by precedence, so exactly one
 # of these keys may be present — setting both would silently keep the ORM broker.
 if _redis_url:
-    Q_CLUSTER["django_redis"] = "default"
+    Q_CLUSTER["redis"] = _redis_url
 else:
     Q_CLUSTER["orm"] = "default"
 

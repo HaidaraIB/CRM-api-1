@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.core.cache import cache
+
 from integrations.models import IntegrationAccount, OpenAISettings, SmsProvider, TwilioSettings, WhatsAppAccount
 from settings.models import SystemSettings
 from subscriptions.entitlements import build_company_entitlements
@@ -105,20 +107,47 @@ def is_any_sms_integration_allowed(company) -> bool:
     return any(is_integration_allowed(company, platform) for platform in SMS_INTEGRATION_PLATFORMS)
 
 
+# This gate sits on polled endpoints (the sync digest, the WhatsApp conversation
+# list), and answering it costs an uncached subscription lookup per call. The
+# answer only changes when the company's plan does, so it is cached and dropped by
+# invalidate_company_subscription_cache() — the same seam the Subscription
+# post_save signal already fires. The TTL is a backstop for anything that changes
+# a plan without saving a Subscription, and is deliberately tighter than the 300s
+# HasActiveSubscription already caches for.
+PLAN_ACCESS_CACHE_TTL = 60
+
+
+def plan_access_cache_key(company_id, platform: str) -> str:
+    return f"plan_integration_access:{company_id}:{platform}"
+
+
 def get_plan_integration_access(company, platform: str) -> dict[str, Any]:
     feature_key = PLAN_INTEGRATION_FEATURE_MAP.get(platform)
     if not feature_key:
         return {"enabled": True, "message": "", "scope": "enabled", "feature_key": None}
+
+    company_id = getattr(company, "id", None)
+    cache_key = plan_access_cache_key(company_id, platform) if company_id else None
+    if cache_key:
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+
     ent = build_company_entitlements(company)
     is_enabled = bool((ent.features or {}).get(feature_key, True))
     if is_enabled:
-        return {"enabled": True, "message": "", "scope": "enabled", "feature_key": feature_key}
-    return {
-        "enabled": False,
-        "message": "This integration is not included in your current plan.",
-        "scope": "plan",
-        "feature_key": feature_key,
-    }
+        result = {"enabled": True, "message": "", "scope": "enabled", "feature_key": feature_key}
+    else:
+        result = {
+            "enabled": False,
+            "message": "This integration is not included in your current plan.",
+            "scope": "plan",
+            "feature_key": feature_key,
+        }
+
+    if cache_key:
+        cache.set(cache_key, result, PLAN_ACCESS_CACHE_TTL)
+    return dict(result)
 
 
 def _disable_company_platform_integrations(*, company_id: str | int, platform: str) -> None:

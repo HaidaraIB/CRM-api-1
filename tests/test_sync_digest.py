@@ -60,16 +60,17 @@ class TestSyncDigest:
         assert other_body["whatsapp_unread"] == 1
         assert mine["whatsapp_unread"] == 1
 
-    def test_if_none_match_304_reuses_cached_badges(self, authenticated_admin):
+    def test_if_none_match_304_costs_no_queries(
+        self, authenticated_admin, django_assert_num_queries
+    ):
         """
-        A matching ETag still returns an empty 304, and the expensive badge tier is
-        served from cache instead of rebuilt.
+        The whole point of the version token: an unchanged digest is answered from
+        the cache alone.
 
-        The live tier is deliberately NOT skipped: it is recomputed on every request
-        so a client holding an old ETag can never be 304'd past a newly ringing call.
+        Neither tier is rebuilt, and the request does not reach the database at
+        all. This is the case that runs on every poll of every open tab, so a
+        regression here is the difference between a free request and ~9 queries.
         """
-        from sync.views import build_live
-
         first = authenticated_admin.get("/api/v1/sync/digest/")
         assert first.status_code == status.HTTP_200_OK
         etag = first["ETag"]
@@ -78,17 +79,55 @@ class TestSyncDigest:
 
         with (
             patch("sync.views.build_badges") as badges,
-            patch("sync.views.build_live", wraps=build_live) as live,
+            patch("sync.views.build_live") as live,
+            django_assert_num_queries(0),
         ):
             second = authenticated_admin.get(
                 "/api/v1/sync/digest/",
                 HTTP_IF_NONE_MATCH=etag,
             )
             badges.assert_not_called()
-            live.assert_called_once()
+            live.assert_not_called()
 
         assert second.status_code == status.HTTP_304_NOT_MODIFIED
         assert second.content == b""
+
+    def test_stale_etag_rebuilds(self, authenticated_admin):
+        """A token from an earlier state must not be honoured as a 304."""
+        response = authenticated_admin.get(
+            "/api/v1/sync/digest/", HTTP_IF_NONE_MATCH='"0.0.0.0"'
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert api_body(response)["version"]
+
+    def test_new_notification_breaks_etag(
+        self, authenticated_admin, admin_user
+    ):
+        """
+        An arriving notification must reach a client holding a valid ETag.
+
+        Covers the user-scoped bump: nothing in the request path knows the count
+        moved, so only the signal on Notification keeps this correct.
+        """
+        from notifications.models import Notification, NotificationType
+
+        first = authenticated_admin.get("/api/v1/sync/digest/")
+        assert api_body(first)["notifications_unread"] == 0
+        etag = first["ETag"]
+
+        Notification.objects.create(
+            user=admin_user,
+            type=NotificationType.NEW_LEAD,
+            title="n",
+            body="b",
+            read=False,
+        )
+
+        second = authenticated_admin.get(
+            "/api/v1/sync/digest/", HTTP_IF_NONE_MATCH=etag
+        )
+        assert second.status_code == status.HTTP_200_OK
+        assert api_body(second)["notifications_unread"] == 1
 
     def test_live_change_breaks_etag_despite_cached_badges(
         self, authenticated_admin, admin_user, company

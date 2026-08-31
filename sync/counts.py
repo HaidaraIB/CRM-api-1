@@ -29,7 +29,7 @@ def whatsapp_unread_for_user(user):
     if not plan_gate["enabled"]:
         return None
     effective = get_effective_integration_policy(
-        SystemSettings.get_settings().integration_policies or {},
+        SystemSettings.get_cached_settings().integration_policies or {},
         company_id=company.id,
         platform="whatsapp",
     )

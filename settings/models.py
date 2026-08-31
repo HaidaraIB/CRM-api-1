@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from django.db import models
 from django.conf import settings as django_settings
 from django.utils import timezone
@@ -468,11 +469,39 @@ class SystemSettings(models.Model):
     def __str__(self):
         return f"System Settings (USD to IQD: {self.usd_to_iqd_rate})"
 
+    CACHE_KEY = "system_settings_singleton_v1"
+    CACHE_TTL = 60
+
     @classmethod
     def get_settings(cls):
         """Get the system settings instance (singleton)"""
         settings, created = cls.objects.get_or_create(pk=1)
         return settings
+
+    @classmethod
+    def get_cached_settings(cls):
+        """
+        Read-only singleton, for paths that run on every poll.
+
+        get_settings() issues a get_or_create on each call, which is nothing for
+        the handful of admin screens that write these rows but is a wasted query
+        on endpoints that poll and only want to read a field off it.
+
+        Callers that intend to mutate and save must keep using get_settings():
+        this hands back a copy deserialized from the cache, so saving it would
+        write whatever the cache happened to hold.
+        """
+        cached = cache.get(cls.CACHE_KEY)
+        if cached is not None:
+            return cached
+        obj = cls.get_settings()
+        cache.set(cls.CACHE_KEY, obj, cls.CACHE_TTL)
+        return obj
+
+    def save(self, *args, **kwargs):
+        result = super().save(*args, **kwargs)
+        cache.delete(self.CACHE_KEY)
+        return result
 
 
 class PlatformTwilioSettings(models.Model):

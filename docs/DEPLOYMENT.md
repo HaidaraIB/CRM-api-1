@@ -243,25 +243,28 @@ gunicorn crm_saas_api.wsgi:application --bind 127.0.0.1:8000
 
 افتح متصفح جديد وانتقل إلى `http://your-server-ip:8000` للتحقق. اضغط `Ctrl+C` لإيقاف الخادم.
 
-#### 7.2 إنشاء ملف إعدادات Gunicorn
-```bash
-nano /var/www/crm-api/gunicorn_config.py
-```
+#### 7.2 إعدادات Gunicorn
 
-أضف المحتوى التالي:
-```python
-import multiprocessing
+`gunicorn_config.py` موجود في المستودع — لا تكتبه يدوياً ولا تستبدله. اقرأ التعليقات
+داخله قبل تغيير أي قيمة؛ فهي تشرح سبب كل رقم.
 
-bind = "127.0.0.1:8000"
-workers = multiprocessing.cpu_count() * 2 + 1
-worker_class = "sync"
-worker_connections = 1000
-timeout = 30
-keepalive = 2
-max_requests = 1000
-max_requests_jitter = 50
-preload_app = True
-```
+الإعداد الحالي: `worker_class = "gthread"` مع `workers = 2` و `threads = 4`
+(أي 8 طلبات متزامنة)، و `timeout = 90`.
+
+ثلاث نقاط مهمة إذا فكّرت في تعديله:
+
+- **لا تستخدم `workers = cpu_count() * 2 + 1`.** الخادم مشترك مع تطبيق Django آخر
+  بالإضافة إلى Postgres و Redis و nginx، كما أن `cpu_count()` يُبلّغ عن الأنوية
+  المنطقية للضيف وليس ما تحاسب عليه الخطة فعلياً. زيادة العدد فوق الأنوية الحقيقية
+  تضيف تنازعاً لا سعة.
+- **لا تستخدم `worker_class = "sync"`.** التطبيق يقوم باستدعاءات خارجية بطيئة داخل
+  دورة الطلب (Meta Graph و FCM و Twilio وبوابات الدفع)، ومع `sync` يحتجز كل
+  استدعاء عاملاً كاملاً.
+- **لا تُنقص `timeout` عن 90 ثانية.** أطول مهلة خارجية في الكود هي 60 ثانية
+  (رفع وسائط واتساب)، والقيمة الأقل تقتل العامل قبل أن يعيد التطبيق خطأه الخاص.
+
+يمكن ضبط العددين عبر متغيرات البيئة `GUNICORN_WORKERS` و `GUNICORN_THREADS` دون
+تعديل الملف — وبعد التأكد من وجود CPU فائض فقط.
 
 ### الخطوة 8: إعداد Systemd Service
 
@@ -337,9 +340,12 @@ server {
         proxy_redirect off;
         
         # إعدادات timeout
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+        # يجب أن تكون أطول من timeout الخاص بـ gunicorn (90s في gunicorn_config.py)،
+        # وإلا فإن nginx يقطع الطلب البطيء ويعيد 504 قبل أن يتمكن التطبيق من
+        # إرجاع خطأه الخاص — وهو ما يخفي السبب الحقيقي عند تشخيص المشاكل.
+        proxy_connect_timeout 95s;
+        proxy_send_timeout 95s;
+        proxy_read_timeout 95s;
     }
 
     # الملفات الثابتة

@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db.models import Count, F, Max, OuterRef, Q, Subquery
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
@@ -9,6 +10,97 @@ from .attachments import media_preview_label
 from .authorization import eligible_company_users_queryset
 from .models import ChatConversation, ChatConversationReadState, ChatMessage, ChatPinnedMessage
 from .presence import VALID_ACTIONS
+
+# Context key holding the precomputed per-conversation lookups. See
+# bulk_conversation_context().
+BULK_CONTEXT_KEY = "_bulk_conversation_data"
+
+
+def bulk_conversation_context(conversations, user) -> dict:
+    """
+    Precompute everything ChatConversationSerializer would otherwise fetch one
+    conversation at a time.
+
+    The conversation list is polled continuously by every open chat pane, and the
+    serializer's method fields made it cost 4 queries per DM row and 6 per group
+    row — a user in 15 threads spent ~60 queries per poll. Every one of those
+    lookups batches cleanly, so this resolves them in a fixed five regardless of
+    how many conversations come back.
+
+    Returns a context dict; the serializer falls back to its per-object queries
+    when the key is absent, which keeps the single-object paths (create, detail)
+    working unchanged.
+    """
+    conversations = list(conversations)
+    if not conversations:
+        return {}
+
+    ids = [c.id for c in conversations]
+    user_id = user.id
+
+    # Read cursors — one row per conversation, and it answers both unread_count
+    # and last_read_message_id, which used to fetch it separately.
+    read_cursors = dict(
+        ChatConversationReadState.objects.filter(
+            conversation_id__in=ids, user_id=user_id
+        ).values_list("conversation_id", "last_read_message_id")
+    )
+
+    # Newest message per conversation, in two queries rather than one per row:
+    # the ids, then the rows themselves.
+    latest_ids = [
+        row["latest_id"]
+        for row in ChatMessage.objects.filter(conversation_id__in=ids)
+        .values("conversation_id")
+        .annotate(latest_id=Max("id"))
+        if row["latest_id"] is not None
+    ]
+    last_messages = {
+        m.conversation_id: m for m in ChatMessage.objects.filter(id__in=latest_ids)
+    }
+
+    # Unread per conversation. The cursor differs per conversation, so it is
+    # correlated in as a subquery and grouped — the same shape sync/counts.py uses
+    # for the tenant_chat badge.
+    cursor = ChatConversationReadState.objects.filter(
+        conversation_id=OuterRef("conversation_id"), user_id=user_id
+    ).values("last_read_message_id")[:1]
+    unread_counts = {
+        row["conversation_id"]: row["n"]
+        for row in ChatMessage.objects.filter(conversation_id__in=ids)
+        .exclude(sender_id=user_id)
+        .annotate(_cursor=Subquery(cursor))
+        .filter(Q(_cursor__isnull=True) | Q(id__gt=F("_cursor")))
+        .values("conversation_id")
+        .annotate(n=Count("id"))
+    }
+
+    # Member/online counts are company-wide and identical for every group row, and
+    # there is at most one group conversation per company — so compute once, and
+    # only when a group is actually in the page.
+    member_count = None
+    online_count = None
+    group = next(
+        (c for c in conversations if c.kind == ChatConversation.Kind.COMPANY_GROUP), None
+    )
+    if group is not None:
+        eligible = eligible_company_users_queryset(
+            User.objects.filter(company_id=group.company_id)
+        )
+        member_count = eligible.count()
+        online_count = eligible.filter(
+            last_seen_at__gte=timezone.now() - timedelta(seconds=90)
+        ).count()
+
+    return {
+        BULK_CONTEXT_KEY: {
+            "read_cursors": read_cursors,
+            "last_messages": last_messages,
+            "unread_counts": unread_counts,
+            "member_count": member_count,
+            "online_count": online_count,
+        }
+    }
 
 
 def _body_snippet(text: str | None, n: int = 200) -> str:
@@ -165,9 +257,16 @@ class ChatConversationSerializer(serializers.ModelSerializer):
             return None
         return getattr(obj.company, "name", None) or ""
 
+    def _bulk(self):
+        """Precomputed lookups from bulk_conversation_context(), if the caller supplied them."""
+        return self.context.get(BULK_CONTEXT_KEY)
+
     def get_member_count(self, obj):
         if obj.kind != ChatConversation.Kind.COMPANY_GROUP:
             return None
+        bulk = self._bulk()
+        if bulk is not None:
+            return bulk["member_count"]
         return eligible_company_users_queryset(
             User.objects.filter(company_id=obj.company_id)
         ).count()
@@ -175,6 +274,9 @@ class ChatConversationSerializer(serializers.ModelSerializer):
     def get_online_count(self, obj):
         if obj.kind != ChatConversation.Kind.COMPANY_GROUP:
             return None
+        bulk = self._bulk()
+        if bulk is not None:
+            return bulk["online_count"]
         threshold = timezone.now() - timedelta(seconds=90)
         return (
             eligible_company_users_queryset(
@@ -198,8 +300,10 @@ class ChatConversationSerializer(serializers.ModelSerializer):
         return ChatPeerSerializer(other, context=self.context).data
 
     def get_last_message(self, obj):
-        msg = getattr(obj, "last_message_prefetched", None)
-        if msg is None:
+        bulk = self._bulk()
+        if bulk is not None:
+            msg = bulk["last_messages"].get(obj.id)
+        else:
             msg = obj.messages.order_by("-created_at").first()
         if not msg:
             return None
@@ -216,6 +320,9 @@ class ChatConversationSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
             return 0
+        bulk = self._bulk()
+        if bulk is not None:
+            return bulk["unread_counts"].get(obj.id, 0)
         user = request.user
         state = ChatConversationReadState.objects.filter(conversation=obj, user=user).first()
         last_id = state.last_read_message_id if state else None
@@ -228,6 +335,9 @@ class ChatConversationSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
             return None
+        bulk = self._bulk()
+        if bulk is not None:
+            return bulk["read_cursors"].get(obj.id)
         state = ChatConversationReadState.objects.filter(conversation=obj, user=request.user).first()
         return state.last_read_message_id if state else None
 

@@ -288,7 +288,14 @@ class LeadWhatsAppMessageViewSet(
                 }
             )
 
-        qs = LeadWhatsAppMessage.objects.filter(client__company=user.company).order_by('-created_at')
+        # select_related('created_by'): the serializer exposes created_by_username,
+        # which is one query per outbound message in the page without it — on an
+        # endpoint the open chat thread polls continuously.
+        qs = (
+            LeadWhatsAppMessage.objects.filter(client__company=user.company)
+            .select_related('created_by')
+            .order_by('-created_at')
+        )
         qs = filter_whatsapp_messages_queryset(user, qs)
         client_id = self.request.query_params.get('client')
         phone = (self.request.query_params.get('phone') or '').strip()

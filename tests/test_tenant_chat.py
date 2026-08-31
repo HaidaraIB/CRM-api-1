@@ -685,3 +685,53 @@ def test_inactive_supervisor_does_not_see_company_group():
     kinds = [x.get("kind") for x in r.data["results"]]
     assert "company_group" not in kinds
 
+
+
+@pytest.mark.django_db
+def test_conversation_list_query_count_does_not_grow_with_threads():
+    """
+    The conversation list is polled continuously by every open chat pane, so its
+    cost must not scale with how many threads a user is in.
+
+    Each row used to cost 4 queries (last message, read state twice, unread
+    count), which put a user in 15 threads at ~60 queries per poll. The list now
+    resolves those in bulk, so adding threads must not add queries.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    company, owner = _company_with_subscription("t_qcount")
+    url = reverse("tenant_chat_conversation-list")
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    def add_threads(count, tag):
+        for i in range(count):
+            emp = _user(company, f"emp_{tag}_{i}", Role.EMPLOYEE.value)
+            r = client.post(url, {"with_user_id": emp.id}, format="json")
+            assert r.status_code == status.HTTP_201_CREATED
+            conv_id = r.data["id"]
+            # A message from the peer so last_message and unread_count both have
+            # real work to do rather than short-circuiting on an empty thread.
+            peer = APIClient()
+            peer.force_authenticate(user=emp)
+            msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+            assert peer.post(msg_url, {"body": f"hi {i}"}, format="json").status_code == (
+                status.HTTP_201_CREATED
+            )
+
+    def list_query_count():
+        with CaptureQueriesContext(connection) as ctx:
+            assert client.get(url).status_code == status.HTTP_200_OK
+        return len(ctx)
+
+    add_threads(2, "few")
+    list_query_count()  # warm the subscription/permission caches
+    baseline = list_query_count()
+
+    add_threads(6, "many")
+    grown = list_query_count()
+
+    assert grown == baseline, (
+        f"conversation list cost grew with thread count: {baseline} -> {grown} queries"
+    )

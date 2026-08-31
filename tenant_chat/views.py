@@ -37,7 +37,12 @@ from .authorization import (
 )
 from .models import ChatConversation, ChatConversationReadState, ChatMessage, ChatPinnedMessage
 from .permissions import IsTenantChatUser
-from .presence import get_user_presence, other_participant_id, set_user_presence
+from .presence import (
+    get_user_presence,
+    get_users_presence,
+    other_participant_id,
+    set_user_presence,
+)
 from .serializers import (
     ChatConversationSerializer,
     ChatMessageSerializer,
@@ -47,6 +52,7 @@ from .serializers import (
     PinMessageSerializer,
     SendMessageSerializer,
     StartConversationSerializer,
+    bulk_conversation_context,
     normalize_dm_participants,
 )
 
@@ -109,6 +115,28 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         ctx["request"] = self.request
         return ctx
 
+    def list(self, request, *args, **kwargs):
+        """
+        Serialize the page with its per-conversation lookups resolved in bulk.
+
+        Overridden rather than left to ListModelMixin because the batching needs
+        the page, which only exists after pagination — see
+        bulk_conversation_context() for what this saves.
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        conversations = list(page) if page is not None else list(queryset)
+
+        context = self.get_serializer_context()
+        context.update(bulk_conversation_context(conversations, request.user))
+        serializer = self.get_serializer_class()(
+            conversations, many=True, context=context
+        )
+
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
     def create(self, request, *args, **kwargs):
         ser = StartConversationSerializer(data=request.data)
         if not ser.is_valid():
@@ -163,21 +191,24 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         conversation = self.get_object()
         if request.method == "GET":
             if conversation.kind == ChatConversation.Kind.COMPANY_GROUP:
-                peers_out = []
-                base = eligible_company_users_queryset(
-                    User.objects.filter(company_id=conversation.company_id)
-                ).exclude(pk=request.user.id)[:100]
-                for u in base:
-                    act = get_user_presence(conversation.id, u.id)
-                    if not act:
-                        continue
-                    peers_out.append(
-                        {
-                            "user_id": u.id,
-                            "activity": act,
-                            "peer": ChatPeerSerializer(u, context=self.get_serializer_context()).data,
-                        }
-                    )
+                base = list(
+                    eligible_company_users_queryset(
+                        User.objects.filter(company_id=conversation.company_id)
+                    ).exclude(pk=request.user.id)[:100]
+                )
+                # One cache round trip for the whole room rather than one per
+                # member — this action is polled every few seconds per viewer.
+                active = get_users_presence(conversation.id, [u.id for u in base])
+                ctx = self.get_serializer_context()
+                peers_out = [
+                    {
+                        "user_id": u.id,
+                        "activity": active[u.id],
+                        "peer": ChatPeerSerializer(u, context=ctx).data,
+                    }
+                    for u in base
+                    if u.id in active
+                ]
                 return Response({"mode": "group", "peers": peers_out})
             peer_id = other_participant_id(conversation, request.user.id)
             activity = get_user_presence(conversation.id, peer_id)

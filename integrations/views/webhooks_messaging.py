@@ -69,7 +69,7 @@ def _integration_gate(company, platform: str):
             "scope": "plan",
         }
     effective = get_effective_integration_policy(
-        SystemSettings.get_settings().integration_policies or {},
+        SystemSettings.get_cached_settings().integration_policies or {},
         company_id=company.id,
         platform=platform,
     )
