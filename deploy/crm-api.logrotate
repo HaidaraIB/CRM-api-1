@@ -12,14 +12,21 @@
 # without bound, which on a small shared VPS is a disk-full outage waiting to
 # happen — and a full disk takes down Postgres and nginx along with the API.
 #
-# `copytruncate` is deliberately NOT used. WatchedFileHandler detects the rename
-# and reopens the path on its own, so a normal rotate is safe and avoids the
-# window where copytruncate can drop lines written mid-copy.
+# `copytruncate` is deliberately NOT used for the Django logs. WatchedFileHandler
+# detects the rename and reopens the path on its own, so a normal rotate is safe
+# and avoids the window where copytruncate can drop lines written mid-copy.
+#
+# `maxsize`, not `size`. They are not synonyms: `size` *replaces* the time
+# schedule, so `daily` + `size 50M` means "rotate only when it exceeds 50M, never
+# on a timer" (logrotate says so out loud — "note: 'size' overrides previously
+# specified 'daily'"). `maxsize` keeps the daily rotation and adds an early one
+# if the file blows past the threshold before the day is out, which is the
+# belt-and-braces behaviour actually wanted here.
 
 /var/www/crm-api/logs/*.log {
     daily
     rotate 14
-    size 50M
+    maxsize 50M
     missingok
     notifempty
     compress
@@ -32,14 +39,25 @@
 # Those are plain shell redirections, not Django handlers: the writing process
 # holds the file descriptor open for its whole (short) run and a rename would be
 # invisible to it, so these do need copytruncate.
+#
+# `su root syslog` is required, not optional. /var/log on Debian/Ubuntu is
+# group-writable by syslog, and logrotate refuses to touch files in a directory
+# writable by a group other than root unless told which identity to use:
+#
+#     error: skipping "..." because parent directory has insecure permissions
+#
+# Without it this whole block silently does nothing — the failure mode is a
+# no-op, not a crash, so verify with `logrotate -d` after any change here. If
+# `ls -ld /var/log` shows a different group on your host, match it below.
 /var/log/crm-api-*.log {
     weekly
     rotate 8
-    size 20M
+    maxsize 20M
     missingok
     notifempty
     compress
     delaycompress
     copytruncate
+    su root syslog
     create 0640 root root
 }
