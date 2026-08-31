@@ -2,7 +2,7 @@ import logging
 
 from django.db import transaction
 from django.db.models import Prefetch, Q
-from django.http import FileResponse, HttpResponseRedirect
+from django.http import FileResponse, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -16,6 +16,7 @@ from crm_saas_api.responses import error_response, validation_error_response
 from notifications.models import NotificationType
 from notifications.services import NotificationService
 from sync.cache import invalidate_badges
+from sync.version import conversation_token, normalize_etag
 
 from . import supabase_storage as chat_storage
 from .attachments import (
@@ -234,6 +235,39 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
             page_size = _parse_positive_int(self.request.query_params.get("page_size")) or 50
             page_size = min(page_size, 200)
 
+            # An open thread polls this every few seconds and the steady-state
+            # answer is "same as last time" — but producing it meant re-running
+            # the cursor queries and re-serializing up to 200 rows. The thread's
+            # version counter (bumped on any message change, and on either
+            # participant's read cursor moving) turns that into one cache read.
+            #
+            # Placed before the queries below, since skipping them is the point.
+            token = conversation_token(
+                conversation.id,
+                request.user.id,
+                variant="|".join(
+                    str(v)
+                    for v in (
+                        order,
+                        before_id,
+                        after_id,
+                        around_id,
+                        page_size,
+                        self.request.query_params.get("page") or "",
+                    )
+                ),
+            )
+            if normalize_etag(request.META.get("HTTP_IF_NONE_MATCH", "")) == token:
+                not_modified = HttpResponse(status=304)
+                not_modified["ETag"] = f'"{token}"'
+                not_modified["Cache-Control"] = "no-store"
+                return not_modified
+
+            def _tagged(response):
+                response["ETag"] = f'"{token}"'
+                response["Cache-Control"] = "no-store"
+                return response
+
             qs_base = ChatMessage.objects.filter(conversation=conversation).select_related(
                 "sender",
                 "reply_to",
@@ -275,7 +309,7 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                 has_older = qs_base.filter(id__lt=(rows[0].id if rows else before_id)).exists()
                 has_newer = qs_base.filter(id__gte=before_id).exists()
                 ser = ChatMessageSerializer(rows, many=True, context=ctx)
-                return Response(
+                return _tagged(Response(
                     {
                         "count": qs_base.count(),
                         "next": None,
@@ -285,14 +319,14 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                         "has_newer": has_newer,
                         "anchor_id": before_id,
                     }
-                )
+                ))
             if after_id is not None:
                 newer_qs = qs_base.filter(id__gt=after_id).order_by("id")[:page_size]
                 rows = list(newer_qs)
                 has_older = qs_base.filter(id__lte=after_id).exists()
                 has_newer = qs_base.filter(id__gt=(rows[-1].id if rows else after_id)).exists()
                 ser = ChatMessageSerializer(rows, many=True, context=ctx)
-                return Response(
+                return _tagged(Response(
                     {
                         "count": qs_base.count(),
                         "next": None,
@@ -302,7 +336,7 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                         "has_newer": has_newer,
                         "anchor_id": after_id,
                     }
-                )
+                ))
             if around_id is not None:
                 target = qs_base.filter(id=around_id).first()
                 if target is None:
@@ -325,7 +359,7 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                 has_older = qs_base.filter(id__lt=(rows[0].id if rows else around_id)).exists()
                 has_newer = qs_base.filter(id__gt=(rows[-1].id if rows else around_id)).exists()
                 ser = ChatMessageSerializer(rows, many=True, context=ctx)
-                return Response(
+                return _tagged(Response(
                     {
                         "count": qs_base.count(),
                         "next": None,
@@ -335,14 +369,14 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                         "has_newer": has_newer,
                         "anchor_id": around_id,
                     }
-                )
+                ))
 
             page = self.paginate_queryset(qs)
             to_serialize = page if page is not None else qs
             ser = ChatMessageSerializer(to_serialize, many=True, context=ctx)
             if page is not None:
-                return self.get_paginated_response(ser.data)
-            return Response(ser.data)
+                return _tagged(self.get_paginated_response(ser.data))
+            return _tagged(Response(ser.data))
 
         uploaded_file = request.FILES.get("file")
         if uploaded_file and request.data.get("forward_from_message_id"):

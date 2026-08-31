@@ -27,6 +27,7 @@ view code, so a new write path cannot silently skip one.
 
 from __future__ import annotations
 
+import hashlib
 import time
 
 from django.core.cache import cache
@@ -43,6 +44,7 @@ SAFETY_BUCKET_SECONDS = 30
 GLOBAL_SEQ_KEY = "sync_seq_global_v1"
 COMPANY_SEQ_PREFIX = "sync_seq_company_v1"
 USER_SEQ_PREFIX = "sync_seq_user_v1"
+CONVERSATION_SEQ_PREFIX = "sync_seq_conversation_v1"
 
 
 def company_seq_key(company_id: int) -> str:
@@ -51,6 +53,20 @@ def company_seq_key(company_id: int) -> str:
 
 def user_seq_key(user_id: int) -> str:
     return f"{USER_SEQ_PREFIX}:{user_id}"
+
+
+def conversation_seq_key(conversation_id: int) -> str:
+    return f"{CONVERSATION_SEQ_PREFIX}:{conversation_id}"
+
+
+def normalize_etag(raw: str) -> str:
+    """Strip the weak marker and quotes so a client's If-None-Match compares cleanly."""
+    token = (raw or "").strip()
+    if token.startswith("W/"):
+        token = token[2:].strip()
+    if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+        token = token[1:-1]
+    return token
 
 
 def _bump(key: str) -> None:
@@ -78,6 +94,30 @@ def bump_user(user_id) -> None:
     """Something changed that only this user sees."""
     if user_id:
         _bump(user_seq_key(user_id))
+
+
+def bump_conversation(conversation_id) -> None:
+    """A chat thread's contents or read receipts changed."""
+    if conversation_id:
+        _bump(conversation_seq_key(conversation_id))
+
+
+def conversation_token(conversation_id, user_id, variant: str = "") -> str:
+    """
+    Version token for one chat thread as seen by one user.
+
+    ``variant`` must capture every request parameter that changes the response
+    (ordering, paging, anchors) — otherwise a client that scrolls would be handed
+    a 304 for a page it has never seen. It is hashed rather than embedded so the
+    header stays short regardless of how many params are involved.
+
+    The user id is part of the token because the payload is not the same for
+    everyone: read receipts are computed against the *other* participant's cursor.
+    """
+    seq = cache.get(conversation_seq_key(conversation_id)) or 0
+    bucket = int(time.time() // SAFETY_BUCKET_SECONDS)
+    digest = hashlib.md5(variant.encode("utf-8")).hexdigest()[:8] if variant else "0"
+    return f"{conversation_id}.{user_id}.{seq}.{digest}.{bucket}"
 
 
 def digest_token(user) -> str:

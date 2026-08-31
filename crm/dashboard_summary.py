@@ -13,7 +13,9 @@ from typing import Any
 from django.db.models import (
     Count,
     Max,
+    OuterRef,
     Q,
+    Subquery,
     Sum,
     Value,
 )
@@ -220,11 +222,25 @@ def _latest_activity_maps(user, client_ids: list[int]):
             latest[cid] = (kind, row)
 
     def scan(qs, kind: str):
-        seen: set[int] = set()
-        for row in qs.order_by("-created_at").iterator(chunk_size=500):
-            if row.client_id in seen:
-                continue
-            seen.add(row.client_id)
+        """
+        Pull only each client's newest row, not the whole history.
+
+        This used to stream the entire scoped tasks/calls/visits queryset into
+        Python ordered by -created_at and skip every row for a client already
+        seen — correct, but O(all activity rows) per dashboard request, with no
+        LIMIT anywhere. On a tenant with real history that is the dominant cost of
+        the endpoint, and it grows forever.
+
+        The correlated subquery asks the database for the same thing directly, so
+        it returns exactly one row per client. Written as a Subquery rather than
+        DISTINCT ON because that is Postgres-only and this also runs on SQLite.
+        """
+        newest_for_client = (
+            qs.filter(client_id=OuterRef("client_id"))
+            .order_by("-created_at", "-id")
+            .values("id")[:1]
+        )
+        for row in qs.filter(id=Subquery(newest_for_client)):
             consider(kind, row)
 
     scan(

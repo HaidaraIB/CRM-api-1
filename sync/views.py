@@ -9,7 +9,7 @@ from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import success_response
 
 from .cache import BADGES_CACHE_TTL, badges_cache_key
-from .version import digest_token
+from .version import digest_token, normalize_etag
 from .counts import (
     arrivals_pending_for_user,
     arrivals_waiting_for_user,
@@ -44,15 +44,6 @@ from .counts import (
 #
 # Freshness is unchanged: a real event bumps the counter and surfaces on the very
 # next poll. The token's time bucket bounds the damage if a bump is ever missed.
-
-
-def _etag_token(raw: str) -> str:
-    t = (raw or "").strip()
-    if t.startswith("W/"):
-        t = t[2:].strip()
-    if t.startswith('"') and t.endswith('"') and len(t) >= 2:
-        t = t[1:-1]
-    return t
 
 
 def build_live(user) -> dict:
@@ -93,7 +84,7 @@ def build_digest(user, token: str | None = None) -> dict:
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def sync_digest(request):
     user = request.user
-    inm = _etag_token(request.META.get("HTTP_IF_NONE_MATCH", ""))
+    inm = normalize_etag(request.META.get("HTTP_IF_NONE_MATCH", ""))
     token = digest_token(user)
 
     # Deliberately before build_digest: the point of the token is that this branch

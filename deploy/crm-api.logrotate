@@ -1,0 +1,45 @@
+# Log rotation for the CRM API.
+#
+# Install once per server:
+#     sudo cp deploy/crm-api.logrotate /etc/logrotate.d/crm-api
+#     sudo chown root:root /etc/logrotate.d/crm-api
+#     sudo chmod 644 /etc/logrotate.d/crm-api
+#     sudo logrotate -d /etc/logrotate.d/crm-api    # dry run, prints what it would do
+#
+# Nothing here rotates without this file in place: Django writes these paths
+# through WatchedFileHandler, which reopens a rotated file but never rotates one
+# itself. Before this existed both application logs and all 21 cron logs grew
+# without bound, which on a small shared VPS is a disk-full outage waiting to
+# happen — and a full disk takes down Postgres and nginx along with the API.
+#
+# `copytruncate` is deliberately NOT used. WatchedFileHandler detects the rename
+# and reopens the path on its own, so a normal rotate is safe and avoids the
+# window where copytruncate can drop lines written mid-copy.
+
+/var/www/crm-api/logs/*.log {
+    daily
+    rotate 14
+    size 50M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    su www-data www-data
+    create 0640 www-data www-data
+}
+
+# The cron jobs append straight to /var/log via `>>` in crontab_complete.txt.
+# Those are plain shell redirections, not Django handlers: the writing process
+# holds the file descriptor open for its whole (short) run and a rename would be
+# invisible to it, so these do need copytruncate.
+/var/log/crm-api-*.log {
+    weekly
+    rotate 8
+    size 20M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0640 root root
+}

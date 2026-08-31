@@ -24,7 +24,7 @@ from notifications.models import Notification
 from platform_content.models import NewsPost, UserNewsReadState
 from tenant_chat.models import ChatConversationReadState, ChatMessage
 
-from .version import bump_company, bump_global, bump_user
+from .version import bump_company, bump_conversation, bump_global, bump_user
 
 
 # --- user scope: notifications_unread, pbx_screen_pop, news_unread -------------
@@ -51,6 +51,10 @@ def chat_read_state_changed(sender, instance, **kwargs):
     if kwargs.get("raw"):
         return
     bump_user(instance.user_id)
+    # Also the thread: the message list renders read receipts from the *other*
+    # participant's cursor, so without this a "seen" tick would not appear until
+    # the next safety bucket.
+    bump_conversation(instance.conversation_id)
 
 
 # --- company scope: chats, calls, arrivals -------------------------------------
@@ -87,6 +91,7 @@ def lead_arrival_recipients_changed(sender, instance, action, **kwargs):
 def chat_message_changed(sender, instance, **kwargs):
     if kwargs.get("raw"):
         return
+    bump_conversation(instance.conversation_id)
     # Cached on the instance wherever the message was built with a conversation
     # object, which is every send path today.
     conversation = instance.conversation

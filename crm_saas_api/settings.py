@@ -692,17 +692,30 @@ LOGGING = {
             "()": "crm_saas_api.logging_filters.SkipExpectedForbiddenFilter",
         },
     },
+    # WatchedFileHandler, not FileHandler or RotatingFileHandler.
+    #
+    # These files are written by several processes at once — both gunicorn
+    # workers, the qcluster, and every cron management command. RotatingFileHandler
+    # would have each of them decide independently that the file is too big and
+    # rename it out from under the others, which loses lines and can leave writers
+    # appending to an unlinked inode. WatchedFileHandler instead reopens the path
+    # when it notices the file was moved, which is exactly the contract logrotate
+    # expects; see deploy/crm-api.logrotate for the matching config.
+    #
+    # Plain FileHandler (what this used to be) never reopens, so after a rotation
+    # every process would keep writing to the deleted file and the new one would
+    # stay empty until restart.
     "handlers": {
         "file": {
-            "level": "INFO",
-            "class": "logging.FileHandler",
+            "level": os.getenv("DJANGO_LOG_FILE_LEVEL", "INFO").upper(),
+            "class": "logging.handlers.WatchedFileHandler",
             "filename": BASE_DIR / "logs" / "django.log",
             "formatter": "verbose",
             "filters": ["skip_expected_forbidden", "skip_noise"],
         },
         "file_important": {
             "level": "WARNING",
-            "class": "logging.FileHandler",
+            "class": "logging.handlers.WatchedFileHandler",
             "filename": BASE_DIR / "logs" / "django_important.log",
             "formatter": "verbose",
             "filters": ["skip_expected_forbidden", "important_only"],

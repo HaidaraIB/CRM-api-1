@@ -735,3 +735,91 @@ def test_conversation_list_query_count_does_not_grow_with_threads():
     assert grown == baseline, (
         f"conversation list cost grew with thread count: {baseline} -> {grown} queries"
     )
+
+
+@pytest.mark.django_db
+def test_messages_conditional_get_returns_304_without_requerying():
+    """An unchanged thread is answered from the version counter, not re-serialized."""
+    company, owner = _company_with_subscription("t_msg_etag")
+    emp = _user(company, "emp_msg_etag", Role.EMPLOYEE.value)
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+    url = reverse("tenant_chat_conversation-list")
+    conv_id = client.post(url, {"with_user_id": emp.id}, format="json").data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    client.post(msg_url, {"body": "first"}, format="json")
+
+    first = client.get(msg_url)
+    assert first.status_code == status.HTTP_200_OK
+    etag = first["ETag"]
+    assert etag
+
+    second = client.get(msg_url, HTTP_IF_NONE_MATCH=etag)
+    assert second.status_code == status.HTTP_304_NOT_MODIFIED
+    assert second.content == b""
+
+
+@pytest.mark.django_db
+def test_messages_etag_changes_on_new_message_and_on_peer_read():
+    """
+    Both things that alter the rendered thread must break the ETag.
+
+    The second half is the subtle one: a peer marking the thread read changes the
+    delivery ticks without adding a message, so the thread counter has to move on
+    read-state writes too or receipts would stall.
+    """
+    company, owner = _company_with_subscription("t_msg_etag2")
+    emp = _user(company, "emp_msg_etag2", Role.EMPLOYEE.value)
+
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    emp_client = APIClient()
+    emp_client.force_authenticate(user=emp)
+
+    url = reverse("tenant_chat_conversation-list")
+    conv_id = owner_client.post(url, {"with_user_id": emp.id}, format="json").data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    mid = owner_client.post(msg_url, {"body": "hello"}, format="json").data["id"]
+
+    etag = owner_client.get(msg_url)["ETag"]
+
+    # A new message breaks it.
+    emp_client.post(msg_url, {"body": "reply"}, format="json")
+    after_message = owner_client.get(msg_url, HTTP_IF_NONE_MATCH=etag)
+    assert after_message.status_code == status.HTTP_200_OK
+    etag = after_message["ETag"]
+
+    # So does the peer reading it.
+    read_url = reverse("tenant_chat_conversation-mark-read", kwargs={"pk": conv_id})
+    assert emp_client.post(read_url, {"message_id": mid}, format="json").status_code == (
+        status.HTTP_200_OK
+    )
+    after_read = owner_client.get(msg_url, HTTP_IF_NONE_MATCH=etag)
+    assert after_read.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+def test_messages_etag_is_per_user_and_per_params():
+    """A token must not be honoured for a different viewer or a different page."""
+    company, owner = _company_with_subscription("t_msg_etag3")
+    emp = _user(company, "emp_msg_etag3", Role.EMPLOYEE.value)
+
+    owner_client = APIClient()
+    owner_client.force_authenticate(user=owner)
+    emp_client = APIClient()
+    emp_client.force_authenticate(user=emp)
+
+    url = reverse("tenant_chat_conversation-list")
+    conv_id = owner_client.post(url, {"with_user_id": emp.id}, format="json").data["id"]
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    owner_client.post(msg_url, {"body": "hi"}, format="json")
+
+    etag = owner_client.get(msg_url)["ETag"]
+
+    # Different viewer: read receipts differ, so the token must not match.
+    assert emp_client.get(msg_url, HTTP_IF_NONE_MATCH=etag).status_code == status.HTTP_200_OK
+    # Different paging: a different slice of the thread.
+    assert owner_client.get(
+        msg_url, {"page_size": 10}, HTTP_IF_NONE_MATCH=etag
+    ).status_code == status.HTTP_200_OK
