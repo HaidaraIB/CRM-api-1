@@ -62,7 +62,7 @@
 # to discover there is usually nothing to send — ~1,440 process starts a day on
 # two shared cores. If you install the qcluster schedules, COMMENT THIS LINE OUT,
 # or the job runs twice a minute.
-* * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_scheduled_broadcasts >> /var/log/crm-api-broadcasts.log 2>&1
+# * * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_scheduled_broadcasts >> /var/log/crm-api-broadcasts.log 2>&1
 
 # 2. إنهاء الاشتراكات المنتهية - كل 15 دقيقة (موجود بالفعل)
 2,17,32,47 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py end_expired_subscriptions >> /var/log/crm-api-subscriptions.log 2>&1
@@ -105,7 +105,7 @@
 #
 # Same cold-boot cost as #1 above. `install_qcluster_schedules` moves both into
 # the qcluster; COMMENT THIS LINE OUT if you do.
-* * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_arrival_escalations >> /var/log/crm-api-lead-arrival-escalations.log 2>&1
+# * * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_arrival_escalations >> /var/log/crm-api-lead-arrival-escalations.log 2>&1
 
 # 10. فحص أداء الحملات الإعلانية - كل ساعة (يُرسل في الساعة 10 بتوقيت كل شركة)
 13 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_campaign_performance --hour 10 >> /var/log/crm-api-campaign-performance.log 2>&1
