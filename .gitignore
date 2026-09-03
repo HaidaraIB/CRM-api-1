@@ -1,5 +1,10 @@
 # Django #
 *.log
+# Rotated/compressed logs from deploy/crm-api.logrotate (django.log.1,
+# django.log.2.gz, ...). `*.log` alone does not match these, and production
+# logs carry tenant PII — they must never reach the repo.
+*.log.*
+logs/
 *.pot
 *.pyc
 __pycache__
