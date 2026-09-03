@@ -7,7 +7,7 @@ from crm_saas_api.throttles import AuthRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from ..models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin, SupervisorPermission, ImpersonationSession
+from ..models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin, SupervisorPermission, ImpersonationSession, UserDevice
 from ..serializers import (
     UserSerializer,
     UserListSerializer,
@@ -151,6 +151,7 @@ def update_fcm_token(request):
 
     fcm_token = request.data.get("fcm_token", "").strip()
     language = request.data.get("language", "").strip()
+    platform = (request.data.get("platform") or "").strip().lower()
 
     if not fcm_token:
         # Keep a WARNING here so it shows in django_important.log (filter keeps "invalid"+"key")
@@ -183,6 +184,21 @@ def update_fcm_token(request):
                 user.language = language
                 update_fields.append("language")
             user.save(update_fields=update_fields)
+
+            # Record which kind of device this is, so a push meant for browsers
+            # does not also buzz this person's phone. Additive: the legacy fields
+            # above are still what an unfiltered push reads, so a failure here
+            # costs platform targeting and never delivery.
+            try:
+                UserDevice.register(
+                    user, fcm_token, platform=platform, user_agent=user_agent
+                )
+            except Exception as device_error:
+                logger.warning(
+                    "Could not register device for user_id=%s (%s)",
+                    getattr(user, "id", None),
+                    device_error,
+                )
     except Exception as e:
         # This will show in django_important.log (ERROR level).
         logger.exception(

@@ -9,7 +9,7 @@ from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import success_response
 
 from .cache import BADGES_CACHE_TTL, badges_cache_key
-from .version import digest_token, normalize_etag
+from .version import digest_token, normalize_etag, slice_versions
 from .counts import (
     arrivals_pending_for_user,
     arrivals_waiting_for_user,
@@ -77,7 +77,17 @@ def build_digest(user, token: str | None = None) -> dict:
         badges = build_badges(user)
         cache.set(key, badges, BADGES_CACHE_TTL)
 
-    return {**badges, **build_live(user), "version": token}
+    return {
+        **badges,
+        **build_live(user),
+        "version": token,
+        # Per-slice counters, so a client can refetch only what actually moved
+        # instead of running a timer per query. Built here rather than inside the
+        # badge cache: the cached tier is keyed by the token, so a cached entry is
+        # only ever reachable while these values are unchanged anyway — but
+        # recomputing them keeps the two independent, and it is one MGET.
+        "versions": slice_versions(user),
+    }
 
 
 @api_view(["GET"])

@@ -247,6 +247,16 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             'body': '{minutes_remaining} minutes remaining for follow-up call with {lead_name}'
         }
     },
+    'whatsapp_call_incoming': {
+        'ar': {
+            'title': 'مكالمة واتساب واردة',
+            'body': 'مكالمة واتساب واردة من {phone}'
+        },
+        'en': {
+            'title': 'Incoming WhatsApp Call',
+            'body': 'Incoming WhatsApp call from {phone}'
+        }
+    },
     'pbx_incoming_call': {
         'ar': {
             'title': 'مكالمة واردة',

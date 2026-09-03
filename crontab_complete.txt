@@ -55,6 +55,13 @@
 # ============================================
 
 # 1. إرسال البث المجدول - كل دقيقة (مهم جداً!)
+#
+# NOTE: this job and #9b below can be moved into the warm django-q cluster with
+#   python manage.py install_qcluster_schedules
+# Each cron run here is a full cold Django boot (~200MB RSS, seconds of CPU) just
+# to discover there is usually nothing to send — ~1,440 process starts a day on
+# two shared cores. If you install the qcluster schedules, COMMENT THIS LINE OUT,
+# or the job runs twice a minute.
 * * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py send_scheduled_broadcasts >> /var/log/crm-api-broadcasts.log 2>&1
 
 # 2. إنهاء الاشتراكات المنتهية - كل 15 دقيقة (موجود بالفعل)
@@ -95,6 +102,9 @@
 8,23,38,53 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_whatsapp_waiting_response >> /var/log/crm-api-whatsapp-waiting.log 2>&1
 
 # 9b. تصعيد إشعارات وصول العميل (CALL_CENTER) غير المستلمة - كل دقيقة (SLA افتراضي 5 دقائق لكل شركة)
+#
+# Same cold-boot cost as #1 above. `install_qcluster_schedules` moves both into
+# the qcluster; COMMENT THIS LINE OUT if you do.
 * * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_lead_arrival_escalations >> /var/log/crm-api-lead-arrival-escalations.log 2>&1
 
 # 10. فحص أداء الحملات الإعلانية - كل ساعة (يُرسل في الساعة 10 بتوقيت كل شركة)

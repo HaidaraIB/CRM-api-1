@@ -504,6 +504,21 @@ def _upsert_from_call_event(
                 call.refresh_from_db()
         except Exception:
             logger.exception("Out-of-hours inbound handling failed call=%s", call.id)
+
+        # Push only for a call that is genuinely still ringing — the out-of-hours
+        # branch above may have just rejected it, and refresh_from_db() is what
+        # makes that visible here.
+        if call.status == WhatsAppCallStatus.RINGING:
+            try:
+                from integrations.services.whatsapp_call_push import (
+                    notify_inbound_ringing_call,
+                )
+
+                notify_inbound_ringing_call(call)
+            except Exception:
+                # Never fail the webhook for a push. Meta retries what we do not
+                # acknowledge, and a retried call event rings people twice.
+                logger.exception("Ringing-call push failed call=%s", call.id)
     return call
 
 

@@ -3,6 +3,8 @@ from datetime import timedelta
 from django.db.models import Count, F, Max, OuterRef, Q, Subquery
 from django.urls import reverse
 from django.utils import timezone
+
+from accounts.presence import is_online as presence_is_online
 from rest_framework import serializers
 
 from accounts.models import User
@@ -155,9 +157,10 @@ class ChatPeerSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_is_online(self, obj):
-        if not obj.last_seen_at:
-            return False
-        return (timezone.now() - obj.last_seen_at) <= timedelta(seconds=90)
+        # Live socket first, last_seen_at as the fallback. `online_user_ids` is
+        # supplied by list views so a page of users costs one cache round trip
+        # rather than one per row; absent, this does a single read.
+        return presence_is_online(obj, self.context.get("online_user_ids"))
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):

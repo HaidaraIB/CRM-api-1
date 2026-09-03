@@ -1,0 +1,38 @@
+# /ws/ -> uvicorn (crm-realtime.service). Everything else keeps going to gunicorn.
+#
+# Paste this INSIDE the existing `server { ... }` block in
+# /etc/nginx/sites-available/crm-api, above the catch-all `location / { ... }`.
+# nginx matches prefix locations by longest match, so ordering does not strictly
+# matter, but keeping it above the catch-all makes the split obvious to read.
+#
+#   sudo nginx -t && sudo systemctl reload nginx
+
+location /ws/ {
+    proxy_pass http://127.0.0.1:8001;
+
+    # The four lines that make a WebSocket work. Without the Upgrade/Connection
+    # pair nginx silently downgrades the handshake to a plain HTTP request and
+    # the client sees an immediate close with no useful error.
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # A WebSocket is idle by definition — it exists to wait. The default 60s
+    # read timeout would drop every connection a minute after the last event and
+    # send the whole company into a reconnect loop. uvicorn's --ws-ping-interval
+    # (20s) keeps traffic flowing well inside this.
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+
+    # Buffering an event stream defeats the point.
+    proxy_buffering off;
+
+    # The JWT is in the query string, because a browser cannot set headers on a
+    # WebSocket handshake. Do not let it into the access log in plain text.
+    access_log off;
+}

@@ -15,7 +15,9 @@ from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import error_response, validation_error_response
 from notifications.models import NotificationType
 from notifications.services import NotificationService
+from realtime.publish import publish_presence
 from sync.cache import invalidate_badges
+from sync.conditional import conditional_token, not_modified, tag
 from sync.version import conversation_token, normalize_etag
 
 from . import supabase_storage as chat_storage
@@ -124,6 +126,22 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         the page, which only exists after pagination — see
         bulk_conversation_context() for what this saves.
         """
+        # Watches the user counter as well as the company slice. Unread markers
+        # here are computed against this viewer's read cursor, so the list changes
+        # when *they* open a thread — and no company counter moves for that, since
+        # nobody else's view of it changed.
+        token = conditional_token(
+            request.user,
+            slices=("tenant_chat",),
+            include_user_seq=True,
+            variant="&".join(
+                f"{k}={v}" for k, v in sorted(request.query_params.items())
+            ),
+        )
+        cached = not_modified(request, token)
+        if cached is not None:
+            return cached
+
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         conversations = list(page) if page is not None else list(queryset)
@@ -135,8 +153,8 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
         )
 
         if page is not None:
-            return self.get_paginated_response(serializer.data)
-        return Response(serializer.data)
+            return tag(self.get_paginated_response(serializer.data), token)
+        return tag(Response(serializer.data), token)
 
     def create(self, request, *args, **kwargs):
         ser = StartConversationSerializer(data=request.data)
@@ -220,6 +238,12 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
             return validation_error_response(ser.errors)
         action = ser.validated_data["action"]
         set_user_presence(conversation.id, request.user.id, action)
+        # The socket and this endpoint have to describe the same world in both
+        # directions. The consumer already mirrors socket frames into the cache
+        # this writes; this is the other half, so a client that posts (mobile, or
+        # anyone whose socket is down) still reaches peers who are listening
+        # rather than polling.
+        publish_presence(conversation.id, request.user.id, action)
         return Response({"ok": True, "action": action})
 
     @action(detail=True, methods=["get", "post"], url_path="messages")
@@ -699,7 +723,19 @@ def _notify_company_group_chat_message(sender: User, conversation: ChatConversat
     recipients = eligible_company_users_queryset(
         User.objects.filter(company_id=conversation.company_id)
     ).exclude(pk=sender.id)
-    for recipient in recipients.iterator():
+    # Materialised, not streamed with .iterator().
+    #
+    # The loop body sends a push, and when PUSH_QUEUE_ENABLED is on without a
+    # Redis broker, django-q falls back to the ORM broker and writes a queue row
+    # to the same database. Doing that while a chunked cursor is still open makes
+    # SQLite invalidate the cursor, and the next fetch dies with "Cannot operate
+    # on a closed database" — after the message has already been saved, so the
+    # user sees a 500 for a message that was in fact sent.
+    #
+    # .iterator() was guarding against loading a large result set, but this is one
+    # company's chat-eligible users: tens of rows, not thousands. Holding them in
+    # memory is cheaper than holding a cursor open across a write.
+    for recipient in list(recipients):
         if chat_role_bucket(recipient) == "ineligible":
             continue
         _notify_recipient_chat_message(sender, recipient, message)

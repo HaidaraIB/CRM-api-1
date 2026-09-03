@@ -162,6 +162,56 @@ def test_api_create_conversation_and_message():
 
 
 @pytest.mark.django_db
+def test_descending_first_page_is_the_thread_tail():
+    """
+    How a client opens a long thread in one request.
+
+    Unanchored ascending paging starts at the *beginning* of the conversation, so
+    a client that asked for one page of a 250-message thread got its oldest 100
+    and never saw the messages being sent. Descending order makes page 1 the tail,
+    and `next` is what tells the client history exists behind it.
+    """
+    company, owner = _company_with_subscription("t_tail")
+    emp = _user(company, "emp_tail", Role.EMPLOYEE.value)
+
+    api_client = APIClient()
+    api_client.force_authenticate(user=owner)
+    conv_id = api_client.post(
+        reverse("tenant_chat_conversation-list"),
+        {"with_user_id": emp.id},
+        format="json",
+    ).data["id"]
+
+    conversation = ChatConversation.objects.get(pk=conv_id)
+    created = [
+        ChatMessage.objects.create(conversation=conversation, sender=owner, body=f"m{i}")
+        for i in range(25)
+    ]
+    newest_ten = [m.id for m in created[-10:]]
+
+    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_id})
+    r = api_client.get(msg_url, {"ordering": "-created_at", "page_size": 10})
+    assert r.status_code == status.HTTP_200_OK
+    returned = [row["id"] for row in r.data["results"]]
+
+    assert sorted(returned) == sorted(newest_ten)
+    # Descending, so the client sorts back into reading order itself.
+    assert returned == sorted(newest_ten, reverse=True)
+    # There is more behind the tail, which is how the client knows to offer it.
+    assert r.data["next"]
+
+    # And the older window the client asks for next, anchored on what it holds.
+    older = api_client.get(
+        msg_url,
+        {"ordering": "created_at", "page_size": 10, "before_id": min(newest_ten)},
+    )
+    assert older.status_code == status.HTTP_200_OK
+    older_ids = [row["id"] for row in older.data["results"]]
+    assert older_ids == [m.id for m in created[5:15]]
+    assert older.data["has_older"] is True
+
+
+@pytest.mark.django_db
 def test_employee_cannot_start_chat_with_peer_via_api():
     company, _owner = _company_with_subscription("t8")
     e1 = _user(company, "ea", Role.EMPLOYEE.value)

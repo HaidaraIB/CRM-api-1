@@ -22,6 +22,8 @@ from django.db.models import (
 from django.db.models.functions import Coalesce, TruncDate
 from django.utils import timezone
 
+from accounts.presence import live_user_ids
+
 from accounts.models import Role, User
 from crm.models import Client, ClientCall, ClientTask, ClientVisit, Deal, Task
 from crm.serializers import ClientActivitySummaryMixin
@@ -497,11 +499,16 @@ def build_dashboard_summary(
     ]
 
     now = timezone.now()
+    # One cache round trip for the whole company, not one per employee — this
+    # loop runs over every user on a dashboard that several people keep open.
+    live_ids = live_user_ids([u.id for u in company_users])
     presence_rows = []
     for u in company_users:
         if u.role in PRESENCE_EXCLUDED_ROLES:
             continue
-        is_online = bool(u.last_seen_at and (now - u.last_seen_at) <= ONLINE_WINDOW)
+        is_online = u.id in live_ids or bool(
+            u.last_seen_at and (now - u.last_seen_at) <= ONLINE_WINDOW
+        )
         presence_rows.append(
             {
                 "id": u.id,

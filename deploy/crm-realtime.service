@@ -1,0 +1,66 @@
+; WebSocket channel for CRM API.
+;
+; Serves ONLY /ws/ and only the WebSocket protocol. Gunicorn keeps serving the
+; REST API from wsgi.py on :8000 and is not touched by this.
+;
+; Why a separate process: gunicorn runs gthread with a small fixed number of
+; request slots (2 workers x 4 threads = 8). A WebSocket held open inside that
+; pool occupies one slot for the life of the connection, so a few hundred open
+; tabs would stop the API answering anyone. On this asyncio process the same
+; connections are cheap — an idle socket costs a file descriptor, not a thread.
+;
+; Mirrors crm-api.service and crm-qcluster.service (same user, venv and
+; WorkingDirectory) so all three read the same .env and resolve the same paths.
+;
+; Install:
+;   sudo cp /var/www/crm-api/deploy/crm-realtime.service /etc/systemd/system/
+;   sudo systemctl daemon-reload
+;   sudo systemctl enable --now crm-realtime
+;
+; Then add the /ws/ location to nginx (see deploy/nginx-realtime.conf.snippet)
+; and only afterwards set REALTIME_ENABLED=true in .env and restart crm-api.
+; In that order: with the flag on and no listener, every write pays for a
+; channel-layer publish nobody consumes.
+
+[Unit]
+Description=CRM API realtime WebSocket (uvicorn/ASGI)
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/crm-api
+Environment="PATH=/var/www/crm-api/venv/bin:/usr/local/bin:/usr/bin:/bin"
+
+; One worker on purpose. This process is almost pure I/O wait — it holds idle
+; sockets and forwards small frames — so more workers add memory and Redis
+; connections without adding throughput. The box is shared with a second Django
+; app, Postgres, Redis and nginx; spend the cores on gunicorn.
+;
+; --proxy-headers so the client IP in logs is the real one from nginx, not
+; 127.0.0.1. --ws-ping-interval keeps idle connections alive through nginx's
+; proxy_read_timeout and detects half-open sockets after a network drop.
+ExecStart=/var/www/crm-api/venv/bin/python -m uvicorn crm_saas_api.asgi:application \
+    --host 127.0.0.1 \
+    --port 8001 \
+    --workers 1 \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1 \
+    --ws-ping-interval 20 \
+    --ws-ping-timeout 20 \
+    --log-level warning
+
+Restart=always
+RestartSec=5
+
+; Clients reconnect with exponential backoff and refetch the digest on reconnect,
+; so a restart costs a moment of latency and no data. Restarting is always better
+; than leaving this half-alive: a wedged process accepts connections and delivers
+; nothing, which is worse than being down, because the client believes it is
+; connected and stays on its slow 30s heartbeat.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

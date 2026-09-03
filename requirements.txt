@@ -15,12 +15,19 @@ stripe==14.1.0
 cryptography==46.0.3
 django-ratelimit==4.1.0
 redis==7.1.0
+# Realtime channel. Served by a separate uvicorn process (deploy/crm-realtime.service),
+# NOT by gunicorn — see the note in crm_saas_api/asgi.py.
+channels==4.3.1
+channels-redis==4.3.0
+uvicorn[standard]==0.38.0
 firebase_admin==7.1.0
 python-dateutil==2.9.0.post0
 twilio==9.10.2
 psycopg2-binary==2.9.11
 pytest==9.0.2
 pytest-django==4.12.0
+# WebSocket consumer tests (channels.testing.WebsocketCommunicator is async).
+pytest-asyncio==1.3.0
 factory_boy==3.3.3
 resend==2.29.0
 reportlab==4.4.10

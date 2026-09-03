@@ -42,12 +42,19 @@ ARRIVAL_RING_NOTIFICATION_TYPES = frozenset(
         "customer_arrived",
         "customer_arrival_escalated",
         "customer_arrival_assignee_off_shift",
+        # An inbound WhatsApp call ringing right now. Same reasoning as a walk-in:
+        # a chime that is missed is a caller who rings out. It reuses the existing
+        # `arrival` channel rather than introducing a new one, because the channel
+        # ids here must match channels crm_mobile actually creates — adding one
+        # needs a mobile release and a bundled sound file first. The behaviour
+        # (insistent ring) is right; only the tone is borrowed.
+        "whatsapp_call_incoming",
     }
 )
 
 
 def is_arrival_ring_notification_type(notification_type: str) -> bool:
-    """True for walk-in arrival pushes that must ring (call-style) on the device."""
+    """True for pushes that must ring (call-style) rather than chime."""
     return (notification_type or "").strip() in ARRIVAL_RING_NOTIFICATION_TYPES
 
 

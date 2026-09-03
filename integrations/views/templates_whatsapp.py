@@ -22,6 +22,8 @@ from crm_saas_api.responses import error_response, success_response, validation_
 
 from accounts.permissions import HasActiveSubscription
 from sync.cache import invalidate_badges
+from sync.conditional import conditional_token, not_modified, tag
+from sync.version import bump_company_slice
 from ..decorators import rate_limit_webhook
 from ..models import (
     IntegrationAccount, IntegrationLog, IntegrationPlatform,
@@ -152,6 +154,19 @@ def whatsapp_conversations_list(request):
         deleted_count, _ = qs.delete()
         return success_response(data={'deleted': deleted_count})
 
+    # Answered before the queries below, which is the point — building this list
+    # costs a scan of every WhatsApp message in the company plus per-client preview
+    # and unread lookups, and the steady-state answer is "same as last time".
+    #
+    # Watches the user counter as well as the company `chat` slice: marking a
+    # conversation read is a bulk update that moves the caller's own counter (via
+    # invalidate_badges), and their unread markers must clear immediately rather
+    # than on the next bucket.
+    token = conditional_token(request.user, slices=("chat",), include_user_seq=True)
+    cached = not_modified(request, token)
+    if cached is not None:
+        return cached
+
     # عملاء لديهم على الأقل رسالة واتساب، مرتبون بآخر رسالة
     sub = (
         LeadWhatsAppMessage.objects.filter(client__company=company)
@@ -206,20 +221,23 @@ def whatsapp_conversations_list(request):
         ):
             unread_by_id[row['client_id']] = row['n']
 
-    return success_response(
-        data=[
-            {
-                'id': c.id,
-                'name': c.name,
-                'phone_number': c.phone_number or '',
-                'lead_company_name': getattr(c, 'lead_company_name', None) or '',
-                'last_message_at': last_at_by_id.get(c.id).isoformat() if last_at_by_id.get(c.id) else None,
-                'last_message_preview': last_bodies.get(c.id, ''),
-                'assigned_to_id': c.assigned_to_id,
-                'unread_count': unread_by_id.get(c.id, 0),
-            }
-            for c in clients
-        ],
+    return tag(
+        success_response(
+            data=[
+                {
+                    'id': c.id,
+                    'name': c.name,
+                    'phone_number': c.phone_number or '',
+                    'lead_company_name': getattr(c, 'lead_company_name', None) or '',
+                    'last_message_at': last_at_by_id.get(c.id).isoformat() if last_at_by_id.get(c.id) else None,
+                    'last_message_preview': last_bodies.get(c.id, ''),
+                    'assigned_to_id': c.assigned_to_id,
+                    'unread_count': unread_by_id.get(c.id, 0),
+                }
+                for c in clients
+            ],
+        ),
+        token,
     )
 
 
@@ -310,9 +328,13 @@ def whatsapp_mark_conversation_read(request):
         is_read=False,
     ).update(is_read=True)
     if updated:
-        # Only the caller's badge is refreshed eagerly. Teammates who can also see
-        # this client fall back to the normal TTL, which is what that tier is for.
         invalidate_badges(request.user.id)
+        # A bulk update() writes no instances, so post_save never fires and the
+        # signal in sync/signals.py cannot see this. Without an explicit bump the
+        # `chat` slice would not move, and the conversation list — whose per-row
+        # unread counts just changed for everyone who can see this client — would
+        # be answered 304 with the old numbers until the safety bucket rolled.
+        bump_company_slice("chat", client.company_id)
     return success_response(data={'marked': updated, 'client_id': client.id})
 
 

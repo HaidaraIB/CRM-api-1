@@ -54,6 +54,7 @@ from integrations.whatsapp_access import (
 )
 from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
 from integrations.views.webhooks_messaging import _integration_gate
+from sync.conditional import conditional_token, not_modified, tag
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,27 @@ def whatsapp_calls_list(request):
     if not user_can_access_whatsapp_calls(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
+    # The costliest of the polled call endpoints: seven count() queries for the
+    # status sidebar plus a count and a page. The Calls page requests it twice per
+    # refresh (list and counters use different filters), and the answer only moves
+    # when a call row does.
+    #
+    # The variant is the whole query string, sorted — every filter, ordering and
+    # paging parameter changes the response without changing any counter, so a
+    # token that ignored them would 304 a filter switch with the previous filter's
+    # rows. Taking the raw params rather than naming them keeps that true if a
+    # parameter is added later.
+    token = conditional_token(
+        request.user,
+        slices=("calls",),
+        variant="&".join(
+            f"{k}={v}" for k, v in sorted(request.query_params.items())
+        ),
+    )
+    cached = not_modified(request, token)
+    if cached is not None:
+        return cached
+
     qs = _company_calls_qs(request.user)
     status_filter = (request.query_params.get("status") or "").strip()
     direction = (request.query_params.get("direction") or "").strip()
@@ -300,12 +322,15 @@ def whatsapp_calls_list(request):
 
     total = qs.count()
     page = qs[offset : offset + limit]
-    return success_response(
-        {
-            "count": total,
-            "results": [_serialize_call(c, request) for c in page],
-            "status_counts": status_counts,
-        }
+    return tag(
+        success_response(
+            {
+                "count": total,
+                "results": [_serialize_call(c, request) for c in page],
+                "status_counts": status_counts,
+            }
+        ),
+        token,
     )
 
 
@@ -318,6 +343,14 @@ def whatsapp_calls_pending(request):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
     if not user_can_access_whatsapp_calls(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
+
+    # Polled hard while a call is in progress, and the answer only changes when a
+    # call row does. The token also folds in this agent's own counter because the
+    # response embeds their availability status, which they can toggle themselves.
+    token = conditional_token(request.user, slices=("calls",), include_user_seq=True)
+    cached = not_modified(request, token)
+    if cached is not None:
+        return cached
 
     agent_away = user_is_whatsapp_call_away(request.user)
     results = []
@@ -359,11 +392,14 @@ def whatsapp_calls_pending(request):
             continue
         seen.add(call.id)
         results.append(_serialize_call(call, request))
-    return success_response(
-        {
-            "results": results,
-            "agent_status": serialize_agent_call_status(request.user),
-        }
+    return tag(
+        success_response(
+            {
+                "results": results,
+                "agent_status": serialize_agent_call_status(request.user),
+            }
+        ),
+        token,
     )
 
 
@@ -386,6 +422,18 @@ def whatsapp_calls_live(request):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
     if not user_can_access_whatsapp_calls(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
+
+    # Note this short-circuits the stale-row reaping below, which is a side effect
+    # rather than a read. That is safe, and only because of the safety bucket in
+    # the token: it rotates at least every SAFETY_BUCKET_SECONDS regardless of
+    # events, so the reaping still runs at that cadence even if no call row ever
+    # changes. Its cutoffs are 5 minutes and 3 hours, so a delay of up to 30s is
+    # immaterial. Remove the bucket and this becomes a bug — stale calls would
+    # show forever-running timers until an unrelated call happened.
+    token = conditional_token(request.user, slices=("calls",), include_user_seq=True)
+    cached = not_modified(request, token)
+    if cached is not None:
+        return cached
 
     now = timezone.now()
     answered_cutoff = now - timedelta(hours=3)
@@ -461,12 +509,15 @@ def whatsapp_calls_live(request):
         ):
             continue
         results.append(_serialize_call(call, request))
-    return success_response(
-        {
-            "results": results,
-            "count": len(results),
-            "agent_status": serialize_agent_call_status(request.user),
-        }
+    return tag(
+        success_response(
+            {
+                "results": results,
+                "count": len(results),
+                "agent_status": serialize_agent_call_status(request.user),
+            }
+        ),
+        token,
     )
 
 @api_view(["GET"])

@@ -165,6 +165,11 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(type__in=types)
 
         count = qs.update(deleted_at=timezone.now())
+        # Bulk update, so no post_save and no bump from sync/signals.py — and this
+        # one soft-deletes *unread* rows too, so notifications_unread changes. The
+        # digest would keep answering 304 with the old count until its 30s safety
+        # bucket rolled over; mark_all_read above invalidates for the same reason.
+        invalidate_badges(request.user.id)
         return success_response(
             message=f"{count} notifications deleted",
             data={"count": count},

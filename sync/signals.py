@@ -11,6 +11,12 @@ by default instead of by remembering.
 Each receiver bumps the narrowest scope that can see the change — see the scope
 notes in sync/version.py. The writes these hook are all rare next to the polls
 they save, which is what makes the trade worth it.
+
+Company-visible changes go through ``bump_company_slice``, which moves both the
+narrow slice a client watches and the coarse counter the ETag is built from. Never
+call ``bump_company`` directly from here: moving the ETag without the slice makes
+the digest rebuild while telling clients nothing changed, so they would keep
+showing stale lists.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from notifications.models import Notification
 from platform_content.models import NewsPost, UserNewsReadState
 from tenant_chat.models import ChatConversationReadState, ChatMessage
 
-from .version import bump_company, bump_conversation, bump_global, bump_user
+from .version import bump_company_slice, bump_conversation, bump_global, bump_user
 
 
 # --- user scope: notifications_unread, pbx_screen_pop, news_unread -------------
@@ -65,14 +71,14 @@ def whatsapp_call_changed(sender, instance, **kwargs):
     """Status transitions in and out of RINGING drive the incoming-call toast."""
     if kwargs.get("raw"):
         return
-    bump_company(instance.company_id)
+    bump_company_slice("calls", instance.company_id)
 
 
 @receiver(post_save, sender=LeadArrival)
 def lead_arrival_changed(sender, instance, **kwargs):
     if kwargs.get("raw"):
         return
-    bump_company(instance.company_id)
+    bump_company_slice("arrivals", instance.company_id)
 
 
 @receiver(m2m_changed, sender=LeadArrival.notified_users.through)
@@ -83,7 +89,7 @@ def lead_arrival_recipients_changed(sender, instance, action, **kwargs):
     people actually being alerted would wait for the next time bucket.
     """
     if action in ("post_add", "post_remove", "post_clear"):
-        bump_company(getattr(instance, "company_id", None))
+        bump_company_slice("arrivals", getattr(instance, "company_id", None))
 
 
 @receiver(post_save, sender=ChatMessage)
@@ -95,7 +101,7 @@ def chat_message_changed(sender, instance, **kwargs):
     # Cached on the instance wherever the message was built with a conversation
     # object, which is every send path today.
     conversation = instance.conversation
-    bump_company(getattr(conversation, "company_id", None))
+    bump_company_slice("tenant_chat", getattr(conversation, "company_id", None))
 
 
 @receiver(post_save, sender=LeadWhatsAppMessage)
@@ -104,7 +110,7 @@ def lead_whatsapp_message_changed(sender, instance, **kwargs):
     if kwargs.get("raw"):
         return
     client = instance.client
-    bump_company(getattr(client, "company_id", None))
+    bump_company_slice("chat", getattr(client, "company_id", None))
 
 
 # --- global scope: platform-wide news ------------------------------------------

@@ -36,6 +36,7 @@ class NotificationType(models.TextChoices):
     PBX_CALL_MISSED = 'pbx_call_missed', 'PBX Call Missed'
     
     # WhatsApp Notifications
+    WHATSAPP_CALL_INCOMING = 'whatsapp_call_incoming', 'WhatsApp Call Incoming'
     WHATSAPP_MESSAGE_RECEIVED = 'whatsapp_message_received', 'WhatsApp Message Received'
     WHATSAPP_TEMPLATE_SENT = 'whatsapp_template_sent', 'WhatsApp Template Sent'
     WHATSAPP_SEND_FAILED = 'whatsapp_send_failed', 'WhatsApp Send Failed'

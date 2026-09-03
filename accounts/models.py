@@ -223,7 +223,26 @@ class User(AbstractUser):
             normalized.append(normalized_token)
         return normalized
 
-    def iter_fcm_tokens_for_push(self):
+    def iter_fcm_tokens_for_push(self, platform=None):
+        """
+        Tokens to deliver a push to.
+
+        With no ``platform`` this returns exactly what it always did — every token
+        on the user — so every existing caller is unaffected.
+
+        Passing a platform narrows delivery to devices registered as that kind,
+        which is what stops a browser-only event buzzing someone's phone at night.
+        Legacy tokens are deliberately excluded from a narrowed query: they predate
+        device registration and their platform is genuinely unknown, so treating
+        them as a match would defeat the filter.
+        """
+        if platform:
+            return list(
+                self.devices.filter(platform=platform)
+                .order_by("-last_seen_at")
+                .values_list("token", flat=True)
+            )
+
         tokens = self._normalized_fcm_tokens()
         legacy_token = self._normalize_fcm_token(self.fcm_token)
         if legacy_token and legacy_token not in tokens:
@@ -703,3 +722,83 @@ class WorkDaySummary(models.Model):
 
     def __str__(self):
         return f"WorkDaySummary(user={self.user_id}, date={self.work_date}, secs={self.active_seconds})"
+
+class UserDevice(models.Model):
+    """
+    One registered push target, with the platform it belongs to.
+
+    The user model has carried a bare list of FCM tokens since before there was a
+    web client. That was fine while every token was a phone, but it cannot answer
+    "deliver this to browsers only" — so a change that concerns an open desktop tab
+    would vibrate the same person's phone, at any hour, with no way to tell the two
+    apart or to age out a browser token that will never be seen again.
+
+    This table is additive on purpose. ``User.fcm_tokens`` keeps being written and
+    is still what an unfiltered push reads, so nothing about existing delivery
+    changes; this is consulted only when a caller asks for a specific platform.
+    That makes the rollout reversible — dropping this table would cost platform
+    targeting and break nothing else.
+    """
+
+    class Platform(models.TextChoices):
+        WEB = "web", "Web"
+        ANDROID = "android", "Android"
+        IOS = "ios", "iOS"
+        # Everything registered before this table existed. Reachable by an
+        # unfiltered push, never by a platform-targeted one.
+        UNKNOWN = "unknown", "Unknown"
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="devices",
+    )
+    # Unique across all users, not per user: FCM issues a token to an app install,
+    # so if two people sign in on one device the token must move to whoever signed
+    # in last rather than delivering one person's notifications to the other.
+    token = models.CharField(max_length=255, unique=True)
+    platform = models.CharField(
+        max_length=16,
+        choices=Platform.choices,
+        default=Platform.UNKNOWN,
+        db_index=True,
+    )
+    user_agent = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "accounts_user_device"
+        ordering = ["-last_seen_at"]
+        indexes = [
+            models.Index(fields=["user", "platform"], name="userdevice_user_platform_idx"),
+        ]
+
+    def __str__(self):
+        return f"UserDevice(user={self.user_id}, platform={self.platform})"
+
+    @classmethod
+    def register(cls, user, token, platform=None, user_agent=""):
+        """
+        Upsert a device, reassigning the token if it belonged to someone else.
+
+        Returns the row. Callers should treat failure as non-fatal — the legacy
+        token list is written alongside this and is what unfiltered pushes read,
+        so a failure here costs platform targeting, not delivery.
+        """
+        token = (token or "").strip()
+        if not token:
+            return None
+        platform = (platform or "").strip().lower()
+        if platform not in cls.Platform.values:
+            platform = cls.Platform.UNKNOWN
+
+        device, _created = cls.objects.update_or_create(
+            token=token,
+            defaults={
+                "user": user,
+                "platform": platform,
+                "user_agent": (user_agent or "")[:200],
+            },
+        )
+        return device

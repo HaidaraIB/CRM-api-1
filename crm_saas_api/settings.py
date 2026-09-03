@@ -141,6 +141,26 @@ CORS_ALLOW_HEADERS = [
     "x-language",
     "cache-control",
     "pragma",
+    # Conditional requests. Without this the browser refuses to send any request
+    # carrying If-None-Match: the preflight answers 200, the header is not in the
+    # allow-list, and the real request is silently never issued. The symptom is a
+    # log full of `OPTIONS /sync/digest/` with no GET behind them and not a single
+    # 304 — which froze the digest (and therefore every badge and slice version)
+    # after its first successful fetch.
+    "if-none-match",
+    "if-modified-since",
+]
+
+# Response headers JavaScript is allowed to read.
+#
+# A cross-origin fetch() can only see a short safelist unless the server opts in,
+# and ETag is not on it — so response.headers.get('ETag') returns null in the
+# browser no matter what the server sent. Clients then cache no token, never send
+# If-None-Match, and every conditional endpoint quietly degrades to a full 200.
+# The saving is invisible in tests (same-origin) and absent in production.
+CORS_EXPOSE_HEADERS = [
+    "ETag",
+    "Content-Disposition",
 ]
 
 CORS_PREFLIGHT_MAX_AGE = 3600
@@ -220,6 +240,7 @@ INSTALLED_APPS = [
     "tenant_chat",
     "company_library",
     "sync",
+    "realtime",
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_q",
@@ -603,6 +624,49 @@ RECORDING_S3_REGION = (os.getenv("RECORDING_S3_REGION", "") or "").strip()
 # ============================================================================
 
 FIREBASE_CREDENTIALS_PATH = (os.getenv("FIREBASE_CREDENTIALS_PATH", "") or "").strip()
+
+# ============================================================================
+# Realtime channel (WebSocket)
+# ============================================================================
+
+# Served by a separate uvicorn process, never by gunicorn — see crm_saas_api/asgi.py.
+#
+# `channels` is deliberately NOT in INSTALLED_APPS. Adding it replaces Django's
+# runserver with the Channels ASGI one, which would silently change how everyone
+# runs the app locally. Nothing here needs it: the channel layer, the consumer and
+# the test communicator all work without the app being installed, and production
+# invokes uvicorn against asgi.py directly. To exercise WebSockets locally, run
+# that same command rather than runserver:
+#
+#     .\.venv\Scripts\python.exe -m uvicorn crm_saas_api.asgi:application --port 8001
+#
+# The same Redis as the cache and the django-q broker. It must be `noeviction`:
+# an evicted group registration silently drops a client's subscription, and the
+# symptom is "realtime works for some people" rather than an error.
+if _redis_url:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [_redis_url]},
+        }
+    }
+else:
+    # In-memory is per-process, so it only works when the publisher and the socket
+    # are the same process. True in tests and for a single dev server; never in
+    # production, where gunicorn publishes and uvicorn holds the sockets.
+    CHANNEL_LAYERS = {
+        "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
+    }
+
+# Publish change events to the channel layer on write. Off by default so the code
+# can deploy before crm-realtime.service exists, and can be switched off without a
+# redeploy. With it off, clients fall back to polling the digest — the behaviour
+# before this feature. Mirrors PUSH_QUEUE_ENABLED below.
+REALTIME_ENABLED = os.getenv("REALTIME_ENABLED", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # ============================================================================
 # Django Q2 Settings (for scheduled tasks)

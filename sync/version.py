@@ -46,9 +46,31 @@ COMPANY_SEQ_PREFIX = "sync_seq_company_v1"
 USER_SEQ_PREFIX = "sync_seq_user_v1"
 CONVERSATION_SEQ_PREFIX = "sync_seq_conversation_v1"
 
+# Narrow counters *within* the company scope.
+#
+# The coarse company counter above stays exactly as it was — it is the ETag input,
+# so it must keep moving on every company-visible write or the digest would start
+# serving stale 304s. These are additive, and exist for a different job: they are
+# reported to clients so a client can tell *which* of its queries went stale.
+#
+# Without them every consumer shares one signal, so an inbound WhatsApp message
+# marks the calls list, the arrivals board and team chat stale too, and each of
+# those refetches for nothing. The digest is a change feed only if its changes are
+# separable.
+COMPANY_SLICE_PREFIXES = {
+    "chat": "sync_seq_company_chat_v1",  # LeadWhatsAppMessage
+    "calls": "sync_seq_company_calls_v1",  # WhatsAppCall
+    "arrivals": "sync_seq_company_arrivals_v1",  # LeadArrival + notified_users
+    "tenant_chat": "sync_seq_company_tchat_v1",  # ChatMessage
+}
+
 
 def company_seq_key(company_id: int) -> str:
     return f"{COMPANY_SEQ_PREFIX}:{company_id}"
+
+
+def company_slice_key(slice_name: str, company_id: int) -> str:
+    return f"{COMPANY_SLICE_PREFIXES[slice_name]}:{company_id}"
 
 
 def user_seq_key(user_id: int) -> str:
@@ -67,6 +89,37 @@ def normalize_etag(raw: str) -> str:
     if token.startswith('"') and token.endswith('"') and len(token) >= 2:
         token = token[1:-1]
     return token
+
+
+# Listeners notified whenever a counter moves.
+#
+# This exists so the realtime channel cannot drift out of step with the counters.
+# Publishing from the signal receivers instead would cover only the writes that go
+# through model signals — not sync.cache.invalidate_badges, not the explicit bump
+# in the WhatsApp mark-read view (a bulk update, which fires no signal), and not
+# whatever the next such case turns out to be. Hooking the bump itself means every
+# path that records a change also announces it, by construction.
+#
+# Kept as a callback list rather than a direct import because the dependency runs
+# the other way: realtime imports from sync, so sync must not import realtime.
+_change_listeners: list = []
+
+
+def register_change_listener(listener) -> None:
+    """Register a callable invoked as ``listener(kind, **details)`` on every bump."""
+    if listener not in _change_listeners:
+        _change_listeners.append(listener)
+
+
+def _notify(kind: str, **details) -> None:
+    for listener in _change_listeners:
+        try:
+            listener(kind, **details)
+        except Exception:
+            # A listener must never break the write that triggered it. Realtime
+            # delivery is an optimisation; the counter it accompanies is what
+            # actually keeps clients correct.
+            pass
 
 
 def _bump(key: str) -> None:
@@ -90,16 +143,38 @@ def bump_company(company_id) -> None:
         _bump(company_seq_key(company_id))
 
 
+def bump_company_slice(slice_name: str, company_id) -> None:
+    """
+    Bump one narrow company slice *and* the coarse company counter.
+
+    Deliberately does both, so a caller cannot move a slice without also rotating
+    the ETag. If the coarse bump were left to the caller, forgetting it would not
+    fail a test — it would serve a 304 to a client whose data had in fact changed,
+    which is the one bug this whole mechanism exists to prevent.
+    """
+    if not company_id:
+        return
+    _bump(company_slice_key(slice_name, company_id))
+    _bump(company_seq_key(company_id))
+    _notify("company_slice", slice_name=slice_name, company_id=company_id)
+
+
 def bump_user(user_id) -> None:
     """Something changed that only this user sees."""
     if user_id:
         _bump(user_seq_key(user_id))
+        _notify("user", user_id=user_id)
 
 
 def bump_conversation(conversation_id) -> None:
     """A chat thread's contents or read receipts changed."""
     if conversation_id:
         _bump(conversation_seq_key(conversation_id))
+        # Notified like the other scopes so a read cursor moving reaches the open
+        # thread. Without it the only company-wide counter for team chat is the
+        # one ChatMessage bumps, which is why a "seen" tick used to wait for the
+        # next message to arrive.
+        _notify("conversation", conversation_id=conversation_id)
 
 
 def conversation_token(conversation_id, user_id, variant: str = "") -> str:
@@ -141,3 +216,30 @@ def digest_token(user) -> str:
     parts.extend(str(values.get(key) or 0) for key in keys)
     parts.append(str(int(time.time() // SAFETY_BUCKET_SECONDS)))
     return ".".join(parts)
+
+
+def slice_versions(user) -> dict:
+    """
+    Per-slice counters for this user, as reported in the digest body.
+
+    This is what turns the digest from a set of counts into a change feed: a client
+    holds the last values it saw and refetches only the queries whose slice moved,
+    instead of running a timer per query.
+
+    One ``get_many`` and no database access, same as ``digest_token``. It is only
+    called on the 200 path — a 304 never needs it, because by definition nothing
+    moved.
+
+    Missing counters read as 0, which is correct on a cold cache: a client's first
+    digest establishes the baseline, and the first real write moves it to 1.
+    """
+    company_id = getattr(user, "company_id", None)
+
+    keys = {"global": GLOBAL_SEQ_KEY, "user": user_seq_key(user.id)}
+    if company_id:
+        keys["company"] = company_seq_key(company_id)
+        for name in COMPANY_SLICE_PREFIXES:
+            keys[name] = company_slice_key(name, company_id)
+
+    values = cache.get_many(list(keys.values()))
+    return {name: int(values.get(key) or 0) for name, key in keys.items()}

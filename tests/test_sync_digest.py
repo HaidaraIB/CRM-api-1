@@ -176,6 +176,36 @@ class TestSyncDigest:
             "notifications_unread"
         ] == 0
 
+    def test_delete_all_invalidates_badge_cache(self, authenticated_admin, admin_user):
+        """
+        The bulk soft-delete path has to bump explicitly.
+
+        ``delete_all`` is a ``queryset.update()``, so no ``post_save`` fires and
+        the receiver in ``sync/signals.py`` never runs — and it removes *unread*
+        rows, so the count really does change. Without the explicit
+        ``invalidate_badges`` the digest keeps serving the cached count under an
+        unchanged token, and the bell badge stays lit for up to a safety bucket
+        after the user emptied the inbox.
+        """
+        from notifications.models import Notification, NotificationType
+
+        Notification.objects.create(
+            user=admin_user,
+            type=NotificationType.NEW_LEAD,
+            title="n",
+            body="b",
+            read=False,
+        )
+        assert api_body(authenticated_admin.get("/api/v1/sync/digest/"))[
+            "notifications_unread"
+        ] == 1
+
+        authenticated_admin.delete("/api/v1/notifications/delete_all/")
+
+        assert api_body(authenticated_admin.get("/api/v1/sync/digest/"))[
+            "notifications_unread"
+        ] == 0
+
     def test_whatsapp_gated_omits_count(self, authenticated_employee, employee_user):
         employee_user.whatsapp_chat_enabled = False
         employee_user.save(update_fields=["whatsapp_chat_enabled"])
@@ -229,3 +259,152 @@ class TestSyncDigest:
         assert digest["pbx_screen_pop"] is None
         assert "tenant_chat_unread" in digest
         assert "whatsapp_calls_pending" in digest
+
+
+@pytest.mark.django_db
+class TestSyncDigestSliceVersions:
+    """
+    The digest as a change feed.
+
+    Clients use these counters instead of a timer per query: hold the last value
+    seen, refetch only the slice that moved. Two things have to hold for that to
+    be safe — a slice must move when its data changes (or the client never
+    refetches), and it must *not* move when unrelated data changes (or the feed
+    degrades back into "refetch everything", which is what it replaced).
+    """
+
+    ALL_SLICES = {"global", "user", "company", "chat", "calls", "arrivals", "tenant_chat"}
+
+    def _versions(self, client):
+        return api_body(client.get("/api/v1/sync/digest/"))["versions"]
+
+    def _make_call(self, company, status=None):
+        from integrations.models import WhatsAppAccount, WhatsAppCall, WhatsAppCallStatus
+
+        account, _ = WhatsAppAccount.objects.get_or_create(
+            company=company,
+            phone_number_id="pn-slice-test",
+            defaults={"waba_id": "waba-slice-test"},
+        )
+        return WhatsAppCall.objects.create(
+            company=company,
+            whatsapp_account=account,
+            meta_call_id=f"call-{timezone.now().timestamp()}",
+            status=status or WhatsAppCallStatus.RINGING,
+        )
+
+    def _make_whatsapp_message(self, company):
+        from crm.models import Client
+        from integrations.models import LeadWhatsAppMessage
+
+        client = Client.objects.create(
+            name="Lead", company=company, priority="low", type="cold"
+        )
+        return LeadWhatsAppMessage.objects.create(
+            client=client,
+            phone_number="111",
+            body="hi",
+            direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+            is_read=False,
+        )
+
+    def test_digest_reports_every_slice(self, authenticated_admin):
+        assert set(self._versions(authenticated_admin)) == self.ALL_SLICES
+
+    def test_whatsapp_message_moves_only_the_chat_slice(
+        self, authenticated_admin, company
+    ):
+        """
+        The isolation guarantee, stated as a test.
+
+        Before the split, this single write moved the one company counter, so the
+        calls list, the arrivals board and team chat all refetched for a message
+        that concerns none of them.
+        """
+        before = self._versions(authenticated_admin)
+        self._make_whatsapp_message(company)
+        after = self._versions(authenticated_admin)
+
+        assert after["chat"] > before["chat"]
+        for untouched in ("calls", "arrivals", "tenant_chat"):
+            assert after[untouched] == before[untouched], untouched
+
+    def test_call_moves_only_the_calls_slice(self, authenticated_admin, company):
+        before = self._versions(authenticated_admin)
+        self._make_call(company)
+        after = self._versions(authenticated_admin)
+
+        assert after["calls"] > before["calls"]
+        for untouched in ("chat", "arrivals", "tenant_chat"):
+            assert after[untouched] == before[untouched], untouched
+
+    def test_arrival_moves_only_the_arrivals_slice(
+        self, authenticated_admin, admin_user, company
+    ):
+        from crm.models import Client, LeadArrival, LeadArrivalRouting
+
+        before = self._versions(authenticated_admin)
+        client = Client.objects.create(
+            name="Walk-in", company=company, priority="low", type="cold"
+        )
+        arrival = LeadArrival.objects.create(
+            company=company,
+            client=client,
+            routing=LeadArrivalRouting.EXISTING_ASSIGNEE.value,
+        )
+        arrival.notified_users.add(admin_user)
+        after = self._versions(authenticated_admin)
+
+        assert after["arrivals"] > before["arrivals"]
+        for untouched in ("chat", "calls", "tenant_chat"):
+            assert after[untouched] == before[untouched], untouched
+
+    def test_slice_bump_also_rotates_the_etag(self, authenticated_admin, company):
+        """
+        A slice must never move without the ETag moving too.
+
+        If it could, the digest would answer 304 while a slice the client watches
+        had already advanced — the client would hold the old value forever and
+        never refetch. bump_company_slice moves both for exactly this reason.
+        """
+        first = authenticated_admin.get("/api/v1/sync/digest/")
+        etag = first["ETag"]
+        before = api_body(first)["versions"]
+
+        self._make_call(company)
+
+        second = authenticated_admin.get(
+            "/api/v1/sync/digest/", HTTP_IF_NONE_MATCH=etag
+        )
+        assert second.status_code == status.HTTP_200_OK
+        assert api_body(second)["versions"]["calls"] > before["calls"]
+
+    def test_versions_do_not_leak_across_companies(
+        self, authenticated_admin, company, other_company
+    ):
+        """A tenant's counters must not move because another tenant had traffic."""
+        before = self._versions(authenticated_admin)
+        self._make_whatsapp_message(other_company)
+        after = self._versions(authenticated_admin)
+
+        assert after == before
+
+    def test_304_still_costs_no_queries_with_versions(
+        self, authenticated_admin, django_assert_num_queries
+    ):
+        """
+        slice_versions() must stay on the 200 path only.
+
+        A 304 means nothing moved, so there is nothing to report — reading the
+        counters there would add a round trip to the hottest request in the
+        system for a body that is never sent.
+        """
+        first = authenticated_admin.get("/api/v1/sync/digest/")
+        etag = first["ETag"]
+
+        with django_assert_num_queries(0):
+            second = authenticated_admin.get(
+                "/api/v1/sync/digest/", HTTP_IF_NONE_MATCH=etag
+            )
+
+        assert second.status_code == status.HTTP_304_NOT_MODIFIED
