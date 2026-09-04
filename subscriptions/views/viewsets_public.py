@@ -28,6 +28,7 @@ from ..models import (
     PaymentGateway,
     BroadcastStatus,
     PaymentGatewayStatus,
+    SENDING_CLAIM_STALE_AFTER,
 )
 from ..serializers import (
     PlanSerializer,
@@ -549,9 +550,23 @@ class BroadcastViewSet(viewsets.ModelViewSet):
         if broadcast.status == "sent":
             return error_response("Broadcast already sent", code="bad_request")
 
+        # Claim before sending. This endpoint races the scheduled sender for any
+        # broadcast that is also due, and a double-click races itself; without the
+        # claim each racer reads the same not-yet-sent status and every recipient
+        # gets the message once per racer.
+        #
+        # Kept so a failed send can be put back exactly where it was — sending a
+        # draft and failing used to leave it a draft, and the admin panel gates the
+        # draft's own actions on that.
+        previous_status = broadcast.status
+        if not broadcast.claim_for_sending():
+            return error_response(
+                "Broadcast is already being sent", code="bad_request"
+            )
+
         # Determine broadcast type (default to email if not set)
         broadcast_type = broadcast.broadcast_type or BroadcastType.EMAIL.value
-        
+
         # Send based on broadcast type
         if broadcast_type == BroadcastType.PUSH.value:
             result = send_broadcast_push_notification(broadcast)
@@ -560,6 +575,18 @@ class BroadcastViewSet(viewsets.ModelViewSet):
             result = send_broadcast_email(broadcast)
 
         if not result["success"]:
+            # Release the claim, or the broadcast stays SENDING until it goes stale
+            # and nobody can retry it in the meantime. Restoring the previous status
+            # rather than forcing FAILED keeps this endpoint's existing behaviour:
+            # a draft that fails to send is still a draft. The one exception is a
+            # stalled send we just reclaimed — that really did fail.
+            broadcast.status = (
+                BroadcastStatus.FAILED.value
+                if previous_status == BroadcastStatus.SENDING.value
+                else previous_status
+            )
+            broadcast.sending_started_at = None
+            broadcast.save(update_fields=["status", "sending_started_at", "updated_at"])
             return error_response(
                 result.get("error", "Failed to send broadcast"),
                 code="bad_request",
@@ -568,12 +595,14 @@ class BroadcastViewSet(viewsets.ModelViewSet):
         # Update broadcast status
         broadcast.status = BroadcastStatus.SENT.value
         broadcast.sent_at = timezone.now()
+        broadcast.sending_started_at = None
         broadcast.save()
 
         return success_response(
             data={
                 "status": "Broadcast sent successfully",
                 "recipients_count": result.get("recipients_count", 0),
+                "already_delivered": result.get("already_delivered", 0),
                 "broadcast_type": broadcast_type,
             },
         )
@@ -631,6 +660,20 @@ class BroadcastViewSet(viewsets.ModelViewSet):
         if broadcast.status == BroadcastStatus.SENT.value:
             return error_response(
                 "Broadcast already sent. Cannot reschedule.",
+                code="bad_request",
+            )
+
+        # Rescheduling mid-flight would move the row back to PENDING under a
+        # sender that is still working through the recipient list, which is the
+        # duplicate this whole change exists to prevent. A stale claim is fair
+        # game — that sender is gone.
+        if broadcast.status == BroadcastStatus.SENDING.value and (
+            broadcast.sending_started_at is None
+            or broadcast.sending_started_at
+            > timezone.now() - SENDING_CLAIM_STALE_AFTER
+        ):
+            return error_response(
+                "Broadcast is currently being sent. Cannot reschedule.",
                 code="bad_request",
             )
 

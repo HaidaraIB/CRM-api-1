@@ -13,8 +13,14 @@ For cron, add to crontab:
 """
 
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 from django.utils import timezone
-from subscriptions.models import Broadcast, BroadcastStatus, BroadcastType
+from subscriptions.models import (
+    SENDING_CLAIM_STALE_AFTER,
+    Broadcast,
+    BroadcastStatus,
+    BroadcastType,
+)
 from subscriptions.utils import send_broadcast_email, send_broadcast_push_notification
 import logging
 
@@ -55,10 +61,24 @@ class Command(BaseCommand):
         from datetime import timedelta
         time_threshold = now - timedelta(minutes=check_minutes)
         
+        # Due broadcasts, plus any whose send died partway.
+        #
+        # The second arm is the recovery path and deliberately ignores the
+        # check-minutes window: a broadcast whose sender was killed is stuck in
+        # SENDING, and the window would have moved past it long before anyone
+        # noticed. It is safe to pick up because claim_for_sending only hands over
+        # a stale claim, and delivered_user_ids means the resumed send skips
+        # everyone who already received it.
         scheduled_broadcasts = Broadcast.objects.filter(
-            status=BroadcastStatus.PENDING.value,
-            scheduled_at__lte=now,
-            scheduled_at__gte=time_threshold
+            Q(
+                status=BroadcastStatus.PENDING.value,
+                scheduled_at__lte=now,
+                scheduled_at__gte=time_threshold,
+            )
+            | Q(
+                status=BroadcastStatus.SENDING.value,
+                sending_started_at__lt=now - SENDING_CLAIM_STALE_AFTER,
+            )
         ).order_by('scheduled_at')
         
         count = scheduled_broadcasts.count()
@@ -85,7 +105,13 @@ class Command(BaseCommand):
         failed_count = 0
         
         for broadcast in scheduled_broadcasts:
-            scheduled_time = broadcast.scheduled_at.strftime('%Y-%m-%d %H:%M:%S')
+            # None for a broadcast that was sent immediately from the admin panel
+            # and stalled — those reach us through the stale-claim arm above.
+            scheduled_time = (
+                broadcast.scheduled_at.strftime('%Y-%m-%d %H:%M:%S')
+                if broadcast.scheduled_at
+                else 'immediate'
+            )
             
             if verbose:
                 from subscriptions.utils import get_broadcast_targets_list
@@ -103,7 +129,21 @@ class Command(BaseCommand):
                 )
                 sent_count += 1
                 continue
-            
+
+            # Take the row before sending anything. Losing the race is the normal,
+            # expected outcome whenever this run overlaps another sender — an
+            # earlier run still working through a long recipient list, or an admin
+            # pressing "send now" — so it is skipped quietly rather than logged as
+            # a failure. Without this both senders pass the status check above and
+            # every recipient gets the broadcast twice.
+            if not broadcast.claim_for_sending():
+                if verbose:
+                    self.stdout.write(
+                        f'    - Skipped: broadcast {broadcast.id} is already '
+                        f'being sent by another process'
+                    )
+                continue
+
             # Send by broadcast type (email or push)
             broadcast_type = broadcast.broadcast_type or BroadcastType.EMAIL.value
             if broadcast_type == BroadcastType.PUSH.value:
@@ -112,9 +152,12 @@ class Command(BaseCommand):
                 result = send_broadcast_email(broadcast)
             
             if result.get('success'):
-                # Update broadcast status
+                # Update broadcast status. Clearing the claim timestamp keeps
+                # "when did the in-flight send start" meaningful only while a send
+                # is actually in flight.
                 broadcast.status = BroadcastStatus.SENT.value
                 broadcast.sent_at = timezone.now()
+                broadcast.sending_started_at = None
                 broadcast.save()
                 
                 sent_count += 1
@@ -131,8 +174,10 @@ class Command(BaseCommand):
                     f"Broadcast {broadcast.id} sent successfully to {recipients_count} recipients"
                 )
             else:
-                # Update broadcast status to failed
+                # Update broadcast status to failed, releasing the claim so it is
+                # not left looking like a send that is still running.
                 broadcast.status = BroadcastStatus.FAILED.value
+                broadcast.sending_started_at = None
                 broadcast.save()
                 
                 failed_count += 1

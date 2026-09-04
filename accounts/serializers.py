@@ -10,6 +10,7 @@ from drf_spectacular.utils import extend_schema_field
 from .models import User, Role, TwoFactorAuth, LimitedAdmin, SupervisorPermission
 from companies.models import Company
 from subscriptions.models import Plan, Subscription, SubscriptionStatus, BillingCycle
+from .billing_access import issue_billing_access_token
 from .two_factor_policy import is_company_owner, is_trusted_device_valid, owner_login_two_factor_required
 from .utils import get_email_language_for_user, send_two_factor_auth_email
 from django.conf import settings
@@ -721,13 +722,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     raise serializers.ValidationError(
                         {"error": "Your account is temporarily inactive", "code": "ACCOUNT_TEMPORARILY_INACTIVE"}
                     )
-                raise serializers.ValidationError(
-                    {
-                        "error": "Your subscription is not active. Please contact support or Complete Your Payment to access the system.",
-                        "code": "SUBSCRIPTION_INACTIVE",
-                        "subscriptionId": subscription.id if subscription else None,
-                    }
-                )
+                # No tokens for an inactive tenant — except a checkout-only one,
+                # so the owner can actually pay their way back in.
+                payload = {
+                    "error": "Your subscription is not active. Please contact support or Complete Your Payment to access the system.",
+                    "code": "SUBSCRIPTION_INACTIVE",
+                    "subscriptionId": subscription.id if subscription else None,
+                }
+                payment_token = issue_billing_access_token(self.user, subscription)
+                if payment_token:
+                    payload["paymentToken"] = payment_token
+                raise serializers.ValidationError(payload)
 
         # Owner-only intelligent 2FA: challenge only when owner opted in and trusted-device check fails.
         if (

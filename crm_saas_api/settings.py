@@ -254,6 +254,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "crm_saas_api.middleware.DisableCSRFForAPI",
     "crm_saas_api.middleware.APIKeyValidationMiddleware",
+    "crm_saas_api.middleware.BillingScopeMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",

@@ -27,6 +27,7 @@ from ..serializers import (
     ImpersonateSerializer,
     build_user_auth_payload,
 )
+from ..billing_access import issue_billing_access_token
 from ..permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
 from companies.models import Company
 from django.conf import settings
@@ -155,6 +156,10 @@ def request_two_factor_auth(request):
                 details = {}
                 if subscription:
                     details["subscriptionId"] = subscription.id
+                    # Checkout-only token so the owner can pay their way back in.
+                    payment_token = issue_billing_access_token(user, subscription)
+                    if payment_token:
+                        details["paymentToken"] = payment_token
                 return error_response(
                     "Your subscription is not active. Please contact support or Complete Your Payment to access the system.",
                     code="subscription_inactive",
@@ -386,6 +391,10 @@ def verify_two_factor_auth(request):
             details = {}
             if subscription:
                 details["subscriptionId"] = subscription.id
+                # Checkout-only token so the owner can pay their way back in.
+                payment_token = issue_billing_access_token(user, subscription)
+                if payment_token:
+                    details["paymentToken"] = payment_token
             return error_response(
                 "Your subscription is not active. Please contact support or Complete Your Payment to access the system.",
                 code="subscription_inactive",

@@ -37,7 +37,16 @@ STATUS_CODE_MAP = {
 
 # Keys that carry a business code / metadata, not field validation errors
 _META_KEYS = frozenset(
-    {"error", "message", "detail", "code", "error_key", "subscriptionId", "subscription_id"}
+    {
+        "error",
+        "message",
+        "detail",
+        "code",
+        "error_key",
+        "subscriptionId",
+        "subscription_id",
+        "paymentToken",
+    }
 )
 
 
@@ -139,6 +148,15 @@ def custom_exception_handler(exc, context):
                 details = {}
             if isinstance(details, dict):
                 details = {**details, "subscriptionId": plain_sid}
+
+        # Preserve the checkout-only token minted for an owner whose subscription
+        # lapsed — it is the only credential they have to pay with.
+        payment_token = _unwrap_str(data.get("paymentToken", ""))
+        if payment_token:
+            if details is None:
+                details = {}
+            if isinstance(details, dict):
+                details = {**details, "paymentToken": payment_token}
 
         # If we took message from error/detail but other non-meta keys remain,
         # keep them as details (field errors) when details is still empty.

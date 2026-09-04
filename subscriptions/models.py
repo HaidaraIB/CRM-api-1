@@ -1,11 +1,23 @@
+from datetime import timedelta
+
 from django.db import models
+from django.utils import timezone
 
 # Create your models here.
 from enum import Enum
 
+# How long a SENDING claim is honoured before another sender may take it over.
+# Long enough that a slow but healthy send is never interrupted, short enough that
+# a killed worker does not strand a broadcast until someone notices by hand.
+SENDING_CLAIM_STALE_AFTER = timedelta(minutes=30)
+
 
 class BroadcastStatus(Enum):
     PENDING = "pending"
+    # Claimed by a sender and mid-flight. Exists so that two senders racing for the
+    # same row cannot both start: the transition into it is a compare-and-swap, and
+    # only the winner sends. See Broadcast.claim_for_sending.
+    SENDING = "sending"
     SENT = "sent"
     FAILED = "failed"
 
@@ -366,6 +378,20 @@ class Broadcast(models.Model):
     scheduled_at = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
 
+    # When the current SENDING claim was taken. Only meaningful while status is
+    # SENDING, and only used to decide that a claim has gone stale — a sender that
+    # was killed mid-send leaves the row claimed forever otherwise.
+    sending_started_at = models.DateTimeField(null=True, blank=True)
+
+    # Users who have already received this broadcast, so a resumed send does not
+    # deliver twice. Written as the send progresses rather than at the end,
+    # because the whole point is to survive the process being killed partway.
+    #
+    # A list on the row rather than a delivery table: a broadcast reaches company
+    # admins, which is tens to low hundreds of rows, and this keeps a resume to one
+    # read with no join. Revisit if broadcasts ever fan out to every user.
+    delivered_user_ids = models.JSONField(default=list, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -376,3 +402,66 @@ class Broadcast(models.Model):
     def __str__(self):
         status_display = self.status or "draft"
         return f"{self.subject} ({status_display})"
+
+    def claim_for_sending(self) -> bool:
+        """
+        Take exclusive ownership of this broadcast. True if we got it.
+
+        A single conditional UPDATE, which the database serialises for us: of N
+        senders racing on the same row exactly one sees a rowcount of 1, and the
+        losers get 0 and must not send. This is what makes it safe for the
+        scheduled job and the "send now" button to run at the same time — before
+        it, both would read ``status=PENDING``, both would pass the check, and
+        every recipient would get the message twice.
+
+        Deliberately not ``select_for_update``: that would hold a row lock for the
+        entire send loop (potentially minutes of SMTP round trips) inside an open
+        transaction. The compare-and-swap costs one statement and holds nothing.
+
+        A claim older than ``SENDING_CLAIM_STALE_AFTER`` is reclaimable, so a
+        sender killed mid-flight does not strand the broadcast. Resuming is only
+        safe because ``delivered_user_ids`` records progress as it goes.
+        """
+        now = timezone.now()
+        claimed = (
+            Broadcast.objects.filter(
+                models.Q(status__isnull=True)
+                | models.Q(
+                    status__in=(
+                        BroadcastStatus.PENDING.value,
+                        BroadcastStatus.FAILED.value,
+                    )
+                )
+                | models.Q(
+                    status=BroadcastStatus.SENDING.value,
+                    sending_started_at__lt=now - SENDING_CLAIM_STALE_AFTER,
+                ),
+                pk=self.pk,
+            ).update(status=BroadcastStatus.SENDING.value, sending_started_at=now)
+        )
+        if not claimed:
+            return False
+        self.status = BroadcastStatus.SENDING.value
+        self.sending_started_at = now
+        return True
+
+    def record_delivery(self, user_id) -> None:
+        """
+        Mark one recipient done, immediately.
+
+        One UPDATE per recipient looks expensive until you compare it to the SMTP
+        round trip it follows — and batching it would reopen exactly the hole this
+        closes, because the batch that is lost when a worker is killed is the set
+        of people who get a second copy on the retry.
+        """
+        ids = list(self.delivered_user_ids or [])
+        if user_id in ids:
+            return
+        ids.append(user_id)
+        self.delivered_user_ids = ids
+        Broadcast.objects.filter(pk=self.pk).update(delivered_user_ids=ids)
+
+    def undelivered(self, users):
+        """The subset of ``users`` that has not already received this broadcast."""
+        done = set(self.delivered_user_ids or [])
+        return [u for u in users if u.id not in done]

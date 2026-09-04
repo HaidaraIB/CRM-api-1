@@ -3,12 +3,18 @@ Custom middleware for API security:
 - MaintenanceMiddleware: Blocks API when platform maintenance mode is enabled.
 - DisableCSRFForAPI: Skips CSRF checks for JWT-authenticated API endpoints.
 - APIKeyValidationMiddleware: Requires X-API-Key header for non-public API routes.
+- BillingScopeMiddleware: Confines billing-scoped tokens to checkout endpoints.
 """
 import logging
 from django.utils.deprecation import MiddlewareMixin
 from django.http import JsonResponse
 from django.conf import settings
 
+from accounts.billing_access import (
+    BILLING_SCOPE,
+    bearer_token_from_request,
+    scope_from_raw_token,
+)
 from settings.maintenance_policy import (
     get_maintenance_policy,
     request_language_from_meta,
@@ -169,3 +175,61 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
             )
 
         return None
+
+
+class BillingScopeMiddleware(MiddlewareMixin):
+    """
+    Confine billing-scoped access tokens to the endpoints needed to pay.
+
+    These tokens go to owners whose subscription has lapsed (see
+    accounts.billing_access), who otherwise cannot authenticate at all. They
+    must not double as a way back into the CRM the tenant has stopped paying
+    for.
+
+    This is middleware rather than a permission class on purpose:
+    HasActiveSubscription is opted into per view across dozens of modules, so
+    any view that forgot it would be reachable. An allowlist here is
+    fail-closed — a new endpoint stays denied to these tokens until someone
+    deliberately adds it below.
+    """
+
+    ALLOWED_PREFIXES = [
+        "/api/public/",
+        "/api/payment-status/",
+        "/api/payments/create-paytabs-session/",
+        "/api/payments/create-zaincash-session/",
+        "/api/payments/create-stripe-session/",
+        "/api/payments/create-qicard-session/",
+        "/api/payments/create-fib-session/",
+        "/api/payments/create-alqaseh-session/",
+        # Read-only pricing preview: the login screen offers "change plan" as an
+        # alternative to renewing, and that page prices the change before checkout.
+        "/api/subscriptions/preview-change/",
+    ]
+
+    def process_request(self, request):
+        if not request.path.startswith("/api/"):
+            return None
+
+        raw_token = bearer_token_from_request(request)
+        if scope_from_raw_token(raw_token) != BILLING_SCOPE:
+            return None
+
+        match_path = _api_path_for_public_match(request.path)
+        if any(match_path.startswith(ep) for ep in self.ALLOWED_PREFIXES):
+            return None
+
+        logger.info("Billing-scoped token denied for %s %s", request.method, request.path)
+        # Deliberately not the `subscription_inactive` code: clients treat that
+        # one as "session is dead, wipe it and bounce to login", which would
+        # throw away the very token the user needs to finish paying.
+        return JsonResponse(
+            {
+                "success": False,
+                "error": {
+                    "code": "billing_scope_only",
+                    "message": "This session can only be used to complete payment.",
+                },
+            },
+            status=403,
+        )

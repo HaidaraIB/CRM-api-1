@@ -97,6 +97,25 @@ def send_broadcast_email(broadcast, language=None):
         recipient_users = get_recipient_users_for_email_broadcast(broadcast)
         targets_list = get_broadcast_targets_list(broadcast)
 
+        # Anyone already emailed on a previous attempt is dropped here, so a send
+        # that was killed partway resumes instead of starting over. Counted so the
+        # caller can tell "nobody to send to" from "everybody already has it".
+        eligible_total = len(recipient_users)
+        recipient_users = broadcast.undelivered(recipient_users)
+        already_delivered = eligible_total - len(recipient_users)
+
+        if already_delivered and not recipient_users:
+            logger.info(
+                f"Broadcast {broadcast.id}: all {already_delivered} recipient(s) "
+                f"already delivered, nothing to resend"
+            )
+            return {
+                "success": True,
+                "recipients_count": 0,
+                "already_delivered": already_delivered,
+                "recipients": [],
+            }
+
         if not recipient_users:
             logger.warning(
                 f"No recipients found for broadcast targets: {targets_list}"
@@ -139,6 +158,10 @@ def send_broadcast_email(broadcast, language=None):
             )
             email_msg.attach_alternative(html_content, "text/html")
             email_msg.send()
+            # Recorded before the counter, and one recipient at a time: if the
+            # process dies on the next iteration this user must not be emailed
+            # again when the send resumes.
+            broadcast.record_delivery(user.id)
             sent_count += 1
             recipient_emails.append(user.email)
 
@@ -149,6 +172,7 @@ def send_broadcast_email(broadcast, language=None):
         return {
             "success": True,
             "recipients_count": sent_count,
+            "already_delivered": already_delivered,
             "recipients": recipient_emails,
         }
 
@@ -255,7 +279,26 @@ def send_broadcast_push_notification(broadcast):
         eligible_count = _get_eligible_count_for_broadcast(broadcast)
         users_list = get_recipient_users_for_broadcast(broadcast)
         skipped_no_token = max(0, eligible_count - len(users_list))
-        
+
+        # Same resume rule as the email path — see send_broadcast_email.
+        with_tokens = len(users_list)
+        users_list = broadcast.undelivered(users_list)
+        already_delivered = with_tokens - len(users_list)
+
+        if already_delivered and not users_list:
+            logger.info(
+                f"Broadcast {broadcast.id}: all {already_delivered} recipient(s) "
+                f"already delivered, nothing to resend"
+            )
+            return {
+                "success": True,
+                "recipients_count": 0,
+                "already_delivered": already_delivered,
+                "failed_count": 0,
+                "skipped_no_token": skipped_no_token,
+                "eligible_count": eligible_count,
+            }
+
         if not users_list:
             logger.warning(
                 f"No recipients with FCM tokens found for broadcast targets: {targets_list} "
@@ -289,6 +332,7 @@ def send_broadcast_push_notification(broadcast):
                 )
                 
                 if result:
+                    broadcast.record_delivery(user.id)
                     success_count += 1
                 else:
                     failed_count += 1
@@ -304,6 +348,7 @@ def send_broadcast_push_notification(broadcast):
             return {
                 "success": True,
                 "recipients_count": success_count,
+                "already_delivered": already_delivered,
                 "failed_count": failed_count,
                 "skipped_no_token": skipped_no_token,
                 "eligible_count": eligible_count,
