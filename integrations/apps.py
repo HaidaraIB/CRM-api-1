@@ -17,3 +17,4 @@ class IntegrationsConfig(AppConfig):
 
     def ready(self):
         connection_created.connect(_configure_sqlite_connection)
+        import integrations.signals  # noqa: F401

@@ -120,3 +120,8 @@ def require_client_whatsapp_access(user, client) -> Optional[str]:
     if user_can_access_client(user, client):
         return None
     return "whatsapp_contact_not_found"
+
+
+def user_can_delete_whatsapp_history(user) -> bool:
+    """Owner/admin only: WhatsApp history is a record, staff may not erase it."""
+    return bool(user and getattr(user, "is_authenticated", False) and user.is_admin())

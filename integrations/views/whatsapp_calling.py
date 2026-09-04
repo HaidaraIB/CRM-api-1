@@ -697,7 +697,11 @@ def whatsapp_call_initiate(request):
 
     wa, err = _resolve_account(request.user, account_id)
     if not wa:
-        return error_response(err or "No connected WhatsApp account", status_code=400)
+        return error_response(
+            "No connected WhatsApp number for this company.",
+            code=err or "no_connected_whatsapp_number",
+            status_code=400,
+        )
     if not wa.calling_enabled:
         return error_response(
             "WhatsApp calling is not enabled on this number. Enable it in Integrations → WhatsApp.",
@@ -838,7 +842,11 @@ def whatsapp_call_permission_request(request):
 
     wa, err = _resolve_account(request.user, account_id)
     if not wa:
-        return error_response(err or "No connected WhatsApp account", status_code=400)
+        return error_response(
+            "No connected WhatsApp number for this company.",
+            code=err or "no_connected_whatsapp_number",
+            status_code=400,
+        )
 
     company = request.user.company
     mode = "template"
@@ -981,7 +989,11 @@ def whatsapp_call_permissions(request):
         return validation_error_response({"to": ["Required"]})
     wa, err = _resolve_account(request.user, request.query_params.get("whatsapp_account_id"))
     if not wa:
-        return error_response(err or "No connected WhatsApp account", status_code=400)
+        return error_response(
+            "No connected WhatsApp number for this company.",
+            code=err or "no_connected_whatsapp_number",
+            status_code=400,
+        )
     to_digits = "".join(c for c in to if c.isdigit())
     try:
         perms = get_call_permissions(wa, to_digits)
@@ -1007,7 +1019,11 @@ def whatsapp_calling_enable(request):
 
     wa, err = _resolve_account(request.user, request.data.get("whatsapp_account_id"))
     if not wa:
-        return error_response(err or "No connected WhatsApp account", status_code=400)
+        return error_response(
+            "No connected WhatsApp number for this company.",
+            code=err or "no_connected_whatsapp_number",
+            status_code=400,
+        )
 
     # Cloud Calling requires a Cloud-API-only number. Coexistence (Business app + API)
     # keeps voice/video on the app only — Meta rejects enable with #141000.

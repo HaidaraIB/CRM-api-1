@@ -20,6 +20,7 @@ from .templates_whatsapp import (
     whatsapp_contact_by_phone,
     whatsapp_limits,
     whatsapp_mark_conversation_read,
+    whatsapp_update_conversation_state,
     whatsapp_unread_count,
 )
 from .twilio_sms import (
@@ -119,6 +120,7 @@ __all__ = [
     "whatsapp_contact_by_phone",
     "whatsapp_unread_count",
     "whatsapp_mark_conversation_read",
+    "whatsapp_update_conversation_state",
     "whatsapp_limits",
     "whatsapp_send_message",
     "whatsapp_send_media",

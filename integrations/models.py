@@ -1040,6 +1040,63 @@ class LeadWhatsAppMessage(models.Model):
         return f"WhatsApp to {self.phone_number} @ {self.created_at}"
 
 
+class WhatsAppConversationStatus(models.TextChoices):
+    OPEN = "open", "Open"
+    PENDING = "pending", "Pending"
+    SPAM = "spam", "Spam"
+    INVALID = "invalid", "Invalid"
+    DONE = "done", "Done"
+    SNOOZED = "snoozed", "Snoozed"
+
+
+class WhatsAppConversationState(models.Model):
+    """
+    Per-client WhatsApp inbox triage state (Mujeb-style).
+    A missing row means open, not starred, not unsubscribed — queries tolerate NULL.
+    """
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name="whatsapp_conversation_states",
+    )
+    client = models.OneToOneField(
+        "crm.Client",
+        on_delete=models.CASCADE,
+        related_name="whatsapp_state",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=WhatsAppConversationStatus.choices,
+        default=WhatsAppConversationStatus.OPEN,
+        db_index=True,
+    )
+    snoozed_until = models.DateTimeField(null=True, blank=True)
+    is_starred = models.BooleanField(default=False)
+    is_unsubscribed = models.BooleanField(default=False)
+    status_changed_at = models.DateTimeField(null=True, blank=True)
+    status_changed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="whatsapp_conversation_status_changes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "whatsapp_conversation_states"
+        indexes = [
+            models.Index(fields=["company", "status"]),
+            models.Index(fields=["company", "is_starred"]),
+            models.Index(fields=["company", "snoozed_until"]),
+        ]
+
+    def __str__(self):
+        return f"WA state {self.client_id} ({self.status})"
+
+
 class MessageTemplate(models.Model):
     """
     قوالب رسائل للمراسلات (واتساب و SMS).

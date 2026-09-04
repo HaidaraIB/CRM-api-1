@@ -328,4 +328,17 @@ class LeadWhatsAppMessageViewSet(
             qs = qs.filter(phone_q)
         return qs
 
+    def destroy(self, request, *args, **kwargs):
+        from rest_framework.exceptions import PermissionDenied
+        from integrations.whatsapp_access import user_can_delete_whatsapp_history
+
+        if not user_can_delete_whatsapp_history(request.user):
+            raise PermissionDenied(
+                detail={
+                    'error': 'Only the company owner can delete WhatsApp conversations',
+                    'error_key': 'whatsapp_delete_forbidden',
+                }
+            )
+        return super().destroy(request, *args, **kwargs)
+
 

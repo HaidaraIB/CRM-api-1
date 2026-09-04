@@ -90,7 +90,7 @@ class TestWhatsAppConversationsConditional:
         _inbound_message(wa_client)
         first = authenticated_admin.get(self.URL)
         etag = _etag(first)
-        assert api_body(first)[0]["unread_count"] == 1
+        assert api_body(first)["results"][0]["unread_count"] == 1
 
         marked = authenticated_admin.post(
             "/api/v1/integrations/whatsapp/conversations/mark-read/",
@@ -101,7 +101,57 @@ class TestWhatsAppConversationsConditional:
 
         again = authenticated_admin.get(self.URL, HTTP_IF_NONE_MATCH=etag)
         assert again.status_code == status.HTTP_200_OK
-        assert api_body(again)[0]["unread_count"] == 0
+        assert api_body(again)["results"][0]["unread_count"] == 0
+
+    def test_status_filter_switch_does_not_304_stale_rows(
+        self, authenticated_admin, wa_client, company
+    ):
+        from crm.models import Client
+        from integrations.whatsapp_conversation_state import ensure_conversation_state
+        from integrations.models import WhatsAppConversationStatus
+
+        _inbound_message(wa_client)
+        other = Client.objects.create(
+            name="Pending Lead", company=company, priority="low", type="cold"
+        )
+        _inbound_message(other, body="pending")
+        st = ensure_conversation_state(other)
+        st.status = WhatsAppConversationStatus.PENDING
+        st.save(update_fields=["status", "updated_at"])
+
+        open_resp = authenticated_admin.get(f"{self.URL}?status=open")
+        etag = _etag(open_resp)
+        open_ids = {r["id"] for r in api_body(open_resp)["results"]}
+        assert wa_client.id in open_ids
+        assert other.id not in open_ids
+
+        pending_resp = authenticated_admin.get(
+            f"{self.URL}?status=pending", HTTP_IF_NONE_MATCH=etag
+        )
+        assert pending_resp.status_code == status.HTTP_200_OK
+        pending_ids = {r["id"] for r in api_body(pending_resp)["results"]}
+        assert pending_ids == {other.id}
+
+        # Same filter again still 304s
+        same = authenticated_admin.get(
+            f"{self.URL}?status=pending",
+            HTTP_IF_NONE_MATCH=_etag(pending_resp),
+        )
+        assert same.status_code == status.HTTP_304_NOT_MODIFIED
+
+    def test_status_change_bumps_token(self, authenticated_admin, wa_client):
+        _inbound_message(wa_client)
+        etag = _etag(authenticated_admin.get(self.URL))
+
+        changed = authenticated_admin.post(
+            "/api/v1/integrations/whatsapp/conversations/state/",
+            {"client": wa_client.id, "status": "pending"},
+            format="json",
+        )
+        assert changed.status_code == status.HTTP_200_OK
+
+        again = authenticated_admin.get(self.URL, HTTP_IF_NONE_MATCH=etag)
+        assert again.status_code == status.HTTP_200_OK
 
     def test_token_not_honoured_for_another_user(
         self, authenticated_admin, wa_client, employee_user, subscription

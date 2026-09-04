@@ -124,12 +124,18 @@ def whatsapp_conversations_list(request):
     GET /api/integrations/whatsapp/conversations/
     DELETE /api/integrations/whatsapp/conversations/?client=:id | ?phone=:digits
     """
-    from django.db.models import Max
-    from crm.models import Client
+    from django.db.models import Count, Exists, OuterRef, Q, Subquery, IntegerField
+    from django.db.models.functions import Coalesce
+    from crm.models import Client, ClientPhoneNumber
+    from integrations.models import WhatsAppConversationStatus
     from integrations.whatsapp_access import (
         filter_clients_queryset_for_whatsapp,
+        resolve_accessible_client_by_phone,
         user_can_access_client,
+        user_can_delete_whatsapp_history,
+        user_sees_all_company_leads,
     )
+    from integrations.whatsapp_conversation_state import sweep_expired_snoozes
 
     company = request.user.company
     blocked = _integration_gate(company, "whatsapp")
@@ -139,6 +145,12 @@ def whatsapp_conversations_list(request):
         return error_response('WhatsApp chat access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     if request.method == 'DELETE':
+        if not user_can_delete_whatsapp_history(request.user):
+            return error_response(
+                'Only the company owner can delete WhatsApp conversations',
+                code='whatsapp_delete_forbidden',
+                status_code=403,
+            )
         client_id = request.query_params.get('client')
         phone = (request.query_params.get('phone') or '').strip()
         if not (client_id and str(client_id).isdigit()) and not phone:
@@ -150,92 +162,192 @@ def whatsapp_conversations_list(request):
                 return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
             if not user_can_access_client(request.user, client):
                 return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
+        elif phone:
+            client, err = resolve_accessible_client_by_phone(request.user, phone)
+            if err or not client:
+                return error_response('Contact not found', code='whatsapp_contact_not_found', status_code=404)
+            client_id = str(client.id)
         qs = _whatsapp_thread_messages_qs(company, client_id=client_id, phone=phone or None)
         deleted_count, _ = qs.delete()
         return success_response(data={'deleted': deleted_count})
 
-    # Answered before the queries below, which is the point — building this list
-    # costs a scan of every WhatsApp message in the company plus per-client preview
-    # and unread lookups, and the steady-state answer is "same as last time".
-    #
-    # Watches the user counter as well as the company `chat` slice: marking a
-    # conversation read is a bulk update that moves the caller's own counter (via
-    # invalidate_badges), and their unread markers must clear immediately rather
-    # than on the next bucket.
-    token = conditional_token(request.user, slices=("chat",), include_user_seq=True)
+    # Expire snoozes before minting the token so a stale token cannot hide reopens.
+    unsnoozed = sweep_expired_snoozes(company)
+    if unsnoozed:
+        bump_company_slice("chat", company.id)
+
+    # Variant is the whole query string so a filter switch cannot 304 with the
+    # previous filter's rows (same pattern as whatsapp_calls_list).
+    token = conditional_token(
+        request.user,
+        slices=("chat",),
+        include_user_seq=True,
+        variant="&".join(
+            f"{k}={v}" for k, v in sorted(request.query_params.items())
+        ),
+    )
     cached = not_modified(request, token)
     if cached is not None:
         return cached
 
-    # عملاء لديهم على الأقل رسالة واتساب، مرتبون بآخر رسالة
-    sub = (
-        LeadWhatsAppMessage.objects.filter(client__company=company)
+    latest_msg = LeadWhatsAppMessage.objects.filter(client_id=OuterRef('pk')).order_by('-created_at')
+    unread_sub = (
+        LeadWhatsAppMessage.objects.filter(
+            client_id=OuterRef('pk'),
+            direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+            is_read=False,
+        )
         .values('client_id')
-        .annotate(last_at=Max('created_at'))
-        .order_by('-last_at')
+        .annotate(n=Count('id'))
+        .values('n')[:1]
     )
-    client_ids = [s['client_id'] for s in sub[:200]]
-    last_at_by_id = {s['client_id']: s['last_at'] for s in sub if s['client_id'] in client_ids}
-    order = {cid: i for i, cid in enumerate(client_ids)}
-    clients_qs = filter_clients_queryset_for_whatsapp(
+
+    qs = filter_clients_queryset_for_whatsapp(
         request.user,
-        Client.objects.filter(id__in=client_ids),
+        Client.objects.filter(company=company),
     )
-    clients = list(clients_qs.select_related('company', 'assigned_to'))
-    clients.sort(key=lambda c: order.get(c.id, 999))
-    clients = clients[:100]
+    qs = qs.select_related('assigned_to', 'whatsapp_state').annotate(
+        last_message_at=Subquery(latest_msg.values('created_at')[:1]),
+        last_message_direction=Subquery(latest_msg.values('direction')[:1]),
+        last_body=Subquery(latest_msg.values('body')[:1]),
+        last_kind=Subquery(latest_msg.values('attachment_kind')[:1]),
+        unread_count=Coalesce(Subquery(unread_sub, output_field=IntegerField()), 0),
+    ).filter(last_message_at__isnull=False)
 
-    # Last message preview per client (one query)
-    last_bodies: dict[int, str] = {}
-    unread_by_id: dict[int, int] = {}
-    if clients:
-        from django.db.models import Count, OuterRef, Subquery
+    assignment = (request.query_params.get('assignment') or 'all').strip().lower()
+    agent_id = (request.query_params.get('agent') or '').strip()
+    starred = (request.query_params.get('starred') or '').lower() in ('1', 'true', 'yes')
+    unreplied = (request.query_params.get('unreplied') or '').lower() in ('1', 'true', 'yes')
+    search = (request.query_params.get('search') or '').strip()
+    status_filter = (request.query_params.get('status') or 'all').strip().lower()
+    ordering = (request.query_params.get('ordering') or '-last_message_at').strip()
 
-        latest_body = (
-            LeadWhatsAppMessage.objects.filter(client_id=OuterRef('pk'))
-            .order_by('-created_at')
-            .values('body')[:1]
-        )
-        latest_kind = (
-            LeadWhatsAppMessage.objects.filter(client_id=OuterRef('pk'))
-            .order_by('-created_at')
-            .values('attachment_kind')[:1]
-        )
-        client_id_list = [c.id for c in clients]
-        for row in Client.objects.filter(id__in=client_id_list).annotate(
-            last_body=Subquery(latest_body),
-            last_kind=Subquery(latest_kind),
-        ).values('id', 'last_body', 'last_kind'):
-            last_bodies[row['id']] = _whatsapp_preview_label(
-                row.get('last_kind'), row.get('last_body')
+    if assignment == 'mine':
+        qs = qs.filter(assigned_to_id=request.user.id)
+    elif assignment == 'unassigned':
+        qs = qs.filter(assigned_to__isnull=True)
+
+    if agent_id:
+        if not user_sees_all_company_leads(request.user):
+            return error_response('Not allowed to filter by agent', status_code=403)
+        try:
+            qs = qs.filter(assigned_to_id=int(agent_id))
+        except (TypeError, ValueError):
+            return validation_error_response({'agent': ['Invalid agent id']})
+
+    if starred:
+        qs = qs.filter(whatsapp_state__is_starred=True)
+
+    if unreplied:
+        qs = qs.filter(last_message_direction=LeadWhatsAppMessage.DIRECTION_INBOUND)
+
+    if search:
+        phone_match = Exists(
+            ClientPhoneNumber.objects.filter(
+                client_id=OuterRef('pk'),
+                phone_number__icontains=search,
             )
+        )
+        qs = qs.filter(
+            Q(name__icontains=search)
+            | Q(phone_number__icontains=search)
+            | Q(lead_company_name__icontains=search)
+            | phone_match
+        ).distinct()
 
-        for row in (
-            LeadWhatsAppMessage.objects.filter(
-                client_id__in=client_id_list,
-                direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
-                is_read=False,
-            )
-            .values('client_id')
-            .annotate(n=Count('id'))
-        ):
-            unread_by_id[row['client_id']] = row['n']
+    # Counts after non-status filters, before status filter (sidebar matches filtered set).
+    base_for_counts = qs
+    status_agg = {
+        row['whatsapp_state__status']: row['n']
+        for row in base_for_counts.values('whatsapp_state__status').annotate(n=Count('id'))
+    }
+    open_count = status_agg.get(None, 0) + status_agg.get(WhatsAppConversationStatus.OPEN, 0)
+    status_counts = {
+        'all': base_for_counts.count(),
+        'open': open_count,
+        'pending': status_agg.get(WhatsAppConversationStatus.PENDING, 0),
+        'spam': status_agg.get(WhatsAppConversationStatus.SPAM, 0),
+        'invalid': status_agg.get(WhatsAppConversationStatus.INVALID, 0),
+        'done': status_agg.get(WhatsAppConversationStatus.DONE, 0),
+        'snoozed': status_agg.get(WhatsAppConversationStatus.SNOOZED, 0),
+        'unread': base_for_counts.filter(unread_count__gt=0).count(),
+        'unsubscribed': base_for_counts.filter(whatsapp_state__is_unsubscribed=True).count(),
+    }
+    assignment_counts = {
+        'all': status_counts['all'],
+        'mine': base_for_counts.filter(assigned_to_id=request.user.id).count(),
+        'unassigned': base_for_counts.filter(assigned_to__isnull=True).count(),
+        'starred': base_for_counts.filter(whatsapp_state__is_starred=True).count(),
+        'unreplied': base_for_counts.filter(
+            last_message_direction=LeadWhatsAppMessage.DIRECTION_INBOUND
+        ).count(),
+    }
+
+    if status_filter == 'open':
+        qs = qs.filter(
+            Q(whatsapp_state__isnull=True)
+            | Q(whatsapp_state__status=WhatsAppConversationStatus.OPEN)
+        )
+    elif status_filter == 'unread':
+        qs = qs.filter(unread_count__gt=0)
+    elif status_filter == 'unsubscribed':
+        qs = qs.filter(whatsapp_state__is_unsubscribed=True)
+    elif status_filter in (
+        WhatsAppConversationStatus.PENDING,
+        WhatsAppConversationStatus.SPAM,
+        WhatsAppConversationStatus.INVALID,
+        WhatsAppConversationStatus.DONE,
+        WhatsAppConversationStatus.SNOOZED,
+    ):
+        qs = qs.filter(whatsapp_state__status=status_filter)
+    elif status_filter not in ('', 'all'):
+        return validation_error_response({'status': ['Invalid status']})
+
+    allowed_ordering = {'last_message_at', 'name', '-last_message_at', '-name'}
+    if ordering not in allowed_ordering:
+        ordering = '-last_message_at'
+    qs = qs.order_by(ordering)
+
+    try:
+        limit = min(int(request.query_params.get('limit') or 100), 200)
+        offset = max(int(request.query_params.get('offset') or 0), 0)
+    except (TypeError, ValueError):
+        limit, offset = 100, 0
+
+    total = qs.count()
+    page = list(qs[offset : offset + limit])
+
+    results = []
+    for c in page:
+        state = getattr(c, 'whatsapp_state', None)
+        results.append({
+            'id': c.id,
+            'name': c.name,
+            'phone_number': c.phone_number or '',
+            'lead_company_name': getattr(c, 'lead_company_name', None) or '',
+            'last_message_at': c.last_message_at.isoformat() if c.last_message_at else None,
+            'last_message_preview': _whatsapp_preview_label(c.last_kind, c.last_body),
+            'last_message_direction': c.last_message_direction or '',
+            'assigned_to_id': c.assigned_to_id,
+            'unread_count': int(c.unread_count or 0),
+            'status': (
+                state.status if state else WhatsAppConversationStatus.OPEN
+            ),
+            'snoozed_until': (
+                state.snoozed_until.isoformat() if state and state.snoozed_until else None
+            ),
+            'is_starred': bool(state.is_starred) if state else False,
+            'is_unsubscribed': bool(state.is_unsubscribed) if state else False,
+        })
 
     return tag(
         success_response(
-            data=[
-                {
-                    'id': c.id,
-                    'name': c.name,
-                    'phone_number': c.phone_number or '',
-                    'lead_company_name': getattr(c, 'lead_company_name', None) or '',
-                    'last_message_at': last_at_by_id.get(c.id).isoformat() if last_at_by_id.get(c.id) else None,
-                    'last_message_preview': last_bodies.get(c.id, ''),
-                    'assigned_to_id': c.assigned_to_id,
-                    'unread_count': unread_by_id.get(c.id, 0),
-                }
-                for c in clients
-            ],
+            data={
+                'count': total,
+                'results': results,
+                'status_counts': status_counts,
+                'assignment_counts': assignment_counts,
+            },
         ),
         token,
     )
@@ -267,6 +379,121 @@ def whatsapp_unread_count(request):
     )
     qs = filter_whatsapp_messages_queryset(request.user, qs)
     return success_response(data={'unread_count': qs.count()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def whatsapp_update_conversation_state(request):
+    """
+    Update WhatsApp conversation triage state for a client.
+    POST /api/integrations/whatsapp/conversations/state/
+    Body: { client, status?, snoozed_until?, is_starred?, is_unsubscribed? }
+    """
+    from django.utils.dateparse import parse_datetime
+    from crm.models import Client
+    from integrations.models import WhatsAppConversationStatus
+    from integrations.whatsapp_access import user_can_access_client
+    from integrations.whatsapp_conversation_state import ensure_conversation_state
+
+    company = request.user.company
+    blocked = _integration_gate(company, "whatsapp")
+    if blocked is not None:
+        return blocked
+    if not user_can_access_whatsapp_chats(request.user):
+        return error_response(
+            'WhatsApp chat access is disabled for your account',
+            code='whatsapp_access_disabled',
+            status_code=403,
+        )
+
+    client_id = request.data.get('client') or request.data.get('client_id')
+    if client_id is None or not str(client_id).isdigit():
+        return error_response('client is required', code='bad_request')
+    try:
+        client = company.clients.get(id=int(client_id))
+    except Client.DoesNotExist:
+        return error_response(
+            'Contact not found',
+            code='whatsapp_contact_not_found',
+            status_code=404,
+        )
+    if not user_can_access_client(request.user, client):
+        return error_response(
+            'Contact not found',
+            code='whatsapp_contact_not_found',
+            status_code=404,
+        )
+
+    state = ensure_conversation_state(client)
+    update_fields = ['updated_at']
+    errors = {}
+    status_in_body = 'status' in request.data and request.data.get('status') is not None
+
+    if status_in_body:
+        new_status = str(request.data.get('status') or '').strip().lower()
+        valid = {c.value for c in WhatsAppConversationStatus}
+        if new_status not in valid:
+            errors['status'] = ['Invalid status']
+        else:
+            state.status = new_status
+            state.status_changed_at = timezone.now()
+            state.status_changed_by = request.user
+            update_fields.extend(['status', 'status_changed_at', 'status_changed_by'])
+            if new_status != WhatsAppConversationStatus.SNOOZED:
+                state.snoozed_until = None
+                update_fields.append('snoozed_until')
+
+    if state.status == WhatsAppConversationStatus.SNOOZED and (
+        status_in_body or 'snoozed_until' in request.data
+    ):
+        raw = request.data.get('snoozed_until')
+        if not raw:
+            errors['snoozed_until'] = [
+                'A future snoozed_until is required when status is snoozed'
+            ]
+        else:
+            dt = parse_datetime(str(raw)) if not hasattr(raw, 'isoformat') else raw
+            if dt is None:
+                errors['snoozed_until'] = ['Invalid datetime']
+            else:
+                if timezone.is_naive(dt):
+                    dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                if dt <= timezone.now():
+                    errors['snoozed_until'] = ['snoozed_until must be in the future']
+                else:
+                    state.snoozed_until = dt
+                    if 'snoozed_until' not in update_fields:
+                        update_fields.append('snoozed_until')
+
+    if 'is_starred' in request.data and request.data.get('is_starred') is not None:
+        state.is_starred = bool(request.data.get('is_starred'))
+        update_fields.append('is_starred')
+
+    if 'is_unsubscribed' in request.data and request.data.get('is_unsubscribed') is not None:
+        state.is_unsubscribed = bool(request.data.get('is_unsubscribed'))
+        update_fields.append('is_unsubscribed')
+
+    if errors:
+        return validation_error_response(errors)
+
+    # Deduplicate update_fields while preserving order
+    seen = set()
+    update_fields = [f for f in update_fields if not (f in seen or seen.add(f))]
+    state.save(update_fields=update_fields)
+    bump_company_slice("chat", company.id)
+
+    return success_response(
+        data={
+            'client_id': client.id,
+            'status': state.status,
+            'snoozed_until': state.snoozed_until.isoformat() if state.snoozed_until else None,
+            'is_starred': state.is_starred,
+            'is_unsubscribed': state.is_unsubscribed,
+            'status_changed_at': (
+                state.status_changed_at.isoformat() if state.status_changed_at else None
+            ),
+        }
+    )
 
 
 @api_view(['POST'])

@@ -101,6 +101,9 @@
 # 9. فحص رسائل واتساب بانتظار الرد - كل 15 دقيقة (كل عميل حسب وقت استحقاقه)
 8,23,38,53 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_whatsapp_waiting_response >> /var/log/crm-api-whatsapp-waiting.log 2>&1
 
+# 9a. إعادة فتح محادثات واتساب المنتهية فترة التأجيل (snooze) - كل 15 دقيقة
+3,18,33,48 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py unsnooze_whatsapp_conversations >> /var/log/crm-api-whatsapp-unsnooze.log 2>&1
+
 # 9b. تصعيد إشعارات وصول العميل (CALL_CENTER) غير المستلمة - كل دقيقة (SLA افتراضي 5 دقائق لكل شركة)
 #
 # Same cold-boot cost as #1 above. `install_qcluster_schedules` moves both into
