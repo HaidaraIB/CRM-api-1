@@ -31,7 +31,7 @@ from accounts.models import User, Role
 from notifications.models import NotificationType
 from notifications.services import NotificationService
 from settings.models import LeadStatus
-from .client_list_filters import apply_client_list_filters
+from .client_list_queryset import build_client_list_queryset
 from .serializers import (
     ClientSerializer,
     ClientListSerializer,
@@ -87,6 +87,7 @@ class ClientViewSet(viewsets.ModelViewSet):
             "mission_bar_summary",
             "dashboard_summary",
             "status_counts",
+            "bulk_delete",
         }
         if getattr(self, "action", None) in aggregate_actions:
             queryset = super().get_queryset().select_related(
@@ -124,13 +125,16 @@ class ClientViewSet(viewsets.ModelViewSet):
         return queryset.none()
 
     def filter_queryset(self, queryset):
-        queryset = super().filter_queryset(queryset)
         if self.action in ("list", "status_counts"):
             exclude_status = self.action == "status_counts"
-            queryset = apply_client_list_filters(
-                queryset, self.request, exclude_status=exclude_status
+            return build_client_list_queryset(
+                self,
+                self.request,
+                queryset,
+                exclude_status=exclude_status,
+                apply_ordering=self.action == "list",
             )
-        return queryset
+        return super().filter_queryset(queryset)
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -383,6 +387,113 @@ class ClientViewSet(viewsets.ModelViewSet):
                 f"Successfully assigned {assigned_count} client(s) using least-busy "
                 f"distribution ({assignee_summary})."
             ),
+        )
+
+    @action(detail=False, methods=["post"])
+    def bulk_delete(self, request):
+        """
+        Hard-delete multiple clients by explicit IDs or all matching list filters.
+
+        Body modes (exactly one):
+          - {"client_ids": [1, 2, 3]}
+          - {"select_all": true, "exclude_ids": [...], "expected_count": N}
+            with the same query string as GET /clients/
+        """
+        from django.db import transaction
+
+        BULK_DELETE_BATCH = 500
+        BULK_DELETE_MAX = 10_000
+
+        user = request.user
+        if user.is_data_entry() or user.is_reception():
+            return error_response(
+                "You do not have permission to delete customers.",
+                code="cannot_delete_clients",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        if not user.is_admin() and not getattr(user, "can_delete_clients", False):
+            return error_response(
+                "You do not have permission to delete customers.",
+                code="cannot_delete_clients",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        select_all = request.data.get("select_all") in (True, "true", "1", 1)
+        client_ids = request.data.get("client_ids") or []
+        if isinstance(client_ids, str):
+            client_ids = [p.strip() for p in client_ids.split(",") if p.strip()]
+
+        if select_all and client_ids:
+            return error_response(
+                "Provide either client_ids or select_all, not both.",
+                code="invalid_selection",
+            )
+        if not select_all and not client_ids:
+            return error_response(
+                "client_ids is required when select_all is not set.",
+                code="missing_field",
+            )
+
+        if select_all:
+            qs = build_client_list_queryset(
+                self, request, apply_ordering=False
+            )
+            exclude_ids = request.data.get("exclude_ids") or []
+            if exclude_ids:
+                qs = qs.exclude(pk__in=exclude_ids)
+        else:
+            try:
+                normalized_ids = [int(pk) for pk in client_ids]
+            except (TypeError, ValueError):
+                return error_response(
+                    "client_ids must be a list of integers.",
+                    code="invalid_field",
+                )
+            qs = self.get_queryset().filter(pk__in=normalized_ids)
+
+        qs = qs.distinct()
+        count = qs.count()
+        if count == 0:
+            return error_response(
+                "No matching leads to delete.",
+                code="empty_selection",
+            )
+        if count > BULK_DELETE_MAX:
+            return error_response(
+                f"Cannot delete more than {BULK_DELETE_MAX} leads in one request.",
+                code="bulk_delete_too_large",
+                details={"count": count, "max": BULK_DELETE_MAX},
+            )
+
+        expected = request.data.get("expected_count")
+        if expected is not None and expected != "":
+            try:
+                expected_int = int(expected)
+            except (TypeError, ValueError):
+                return error_response(
+                    "expected_count must be an integer.",
+                    code="invalid_field",
+                )
+            if expected_int != count:
+                return error_response(
+                    "Lead count changed. Please confirm again.",
+                    code="bulk_delete_count_mismatch",
+                    details={"actual_count": count, "expected_count": expected_int},
+                    status_code=status.HTTP_409_CONFLICT,
+                )
+
+        deleted = 0
+        while True:
+            chunk = list(qs.values_list("pk", flat=True)[:BULK_DELETE_BATCH])
+            if not chunk:
+                break
+            with transaction.atomic():
+                _, details = Client.objects.filter(pk__in=chunk).delete()
+                deleted += details.get("crm.Client", 0)
+
+        return success_response(
+            data={"deleted_count": deleted},
+            message=f"Successfully deleted {deleted} lead(s).",
         )
 
     @action(detail=False, methods=["post"])
