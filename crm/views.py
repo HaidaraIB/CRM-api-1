@@ -393,6 +393,7 @@ class ClientViewSet(viewsets.ModelViewSet):
     def bulk_delete(self, request):
         """
         Hard-delete multiple clients by explicit IDs or all matching list filters.
+        Owner (admin) only — can_delete_clients does not grant bulk delete.
 
         Body modes (exactly one):
           - {"client_ids": [1, 2, 3]}
@@ -405,13 +406,7 @@ class ClientViewSet(viewsets.ModelViewSet):
         BULK_DELETE_MAX = 10_000
 
         user = request.user
-        if user.is_data_entry() or user.is_reception():
-            return error_response(
-                "You do not have permission to delete customers.",
-                code="cannot_delete_clients",
-                status_code=status.HTTP_403_FORBIDDEN,
-            )
-        if not user.is_admin() and not getattr(user, "can_delete_clients", False):
+        if not user.is_admin():
             return error_response(
                 "You do not have permission to delete customers.",
                 code="cannot_delete_clients",

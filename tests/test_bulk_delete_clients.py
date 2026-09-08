@@ -125,21 +125,14 @@ class TestBulkDeleteClients:
         assert _error_code(response) == "cannot_delete_clients"
         assert Client.objects.filter(id=lead.id).exists()
 
-    def test_employee_cannot_delete_unassigned(
-        self, authenticated_employee, employee_user, company, admin_user
+    def test_employee_with_flag_still_forbidden(
+        self, authenticated_employee, employee_user, company
     ):
         from crm.models import Client
 
         employee_user.can_delete_clients = True
         employee_user.save(update_fields=["can_delete_clients"])
-        other = Client.objects.create(
-            name="Other",
-            company=company,
-            priority="low",
-            type="cold",
-            assigned_to=admin_user,
-        )
-        mine = Client.objects.create(
+        lead = Client.objects.create(
             name="Mine",
             company=company,
             priority="low",
@@ -148,13 +141,12 @@ class TestBulkDeleteClients:
         )
         response = authenticated_employee.post(
             "/api/v1/clients/bulk_delete/",
-            {"client_ids": [other.id, mine.id], "expected_count": 1},
+            {"client_ids": [lead.id], "expected_count": 1},
             format="json",
         )
-        assert response.status_code == status.HTTP_200_OK
-        assert api_body(response)["deleted_count"] == 1
-        assert Client.objects.filter(id=other.id).exists()
-        assert not Client.objects.filter(id=mine.id).exists()
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert _error_code(response) == "cannot_delete_clients"
+        assert Client.objects.filter(id=lead.id).exists()
 
     def test_admin_select_all_without_expected_count(self, authenticated_admin, company):
         from crm.models import Client
