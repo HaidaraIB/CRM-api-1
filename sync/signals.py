@@ -25,7 +25,12 @@ from django.db.models.signals import m2m_changed, post_delete, post_save
 from django.dispatch import receiver
 
 from crm.models import LeadArrival
-from integrations.models import LeadWhatsAppMessage, WhatsAppCall
+from integrations.models import (
+    LeadWhatsAppMessage,
+    SocialConversation,
+    SocialMessage,
+    WhatsAppCall,
+)
 from notifications.models import Notification
 from platform_content.models import NewsPost, UserNewsReadState
 from tenant_chat.models import ChatConversationReadState, ChatMessage
@@ -111,6 +116,26 @@ def lead_whatsapp_message_changed(sender, instance, **kwargs):
         return
     client = instance.client
     bump_company_slice("chat", getattr(client, "company_id", None))
+
+
+@receiver(post_save, sender=SocialMessage)
+@receiver(post_delete, sender=SocialMessage)
+def social_message_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    conversation = instance.conversation
+    bump_company_slice("inbox", getattr(conversation, "company_id", None))
+
+
+@receiver(post_save, sender=SocialConversation)
+def social_conversation_changed(sender, instance, **kwargs):
+    """
+    Needed on top of the message receiver: triage, assignment and convert-to-lead
+    all change what the conversation list renders without writing any message.
+    """
+    if kwargs.get("raw"):
+        return
+    bump_company_slice("inbox", getattr(instance, "company_id", None))
 
 
 # --- global scope: platform-wide news ------------------------------------------

@@ -193,3 +193,70 @@ class TestCallCenterTenantChat:
 
         qs = eligible_company_users_queryset(User.objects.filter(id=call_center_user.id))
         assert qs.filter(id=call_center_user.id).exists()
+
+
+@pytest.mark.django_db
+class TestCallCenterSocialInboxAllowed:
+    """
+    The Omni-Channel Inbox is the one place CALL_CENTER gets broad write access.
+
+    This class exists to pin the coexistence: granting the inbox must NOT widen
+    the role anywhere else. TestCallCenterWhatsAppDenied and
+    TestCallCenterLeadAccess above are the other half of that invariant and must
+    keep passing alongside these.
+    """
+
+    def test_can_access_and_convert(self, call_center_user):
+        from integrations.social_inbox_access import (
+            user_can_access_social_inbox,
+            user_can_convert_social_conversation,
+            user_sees_all_social_conversations,
+        )
+
+        assert user_can_access_social_inbox(call_center_user) is True
+        assert user_sees_all_social_conversations(call_center_user) is True
+        assert user_can_convert_social_conversation(call_center_user) is True
+
+    def test_may_not_delete_history(self, call_center_user):
+        """History is a record; only the owner may erase it."""
+        from integrations.social_inbox_access import user_can_delete_social_history
+
+        assert user_can_delete_social_history(call_center_user) is False
+
+    def test_inbox_list_allowed(self, authenticated_call_center):
+        response = authenticated_call_center.get(
+            "/api/v1/integrations/inbox/conversations/"
+        )
+        assert response.status_code == 200
+
+    def test_inbox_grant_does_not_unlock_whatsapp(self, call_center_user):
+        from integrations.whatsapp_access import (
+            user_can_access_whatsapp_calls,
+            user_can_access_whatsapp_chats,
+        )
+
+        assert user_can_access_whatsapp_chats(call_center_user) is False
+        assert user_can_access_whatsapp_calls(call_center_user) is False
+
+    def test_inbox_grant_does_not_unlock_lead_editing(
+        self, authenticated_call_center, company, db
+    ):
+        from crm.models import Client
+
+        client = Client.objects.create(company=company, name="Existing Lead")
+        response = authenticated_call_center.patch(
+            f"/api/v1/clients/{client.id}/", {"name": "Renamed"}, format="json"
+        )
+        assert response.status_code == 403
+        client.refresh_from_db()
+        assert client.name == "Existing Lead"
+
+    def test_inbox_grant_does_not_unlock_deals(self, authenticated_call_center):
+        assert authenticated_call_center.get("/api/v1/deals/").status_code == 403
+
+    def test_inbox_connection_management_still_owner_only(self, authenticated_call_center):
+        """Using the inbox is the role's job; configuring the Meta app is not."""
+        response = authenticated_call_center.get(
+            "/api/v1/integrations/inbox/connections/"
+        )
+        assert response.status_code == 403

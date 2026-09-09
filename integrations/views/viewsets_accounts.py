@@ -25,6 +25,7 @@ from ..models import (
     IntegrationAccount, IntegrationLog, IntegrationPlatform,
     WhatsAppAccount, OAuthState, TwilioSettings,
     LeadSMSMessage, LeadWhatsAppMessage, MessageTemplate,
+    MetaInboxConnection,
 )
 from ..oauth_utils import get_oauth_handler, MetaOAuth, META_GRAPH_API_VERSION
 from ..whatsapp_account_sync import (
@@ -412,6 +413,24 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                 }
         except Exception as e:
             logger.warning("Meta get_pages after connect failed: %s", e)
+
+    # Meta Inbox: cache the grantable Pages so the picker has something to show.
+    # Unlike 'meta' this keeps ALL pages (no single-page policy) — a tenant may run
+    # several Pages through one inbox. Page tokens are NOT stored here; they land
+    # encrypted on MetaInboxConnection when a page is actually selected.
+    if account.platform == 'meta_inbox' and account.status == 'connected':
+        try:
+            pages = oauth_handler.get_pages(token_data['access_token']) or []
+            account.metadata = {
+                **(account.metadata or {}),
+                'available_pages': [
+                    {'id': str(p.get('id') or ''), 'name': p.get('name') or ''}
+                    for p in pages
+                    if p.get('id')
+                ],
+            }
+        except Exception as e:
+            logger.warning("Meta Inbox get_pages after connect failed: %s", e)
 
     account.save()
     IntegrationLog.objects.create(
@@ -977,6 +996,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             self._meta_cache_invalidate(account.id)
         elif account.platform == 'whatsapp':
             disconnect_whatsapp_accounts_for_integration(account)
+        elif account.platform == 'meta_inbox':
+            from ..services.meta_inbox_connections import disconnect_page
+            for connection in MetaInboxConnection.objects.filter(
+                integration_account=account,
+            ).exclude(status='disconnected'):
+                disconnect_page(connection)
 
         IntegrationLog.objects.create(
             account=account,
@@ -1082,6 +1107,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         elif instance.platform == 'whatsapp':
             # Prevent orphaned WhatsAppAccount rows (SET_NULL) from staying connected+tokened.
             disconnect_whatsapp_accounts_for_integration(instance)
+        elif instance.platform == 'meta_inbox':
+            from ..services.meta_inbox_connections import disconnect_page
+            for connection in MetaInboxConnection.objects.filter(
+                integration_account=instance,
+            ).exclude(status='disconnected'):
+                disconnect_page(connection)
         super().perform_destroy(instance)
     
     @action(detail=True, methods=['post'])

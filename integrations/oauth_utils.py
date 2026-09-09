@@ -729,6 +729,193 @@ class WhatsAppOAuth(OAuthBase):
         return out
 
 
+class MetaInboxOAuth(MetaOAuth):
+    """
+    OAuth for the Omni-Channel Inbox (Instagram DM + Messenger).
+
+    A SEPARATE Meta app from MetaOAuth above: different client id/secret, its own
+    Facebook Login for Business configuration, and its own App Review lifecycle.
+    Everything token-shaped is inherited (appsecret_proof, code exchange,
+    fb_exchange_token long-lived upgrade, /me/accounts) — only the credentials,
+    the config id, and the subscription fields differ.
+
+    Note that self.client_id is the INBOX app id, which is what makes the
+    inherited get_subscribed_apps comparison check the right app.
+    """
+
+    # Meta delivers both channels through the Page, so one subscription covers both.
+    SUBSCRIBED_FIELDS = [
+        'messages',
+        'messaging_postbacks',
+        'message_reactions',
+        'message_deliveries',
+        'message_reads',
+    ]
+
+    def __init__(self):
+        # OAuthBase resolves META_INBOX_CLIENT_ID / _CLIENT_SECRET / _REDIRECT_URI.
+        OAuthBase.__init__(self, 'META_INBOX')
+        version = (
+            getattr(settings, 'META_INBOX_GRAPH_API_VERSION', '')
+            or META_GRAPH_API_VERSION
+        )
+        if isinstance(version, str):
+            version = version.strip() or META_GRAPH_API_VERSION
+        self.graph_api_url = f'https://graph.facebook.com/{version}'
+        self.auth_url = f'https://www.facebook.com/{version}/dialog/oauth'
+        self.token_url = f'{self.graph_api_url}/oauth/access_token'
+
+    def get_authorization_url(self, state, scopes=None):
+        """
+        Facebook Login for Business only.
+
+        Permissions live in the Configuration in the Meta dashboard
+        (pages_messaging, pages_manage_metadata, pages_show_list, instagram_basic,
+        instagram_manage_messages, pages_read_engagement), so no ?scope= is sent.
+        Unlike MetaOAuth there is no classic-scope fallback: without a config id
+        the dialog would grant nothing useful, and failing loudly here beats a
+        connection that silently never receives DMs.
+        """
+        config_id = getattr(
+            settings, 'META_INBOX_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID', ''
+        )
+        if isinstance(config_id, str):
+            config_id = config_id.strip()
+        if not config_id:
+            raise ValueError(
+                "META_INBOX_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID is not configured."
+            )
+
+        params = {
+            'client_id': self.client_id,
+            'redirect_uri': self.redirect_uri,
+            'state': state,
+            'response_type': 'code',
+            'config_id': config_id,
+            'override_default_response_type': 'true',
+        }
+        return f"{self.auth_url}?{urlencode(params)}"
+
+    def get_page_instagram_account(self, page_id, page_access_token):
+        """
+        Resolve the Instagram professional account linked to a Page.
+
+        Returns {'id': IGID, 'username': str} or None. None is a normal outcome —
+        a tenant may run Messenger only — so callers must not treat it as an error.
+        """
+        url = f"{self.graph_api_url}/{page_id}"
+        params = {
+            'access_token': page_access_token,
+            'fields': 'instagram_business_account{id,username}',
+        }
+        proof = self._appsecret_proof(page_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        response = requests.get(url, params=params)
+        if not response.ok:
+            logger.warning(
+                "Meta Inbox: instagram_business_account lookup failed for page %s: %s",
+                page_id,
+                _safe_graph_error(requests.exceptions.HTTPError(response=response)),
+            )
+            return None
+        try:
+            ig = (response.json() or {}).get('instagram_business_account') or {}
+        except ValueError:
+            return None
+        if not ig.get('id'):
+            return None
+        return {'id': str(ig['id']), 'username': ig.get('username') or ''}
+
+    def subscribe_page(self, page_id, page_access_token, fields=None):
+        """
+        Subscribe this app to messaging webhooks for a Page.
+
+        The generalised twin of subscribe_page_to_leadgen. A tenant may have the
+        same Page subscribed to the Lead Ads app for 'leadgen' — Meta allows that,
+        the two apps' subscriptions are independent.
+
+        Returns parsed JSON (does not raise on 4xx).
+        """
+        subscribed_fields = ','.join(fields or self.SUBSCRIBED_FIELDS)
+        url = f"{self.graph_api_url}/{page_id}/subscribed_apps"
+        params = {
+            'access_token': page_access_token,
+            'subscribed_fields': subscribed_fields,
+        }
+        proof = self._appsecret_proof(page_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        response = requests.post(url, params=params)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {
+                'success': False,
+                'error': {'message': response.text or 'Invalid response from Meta'},
+            }
+        if isinstance(data, dict):
+            return data
+        return {'success': False, 'error': {'message': str(data)}}
+
+    def unsubscribe_page(self, page_id, page_access_token):
+        """
+        Remove this app's webhook subscription from a Page.
+
+        Meta unsubscribes via DELETE — POSTing an empty subscribed_fields does not
+        clear the subscription. Returns parsed JSON (does not raise on 4xx).
+        """
+        url = f"{self.graph_api_url}/{page_id}/subscribed_apps"
+        params = {'access_token': page_access_token}
+        proof = self._appsecret_proof(page_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        response = requests.delete(url, params=params)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {
+                'success': False,
+                'error': {'message': response.text or 'Invalid response from Meta'},
+            }
+        if isinstance(data, dict):
+            return data
+        return {'success': False, 'error': {'message': str(data)}}
+
+    def get_subscribed_fields(self, page_id, page_access_token):
+        """
+        Which fields this app is subscribed to on a Page.
+
+        Returns (app_installed, subscribed_fields, error_message). Used by the
+        health check: Meta keeps delivering to a Page whose subscription was
+        removed elsewhere, so a silent unsubscribe is otherwise invisible.
+        """
+        url = f"{self.graph_api_url}/{page_id}/subscribed_apps"
+        params = {'access_token': page_access_token}
+        proof = self._appsecret_proof(page_access_token)
+        if proof:
+            params['appsecret_proof'] = proof
+        response = requests.get(url, params=params)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {'error': {'message': response.text or 'Invalid response from Meta'}}
+        if not response.ok:
+            msg = (
+                data.get('error', {}).get('message')
+                if isinstance(data, dict)
+                else response.text
+            ) or 'Failed to fetch subscribed_apps'
+            return False, [], msg
+
+        app_id = str(self.client_id or '').strip()
+        for app in (data.get('data') or []) if isinstance(data, dict) else []:
+            current_id = str(app.get('id') or app.get('app_id') or '').strip()
+            if app_id and current_id == app_id:
+                return True, list(app.get('subscribed_fields') or []), None
+        return False, [], None
+
+
 def get_oauth_handler(platform):
     """الحصول على OAuth handler حسب المنصة (TikTok = Lead Gen فقط، لا OAuth)"""
     platform_lower = platform.lower()
@@ -736,6 +923,8 @@ def get_oauth_handler(platform):
         raise ValueError("TikTok integration is Lead Gen only. Use webhook URL in TikTok Ads Manager.")
     if platform_lower == 'meta':
         return MetaOAuth()
+    if platform_lower == 'meta_inbox':
+        return MetaInboxOAuth()
     if platform_lower == 'whatsapp':
         return WhatsAppOAuth()
     raise ValueError(f"منصة غير مدعومة: {platform}")

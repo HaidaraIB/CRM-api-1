@@ -4,7 +4,14 @@ from typing import Any
 
 from django.core.cache import cache
 
-from integrations.models import IntegrationAccount, OpenAISettings, SmsProvider, TwilioSettings, WhatsAppAccount
+from integrations.models import (
+    IntegrationAccount,
+    MetaInboxConnection,
+    OpenAISettings,
+    SmsProvider,
+    TwilioSettings,
+    WhatsAppAccount,
+)
 from settings.models import SystemSettings
 from subscriptions.entitlements import build_company_entitlements
 
@@ -18,6 +25,7 @@ INTEGRATION_POLICY_PLATFORMS = (
     "api",
     "mujeb",
     "pbx",
+    "meta_inbox",
 )
 PLAN_INTEGRATION_FEATURE_MAP = {
     "meta": "integration_meta",
@@ -29,6 +37,7 @@ PLAN_INTEGRATION_FEATURE_MAP = {
     "api": "integration_api",
     "mujeb": "integration_mujeb",
     "pbx": "integration_pbx",
+    "meta_inbox": "integration_meta_inbox",
 }
 SMS_INTEGRATION_PLATFORMS = ("twilio", "otpiq")
 INTEGRATION_POLICY_DEFAULTS = {
@@ -158,6 +167,8 @@ def _disable_company_platform_integrations(*, company_id: str | int, platform: s
     ).update(is_active=False)
     if platform == "whatsapp":
         WhatsAppAccount.objects.filter(company_id=company_id, status="connected").update(status="disconnected")
+    if platform == "meta_inbox":
+        MetaInboxConnection.objects.filter(company_id=company_id, status="connected").update(status="disconnected")
     if platform == "twilio":
         TwilioSettings.objects.filter(
             company_id=company_id,
@@ -203,6 +214,11 @@ def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] |
                 if exception_company_ids:
                     wa_qs = wa_qs.exclude(company_id__in=exception_company_ids)
                 wa_qs.update(status="disconnected")
+            if platform == "meta_inbox":
+                mi_qs = MetaInboxConnection.objects.filter(status="connected")
+                if exception_company_ids:
+                    mi_qs = mi_qs.exclude(company_id__in=exception_company_ids)
+                mi_qs.update(status="disconnected")
             if platform == "twilio":
                 tw_qs = TwilioSettings.objects.filter(provider=SmsProvider.TWILIO, is_enabled=True)
                 if exception_company_ids:

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from django.db.models import F, OuterRef, Q, Subquery
 
-from integrations.models import LeadWhatsAppMessage, WhatsAppCallDirection, WhatsAppCallStatus
+from integrations.models import (
+    LeadWhatsAppMessage,
+    SocialConversation,
+    SocialMessage,
+    WhatsAppCallDirection,
+    WhatsAppCallStatus,
+)
 from integrations.policy import get_plan_integration_access, get_effective_integration_policy
 from integrations.views.webhooks_messaging import _integration_gate as whatsapp_policy_gate
 from integrations.views.whatsapp_calling import _company_calls_qs
@@ -44,6 +50,38 @@ def whatsapp_unread_for_user(user):
     )
     qs = filter_whatsapp_messages_queryset(user, qs)
     return qs.count()
+
+
+def social_inbox_unread_for_user(user):
+    """None when gated (plan/policy/role); otherwise unread inbound DM count."""
+    from integrations.social_inbox_access import (
+        filter_social_conversations_queryset,
+        user_can_access_social_inbox,
+    )
+
+    company = getattr(user, "company", None)
+    if not company:
+        return None
+    if not get_plan_integration_access(company, "meta_inbox")["enabled"]:
+        return None
+    effective = get_effective_integration_policy(
+        SystemSettings.get_cached_settings().integration_policies or {},
+        company_id=company.id,
+        platform="meta_inbox",
+    )
+    if not effective["enabled"]:
+        return None
+    if not user_can_access_social_inbox(user):
+        return None
+
+    conversations = filter_social_conversations_queryset(
+        user, SocialConversation.objects.all()
+    )
+    return SocialMessage.objects.filter(
+        conversation__in=conversations,
+        direction=SocialMessage.DIRECTION_INBOUND,
+        is_read=False,
+    ).count()
 
 
 def whatsapp_calls_pending_for_user(user):

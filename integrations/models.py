@@ -13,6 +13,10 @@ class IntegrationPlatform(models.TextChoices):
     WHATSAPP = 'whatsapp', 'WhatsApp Business'
     API = 'api', 'Lead API / Custom Form'
     MUJEB = 'mujeb', 'Mujeb'
+    # Omni-Channel Inbox (Instagram DM + Messenger). Separate from META on purpose:
+    # a different Meta app, and unique_together (company, platform, external_account_id)
+    # keeps a tenant's Lead Ads connection independent of their inbox connection.
+    META_INBOX = 'meta_inbox', 'Meta Inbox (Instagram DM / Messenger)'
 
 
 class IntegrationAccount(models.Model):
@@ -1611,4 +1615,432 @@ class WhatsAppCallErrorLog(models.Model):
 
     def __str__(self):
         return f"{self.source}:{self.error_code or self.error_message[:40]}"
+
+
+# ============================================================================
+# Omni-Channel Inbox — Instagram Direct + Facebook Messenger
+#
+# Deliberately separate from the WhatsApp stack above. There a conversation *is*
+# a crm.Client (ensure_client_for_whatsapp_phone auto-creates one per phone), which
+# works because a phone number is already a CRM identity. An Instagram DM has no
+# phone, and most DMs are never worth a lead row, so conversations here stay
+# lead-less until an agent explicitly converts one.
+# ============================================================================
+
+
+class SocialChannel(models.TextChoices):
+    INSTAGRAM = 'instagram', 'Instagram Direct'
+    MESSENGER = 'messenger', 'Facebook Messenger'
+
+
+class MetaInboxConnection(models.Model):
+    """
+    One connected Facebook Page (plus its linked Instagram professional account).
+
+    page_id and ig_user_id are globally unique for the same reason
+    WhatsAppAccount.phone_number_id is: an inbound webhook carries no tenant hint
+    other than entry[].id, so that id must resolve to exactly one company.
+
+    Messages for BOTH channels are sent through the Page endpoint
+    (POST /{page_id}/messages) using page_access_token, so a connection without a
+    Page is useless — hence the Page asset is marked required in the Facebook
+    Login for Business configuration. ig_user_id stays nullable so a tenant with
+    a Page but no linked Instagram account can still run Messenger only.
+    """
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='meta_inbox_connections',
+        help_text="الشركة (tenant) المالكة لهذا الاتصال",
+    )
+    integration_account = models.ForeignKey(
+        IntegrationAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='meta_inbox_connections',
+        help_text="حساب التكامل المرتبط (من OAuth)",
+    )
+
+    page_id = models.CharField(
+        max_length=64,
+        unique=True,
+        help_text="Facebook Page ID — tenant key for object=page webhooks and the send endpoint",
+    )
+    page_name = models.CharField(max_length=255, blank=True, default="")
+
+    ig_user_id = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        unique=True,
+        help_text="Instagram professional account ID (IGID) — tenant key for object=instagram webhooks",
+    )
+    ig_username = models.CharField(max_length=255, blank=True, default="")
+
+    page_access_token = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Page Access Token (مخزن مشفراً)",
+    )
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+
+    subscribed_fields = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Fields confirmed by POST /{page-id}/subscribed_apps",
+    )
+    instagram_subscribed = models.BooleanField(default=False)
+    messenger_subscribed = models.BooleanField(default=False)
+
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('connected', 'Connected'),
+            ('disconnected', 'Disconnected'),
+            ('error', 'Error'),
+        ],
+        default='connected',
+    )
+    error_message = models.TextField(blank=True, null=True)
+    last_webhook_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'meta_inbox_connections'
+        verbose_name = 'Meta Inbox Connection'
+        verbose_name_plural = 'Meta Inbox Connections'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['company', 'status']),
+            models.Index(fields=['page_id']),
+            models.Index(fields=['ig_user_id']),
+        ]
+
+    def __str__(self):
+        label = self.ig_username or self.page_name or self.page_id
+        return f"{self.company.name} - {label}"
+
+    def get_page_access_token(self):
+        """الحصول على Page Access Token (مفكوك التشفير)"""
+        if not self.page_access_token:
+            return None
+        return decrypt_token(self.page_access_token)
+
+    def set_page_access_token(self, token):
+        """حفظ Page Access Token (مشفر)"""
+        if token:
+            self.page_access_token = encrypt_token(token)
+        else:
+            self.page_access_token = None
+
+
+class SocialContact(models.Model):
+    """
+    A person who messaged the business on Instagram or Messenger.
+
+    external_id is an IGSID (Instagram) or PSID (Messenger). Both are scoped to
+    the Meta APP, not to the person — the same human has a different id under a
+    different app, so this is never a stable cross-app identity and profile data
+    must be re-fetched rather than assumed.
+    """
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='social_contacts',
+    )
+    connection = models.ForeignKey(
+        MetaInboxConnection,
+        on_delete=models.CASCADE,
+        related_name='contacts',
+    )
+    channel = models.CharField(max_length=16, choices=SocialChannel.choices)
+    external_id = models.CharField(
+        max_length=64,
+        help_text="IGSID (Instagram) or PSID (Messenger) — app-scoped",
+    )
+
+    name = models.CharField(max_length=255, blank=True, default="")
+    username = models.CharField(max_length=255, blank=True, default="")
+    profile_pic_url = models.TextField(
+        blank=True,
+        default="",
+        help_text="Meta CDN URL. Stored as a URL only — never mirrored into our storage.",
+    )
+    profile_fetched_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'social_contacts'
+        verbose_name = 'Social Contact'
+        verbose_name_plural = 'Social Contacts'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'channel', 'external_id'],
+                name='uniq_social_contact_company_channel_ext',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['company', 'channel']),
+            models.Index(fields=['connection', 'external_id']),
+        ]
+
+    def __str__(self):
+        return self.username or self.name or self.external_id
+
+    @property
+    def display_name(self):
+        return self.name or self.username or f"{self.get_channel_display()} {self.external_id[-6:]}"
+
+
+class SocialConversation(models.Model):
+    """
+    One thread between a SocialContact and a connected Page/IG account.
+
+    `client` is NULL until an agent converts the conversation into a CRM lead.
+    That is the core difference from WhatsApp, where the lead row IS the
+    conversation: most DMs never deserve a lead, and auto-creating one would
+    burn the plan's max_clients quota on spam.
+    """
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='social_conversations',
+    )
+    connection = models.ForeignKey(
+        MetaInboxConnection,
+        on_delete=models.CASCADE,
+        related_name='conversations',
+    )
+    contact = models.ForeignKey(
+        SocialContact,
+        on_delete=models.CASCADE,
+        related_name='conversations',
+    )
+    channel = models.CharField(
+        max_length=16,
+        choices=SocialChannel.choices,
+        help_text="Denormalized from contact for list filtering.",
+    )
+
+    # Triage — same vocabulary as WhatsAppConversationState so the frontend's
+    # status colors/labels work unchanged across both inboxes.
+    status = models.CharField(
+        max_length=20,
+        choices=WhatsAppConversationStatus.choices,
+        default=WhatsAppConversationStatus.OPEN,
+        db_index=True,
+    )
+    snoozed_until = models.DateTimeField(null=True, blank=True)
+    is_starred = models.BooleanField(default=False)
+    is_unsubscribed = models.BooleanField(default=False)
+    status_changed_at = models.DateTimeField(null=True, blank=True)
+    status_changed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='social_status_changes',
+    )
+
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_social_conversations',
+    )
+    client = models.ForeignKey(
+        'crm.Client',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='social_conversations',
+        help_text="Set only once an agent converts this conversation into a lead.",
+    )
+    converted_at = models.DateTimeField(null=True, blank=True)
+    converted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='converted_social_conversations',
+    )
+
+    # Denormalized list-row fields. Unlike the WhatsApp list (which subqueries
+    # LeadWhatsAppMessage per client) the conversation IS the row here, so these
+    # keep the list query flat.
+    last_message_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_message_direction = models.CharField(max_length=10, blank=True, default="")
+    last_message_preview = models.CharField(max_length=280, blank=True, default="")
+    last_inbound_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Anchor for the 24-hour reply window.",
+    )
+    unread_count = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'social_conversations'
+        verbose_name = 'Social Conversation'
+        verbose_name_plural = 'Social Conversations'
+        ordering = ['-last_message_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['connection', 'contact'],
+                name='uniq_social_conv_connection_contact',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['company', 'status', '-last_message_at'], name='social_conv_co_stat_idx'),
+            models.Index(fields=['company', '-last_message_at'], name='social_conv_co_last_idx'),
+            models.Index(fields=['company', 'assigned_to'], name='social_conv_co_assign_idx'),
+            models.Index(fields=['company', 'client'], name='social_conv_co_client_idx'),
+            models.Index(fields=['company', 'snoozed_until'], name='social_conv_co_snooze_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.get_channel_display()} · {self.contact_id}"
+
+
+class SocialMessage(models.Model):
+    """
+    One message in a SocialConversation.
+
+    The attachment field set mirrors LeadWhatsAppMessage so the frontend's media
+    components (ChatBlobMedia / ChatMediaViewer / ChatVoicePlayer) work unchanged.
+    """
+
+    DIRECTION_INBOUND = 'inbound'
+    DIRECTION_OUTBOUND = 'outbound'
+    DIRECTION_CHOICES = [
+        (DIRECTION_INBOUND, 'Inbound'),
+        (DIRECTION_OUTBOUND, 'Outbound'),
+    ]
+
+    conversation = models.ForeignKey(
+        SocialConversation,
+        on_delete=models.CASCADE,
+        related_name='messages',
+    )
+    direction = models.CharField(
+        max_length=10,
+        choices=DIRECTION_CHOICES,
+        default=DIRECTION_OUTBOUND,
+    )
+    external_message_id = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Meta message id (mid). Meta redelivers aggressively — this dedupes.",
+    )
+    body = models.TextField(blank=True, default="")
+    is_echo = models.BooleanField(
+        default=False,
+        help_text="True when the business replied from the native Instagram/Messenger app.",
+    )
+    reaction = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Emoji reaction the contact left on this message.",
+    )
+    is_read = models.BooleanField(
+        default=True,
+        help_text="False for inbound messages until an agent opens the thread.",
+    )
+
+    delivery_status = models.CharField(max_length=20, blank=True, null=True)
+    delivery_error = models.CharField(max_length=512, blank=True, null=True)
+    error_key = models.CharField(max_length=64, blank=True, default="")
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='sent_social_messages',
+    )
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Meta's timestamp for the event (authoritative for the 24h window).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class AttachmentKind(models.TextChoices):
+        IMAGE = "image", "Image"
+        VIDEO = "video", "Video"
+        AUDIO = "audio", "Audio"
+        DOCUMENT = "document", "Document"
+        LOCATION = "location", "Location"
+        # Instagram-specific payload types.
+        SHARE = "share", "Shared post"
+        STORY_MENTION = "story_mention", "Story mention"
+        REEL = "reel", "Reel"
+
+    attachment = models.FileField(
+        upload_to="social_chat/%Y/%m/%d/",
+        max_length=500,
+        null=True,
+        blank=True,
+    )
+    attachment_kind = models.CharField(
+        max_length=16,
+        choices=AttachmentKind.choices,
+        null=True,
+        blank=True,
+    )
+    attachment_mime = models.CharField(max_length=128, blank=True, default="")
+    attachment_size = models.PositiveIntegerField(null=True, blank=True)
+    attachment_width = models.PositiveIntegerField(null=True, blank=True)
+    attachment_height = models.PositiveIntegerField(null=True, blank=True)
+    original_filename = models.CharField(max_length=255, blank=True, default="")
+    attachment_object_key = models.CharField(max_length=512, blank=True, default="")
+    is_voice_note = models.BooleanField(default=False)
+    source_media_url = models.TextField(
+        blank=True,
+        default="",
+        help_text="Meta CDN URL from the webhook. Expires within hours — kept for retry/debug.",
+    )
+
+    location_latitude = models.DecimalField(
+        max_digits=9, decimal_places=6, blank=True, null=True
+    )
+    location_longitude = models.DecimalField(
+        max_digits=9, decimal_places=6, blank=True, null=True
+    )
+    location_name = models.CharField(max_length=255, blank=True, default="")
+    location_address = models.CharField(max_length=512, blank=True, default="")
+
+    class Meta:
+        db_table = 'social_messages'
+        verbose_name = 'Social Message'
+        verbose_name_plural = 'Social Messages'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['conversation', 'external_message_id'],
+                condition=models.Q(external_message_id__gt=""),
+                name='uniq_social_msg_conv_mid',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['conversation', 'created_at'], name='social_msg_conv_created_idx'),
+            models.Index(fields=['conversation', 'is_read'], name='social_msg_conv_isread_idx'),
+            models.Index(fields=['external_message_id'], name='social_msg_mid_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.direction}: {(self.body or self.attachment_kind or '')[:40]}"
 

@@ -572,6 +572,7 @@ class SupervisorPermission(models.Model):
     can_manage_settings = models.BooleanField(default=False)
     can_manage_whatsapp_chats = models.BooleanField(default=True)
     can_manage_whatsapp_calls = models.BooleanField(default=True)
+    can_manage_social_inbox = models.BooleanField(default=True)
 
     # Team-activity notification toggles (owner-controlled, mirrors the 3 categories
     # the owner already gets via NotificationSettings.notification_types).
@@ -612,6 +613,7 @@ class SupervisorPermission(models.Model):
             "manage_settings": self.can_manage_settings,
             "manage_whatsapp_chats": self.can_manage_whatsapp_chats,
             "manage_whatsapp_calls": self.can_manage_whatsapp_calls,
+            "manage_social_inbox": self.can_manage_social_inbox,
         }
         return permission_map.get(permission_name, False)
 

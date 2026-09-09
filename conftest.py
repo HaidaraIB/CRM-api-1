@@ -267,3 +267,71 @@ def authenticated_call_center(api_client, call_center_user, subscription):
     """APIClient authenticated as call_center with an active subscription."""
     api_client.force_authenticate(user=call_center_user)
     return api_client
+
+
+# --- Omni-Channel Inbox (Instagram DM + Messenger) -------------------------------
+
+
+@pytest.fixture
+def meta_inbox_account(company, owner_user, db):
+    """Connected IntegrationAccount for the meta_inbox platform."""
+    from integrations.models import IntegrationAccount, IntegrationPlatform
+
+    account = IntegrationAccount.objects.create(
+        company=company,
+        platform=IntegrationPlatform.META_INBOX,
+        name="Meta Inbox",
+        status="connected",
+        external_account_id="fbuser-1",
+        external_account_name="Test Owner",
+        created_by=owner_user,
+        metadata={
+            "available_pages": [
+                {"id": "100000000000001", "name": "Test Page"},
+                {"id": "100000000000002", "name": "Second Page"},
+            ]
+        },
+    )
+    account.set_access_token("user-token-abc")
+    account.save(update_fields=["access_token"])
+    return account
+
+
+@pytest.fixture
+def meta_inbox_connection(company, meta_inbox_account, db):
+    """A connected Page with a linked Instagram professional account."""
+    from integrations.models import MetaInboxConnection
+
+    connection = MetaInboxConnection.objects.create(
+        company=company,
+        integration_account=meta_inbox_account,
+        page_id="100000000000001",
+        page_name="Test Page",
+        ig_user_id="170000000000001",
+        ig_username="testbiz",
+        status="connected",
+        instagram_subscribed=True,
+        messenger_subscribed=True,
+        subscribed_fields=["messages", "messaging_postbacks"],
+    )
+    connection.set_page_access_token("page-token-xyz")
+    connection.save(update_fields=["page_access_token"])
+    return connection
+
+
+@pytest.fixture
+def other_company_inbox_connection(other_company, db):
+    """A connection owned by a different tenant, for cross-tenant isolation tests."""
+    from integrations.models import MetaInboxConnection
+
+    connection = MetaInboxConnection.objects.create(
+        company=other_company,
+        page_id="200000000000001",
+        page_name="Other Page",
+        ig_user_id="270000000000001",
+        ig_username="otherbiz",
+        status="connected",
+    )
+    connection.set_page_access_token("other-page-token")
+    connection.save(update_fields=["page_access_token"])
+    return connection

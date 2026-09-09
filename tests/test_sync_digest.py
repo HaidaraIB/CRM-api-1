@@ -273,7 +273,16 @@ class TestSyncDigestSliceVersions:
     degrades back into "refetch everything", which is what it replaced).
     """
 
-    ALL_SLICES = {"global", "user", "company", "chat", "calls", "arrivals", "tenant_chat"}
+    ALL_SLICES = {
+        "global",
+        "user",
+        "company",
+        "chat",
+        "calls",
+        "arrivals",
+        "tenant_chat",
+        "inbox",
+    }
 
     def _versions(self, client):
         return api_body(client.get("/api/v1/sync/digest/"))["versions"]
@@ -326,7 +335,7 @@ class TestSyncDigestSliceVersions:
         after = self._versions(authenticated_admin)
 
         assert after["chat"] > before["chat"]
-        for untouched in ("calls", "arrivals", "tenant_chat"):
+        for untouched in ("calls", "arrivals", "tenant_chat", "inbox"):
             assert after[untouched] == before[untouched], untouched
 
     def test_call_moves_only_the_calls_slice(self, authenticated_admin, company):
@@ -335,7 +344,40 @@ class TestSyncDigestSliceVersions:
         after = self._versions(authenticated_admin)
 
         assert after["calls"] > before["calls"]
-        for untouched in ("chat", "arrivals", "tenant_chat"):
+        for untouched in ("chat", "arrivals", "tenant_chat", "inbox"):
+            assert after[untouched] == before[untouched], untouched
+
+    def test_social_message_moves_only_the_inbox_slice(
+        self, authenticated_admin, company, meta_inbox_connection
+    ):
+        """An Instagram DM must not make the WhatsApp list or calls list refetch."""
+        from integrations.models import SocialContact, SocialConversation, SocialMessage
+
+        contact = SocialContact.objects.create(
+            company=company,
+            connection=meta_inbox_connection,
+            channel="instagram",
+            external_id="IGSID-digest",
+        )
+        conversation = SocialConversation.objects.create(
+            company=company,
+            connection=meta_inbox_connection,
+            contact=contact,
+            channel="instagram",
+        )
+
+        before = self._versions(authenticated_admin)
+        SocialMessage.objects.create(
+            conversation=conversation,
+            direction=SocialMessage.DIRECTION_INBOUND,
+            external_message_id="digest-mid",
+            body="hi",
+            is_read=False,
+        )
+        after = self._versions(authenticated_admin)
+
+        assert after["inbox"] > before["inbox"]
+        for untouched in ("chat", "calls", "arrivals", "tenant_chat"):
             assert after[untouched] == before[untouched], untouched
 
     def test_arrival_moves_only_the_arrivals_slice(

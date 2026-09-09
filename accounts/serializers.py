@@ -541,6 +541,7 @@ class UserSerializer(serializers.ModelSerializer):
                 "can_manage_settings": sp.can_manage_settings,
                 "can_manage_whatsapp_chats": sp.can_manage_whatsapp_chats,
                 "can_manage_whatsapp_calls": sp.can_manage_whatsapp_calls,
+                "can_manage_social_inbox": sp.can_manage_social_inbox,
             },
         }
     @extend_schema_field(serializers.BooleanField())
@@ -837,6 +838,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                         "can_manage_settings": sp.can_manage_settings,
                         "can_manage_whatsapp_chats": sp.can_manage_whatsapp_chats,
                         "can_manage_whatsapp_calls": sp.can_manage_whatsapp_calls,
+                        "can_manage_social_inbox": sp.can_manage_social_inbox,
                     },
                 }
             except SupervisorPermission.DoesNotExist:
@@ -921,6 +923,7 @@ def build_user_auth_payload(user, request=None):
                     "can_manage_settings": sp.can_manage_settings,
                     "can_manage_whatsapp_chats": sp.can_manage_whatsapp_chats,
                     "can_manage_whatsapp_calls": sp.can_manage_whatsapp_calls,
+                    "can_manage_social_inbox": sp.can_manage_social_inbox,
                 },
             }
         except SupervisorPermission.DoesNotExist:
@@ -1681,6 +1684,7 @@ class SupervisorSerializer(serializers.ModelSerializer):
             'can_manage_settings',
             'can_manage_whatsapp_chats',
             'can_manage_whatsapp_calls',
+            'can_manage_social_inbox',
             'can_delete_clients',
             'notify_team_activity_status',
             'notify_team_activity_action',
@@ -1748,6 +1752,7 @@ class CreateSupervisorSerializer(serializers.Serializer):
     can_manage_settings = serializers.BooleanField(default=False)
     can_manage_whatsapp_chats = serializers.BooleanField(default=True)
     can_manage_whatsapp_calls = serializers.BooleanField(default=True)
+    can_manage_social_inbox = serializers.BooleanField(default=True)
     can_delete_clients = serializers.BooleanField(default=False)
     notify_team_activity_status = serializers.BooleanField(default=False)
     notify_team_activity_action = serializers.BooleanField(default=False)
@@ -1799,6 +1804,7 @@ class CreateSupervisorSerializer(serializers.Serializer):
             'can_manage_settings': validated_data.pop('can_manage_settings', False),
             'can_manage_whatsapp_chats': validated_data.pop('can_manage_whatsapp_chats', True),
             'can_manage_whatsapp_calls': validated_data.pop('can_manage_whatsapp_calls', True),
+            'can_manage_social_inbox': validated_data.pop('can_manage_social_inbox', True),
             'notify_team_activity_status': validated_data.pop('notify_team_activity_status', False),
             'notify_team_activity_action': validated_data.pop('notify_team_activity_action', False),
             'notify_team_activity_overdue': validated_data.pop('notify_team_activity_overdue', False),

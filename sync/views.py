@@ -18,6 +18,7 @@ from .counts import (
     pbx_screen_pop_for_user,
     tenant_chat_unread_for_user,
     whatsapp_calls_pending_for_user,
+    social_inbox_unread_for_user,
     whatsapp_unread_for_user,
 )
 
@@ -59,6 +60,7 @@ def build_badges(user) -> dict:
     """Sidebar unread counts. Cached for BADGES_CACHE_TTL."""
     return {
         "whatsapp_unread": whatsapp_unread_for_user(user),
+        "social_inbox_unread": social_inbox_unread_for_user(user),
         "tenant_chat_unread": tenant_chat_unread_for_user(user),
         "notifications_unread": notifications_unread_for_user(user),
         "news_unread": news_unread_for_user(user),

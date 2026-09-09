@@ -41,7 +41,11 @@ class NotificationType(models.TextChoices):
     WHATSAPP_TEMPLATE_SENT = 'whatsapp_template_sent', 'WhatsApp Template Sent'
     WHATSAPP_SEND_FAILED = 'whatsapp_send_failed', 'WhatsApp Send Failed'
     WHATSAPP_WAITING_RESPONSE = 'whatsapp_waiting_response', 'WhatsApp Waiting Response'
-    
+
+    # Omni-Channel Inbox (Instagram DM / Messenger)
+    SOCIAL_MESSAGE_RECEIVED = 'social_message_received', 'Social Message Received'
+    SOCIAL_CONVERSATION_ASSIGNED = 'social_conversation_assigned', 'Social Conversation Assigned'
+
     # Campaign Notifications (lead-source / marketing-attribution Campaign)
     CAMPAIGN_PERFORMANCE = 'campaign_performance', 'Campaign Performance'
     CAMPAIGN_LOW_PERFORMANCE = 'campaign_low_performance', 'Campaign Low Performance'

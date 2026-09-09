@@ -4,10 +4,16 @@ Refresh Meta/WhatsApp long-lived tokens and notify owners when tokens are invali
 Usage:
     python manage.py refresh_integration_tokens
     python manage.py refresh_integration_tokens --dry-run
+    python manage.py refresh_integration_tokens --validate-only
 """
 from django.core.management.base import BaseCommand
 
-from integrations.tasks import refresh_expired_tokens, validate_meta_tokens
+from integrations.services.token_lifecycle import (
+    accounts_due_for_refresh,
+    refresh_expired_tokens,
+    refreshable_accounts,
+    validate_meta_tokens,
+)
 
 
 class Command(BaseCommand):
@@ -30,27 +36,14 @@ class Command(BaseCommand):
         validate_only = options.get("validate_only", False)
 
         if dry_run:
-            from django.utils import timezone
-            from datetime import timedelta
-            from integrations.models import IntegrationAccount
-            from integrations.services.token_lifecycle import REFRESH_BEFORE_EXPIRY
-
-            threshold = timezone.now() + REFRESH_BEFORE_EXPIRY
-            due = IntegrationAccount.objects.filter(
-                status="connected",
-                token_expires_at__lte=threshold,
-                token_expires_at__isnull=False,
-                is_active=True,
-            ).count()
-            meta_connected = IntegrationAccount.objects.filter(
-                platform="meta",
-                status="connected",
-                is_active=True,
-            ).count()
+            # Counted through the same querysets the real run uses, so the dry run
+            # cannot claim a different scope than the thing it is previewing.
+            due = accounts_due_for_refresh().count()
+            to_validate = refreshable_accounts().count()
             self.stdout.write(
                 self.style.WARNING(
                     f"[DRY RUN] Would refresh ~{due} account(s); "
-                    f"would validate {meta_connected} connected Meta account(s)."
+                    f"would validate {to_validate} connected account(s)."
                 )
             )
             return

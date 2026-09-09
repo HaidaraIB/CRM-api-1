@@ -279,6 +279,38 @@ class CanAnnounceLeadArrival(permissions.BasePermission):
         )
 
 
+class CanUseSocialInbox(permissions.BasePermission):
+    """
+    Omni-Channel Inbox (Instagram DM / Messenger).
+
+    Explicitly *allows* CALL_CENTER writes, unlike DenyCallCenterNonLeadAPI which
+    guards the CRM lead/deal/task viewsets. The two coexist safely because the
+    inbox endpoints are their own function views in integrations/views/ and never
+    mount that class — so this grant cannot widen call-center access to deals,
+    tasks, or lead editing. Do not move inbox actions onto ClientViewSet.
+    """
+
+    message = "You do not have access to the Omni-Channel Inbox."
+
+    def has_permission(self, request, view):
+        from integrations.social_inbox_access import user_can_access_social_inbox
+
+        return user_can_access_social_inbox(request.user)
+
+
+class CanConvertSocialConversation(permissions.BasePermission):
+    """Who may turn an inbox conversation into a CRM lead and pick its assignee."""
+
+    message = "You do not have permission to convert conversations into leads."
+
+    def has_permission(self, request, view):
+        from integrations.social_inbox_access import (
+            user_can_convert_social_conversation,
+        )
+
+        return user_can_convert_social_conversation(request.user)
+
+
 class DenyDataEntryNonLeadAPI(permissions.BasePermission):
     """
     Data-entry users may only use client (lead) list/create and related settings.

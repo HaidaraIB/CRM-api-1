@@ -62,6 +62,7 @@ COMPANY_SLICE_PREFIXES = {
     "calls": "sync_seq_company_calls_v1",  # WhatsAppCall
     "arrivals": "sync_seq_company_arrivals_v1",  # LeadArrival + notified_users
     "tenant_chat": "sync_seq_company_tchat_v1",  # ChatMessage
+    "inbox": "sync_seq_company_inbox_v1",  # SocialMessage + SocialConversation
 }
 
 

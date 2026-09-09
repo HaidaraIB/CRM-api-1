@@ -217,6 +217,8 @@ class Client(models.Model):
         choices=[
             ('meta_lead_form', 'Meta Lead Form'),
             ('whatsapp', 'WhatsApp'),
+            ('instagram', 'Instagram DM'),
+            ('messenger', 'Facebook Messenger'),
             ('tiktok', 'TikTok'),
             ('api', 'API / Custom Form'),
             ('mujeb', 'Mujeb'),

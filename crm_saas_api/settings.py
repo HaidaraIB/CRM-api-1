@@ -533,6 +533,61 @@ META_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID = os.getenv(
     "META_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID", ""
 ).strip()
 
+# Meta Inbox (Instagram DM + Messenger) — a SEPARATE Meta app from META_CLIENT_ID above.
+# Its own client id/secret/verify token so a rejected messaging App Review never touches the
+# live Lead Ads app, and so the old app's secret cannot sign inbox webhooks.
+META_INBOX_CLIENT_ID = os.getenv("META_INBOX_CLIENT_ID", "")
+META_INBOX_CLIENT_SECRET = os.getenv("META_INBOX_CLIENT_SECRET", "")
+META_INBOX_REDIRECT_URI = (
+    f"{API_BASE_URL}/api/integrations/accounts/oauth/callback/meta_inbox/"
+)
+
+# Meta Inbox Webhook Verification Token (strip: trailing spaces in .env break Meta verify)
+META_INBOX_WEBHOOK_VERIFY_TOKEN = os.getenv("META_INBOX_WEBHOOK_VERIFY_TOKEN", "").strip()
+
+# Facebook Login for Business config for the inbox app. Permissions live in that config:
+# pages_messaging, pages_manage_metadata, pages_show_list, instagram_basic,
+# instagram_manage_messages, pages_read_engagement (auto-added dependency of instagram_basic).
+META_INBOX_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID = os.getenv(
+    "META_INBOX_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID", ""
+).strip()
+
+META_INBOX_GRAPH_API_VERSION = os.getenv("META_INBOX_GRAPH_API_VERSION", "v25.0").strip()
+
+_mi_ips = os.getenv("META_INBOX_WEBHOOK_ALLOWED_IPS", "").strip()
+
+META_INBOX_WEBHOOK_ALLOWED_IPS = (
+    [s.strip() for s in _mi_ips.split(",") if s.strip()] if _mi_ips else None
+)
+
+# HUMAN_AGENT tag extends the reply window from 24h to 7d, but only once the Human Agent
+# feature is approved in App Review. Abusing it risks app-level enforcement — keep it off
+# until approval lands.
+META_INBOX_HUMAN_AGENT_TAG_ENABLED = (
+    os.getenv("META_INBOX_HUMAN_AGENT_TAG_ENABLED", "false").strip().lower() == "true"
+)
+
+# Cap on stored inbound media per message. IG threads are far more media-heavy than
+# WhatsApp and nothing charges this against the plan's storage quota yet.
+# `or` (not a getenv default) so a blank value in .env falls back instead of crashing startup.
+try:
+    META_INBOX_MAX_MEDIA_BYTES = int(
+        os.getenv("META_INBOX_MAX_MEDIA_BYTES", "").strip() or (25 * 1024 * 1024)
+    )
+except ValueError:
+    META_INBOX_MAX_MEDIA_BYTES = 25 * 1024 * 1024
+
+# How long stored inbox attachments are kept before `purge_social_media` deletes the
+# bytes (message rows and captions are kept forever). The cap above bounds one
+# message, not a tenant, so this is what actually bounds total growth.
+# Same blank-safe `or` pattern as above.
+try:
+    META_INBOX_MEDIA_RETENTION_DAYS = int(
+        os.getenv("META_INBOX_MEDIA_RETENTION_DAYS", "").strip() or 90
+    )
+except ValueError:
+    META_INBOX_MEDIA_RETENTION_DAYS = 90
+
 # WhatsApp Business API (uses Meta OAuth)
 WHATSAPP_CLIENT_ID = os.getenv("WHATSAPP_CLIENT_ID", META_CLIENT_ID)
 WHATSAPP_CLIENT_SECRET = os.getenv("WHATSAPP_CLIENT_SECRET", META_CLIENT_SECRET)

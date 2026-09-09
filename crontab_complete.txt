@@ -159,3 +159,20 @@
 #    - يعيد تبادل long-lived tokens قبل انتهائها (~60 يوماً)
 #    - يتحقق debug_token ويُعلّم الحساب منتهياً + يرسل إيميل للمالك عند الحاجة
 43 7,19 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py refresh_integration_tokens >> /var/log/crm-api-integration-tokens.log 2>&1
+
+# ============================================
+# صندوق الرسائل الموحّد (Instagram DM / Messenger)
+# ============================================
+
+# 20. فحص سلامة اشتراك صفحات Meta Inbox - يومياً في 6:37 صباحاً
+#    - Meta تقبل الإرسال على صفحة أُلغي اشتراك التطبيق فيها من Business Settings
+#      دون أن تُسلّم أي webhook، فيبدو الصندوق المعطّل كأنه صندوق هادئ
+#    - يُعلم مالك الشركة مرة واحدة عند تحوّل الحالة، لا كل يوم
+37 6 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py check_meta_inbox_connections >> /var/log/crm-api-meta-inbox-health.log 2>&1
+
+# 21. حذف مرفقات صندوق الرسائل الأقدم من مدة الاحتفاظ - يومياً في 3:56 صباحاً
+#    - META_INBOX_MAX_MEDIA_BYTES يحدّ الرسالة الواحدة لا الشركة، ومرفقات الصندوق
+#      لا تُحتسب على حصة التخزين في الخطة، فهذا هو ما يحدّ النمو فعلياً
+#    - المدة من META_INBOX_MEDIA_RETENTION_DAYS (افتراضياً 90 يوماً)
+#    - صفوف الرسائل ونصوصها تبقى؛ تُحذف البايتات فقط
+56 3 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py purge_social_media >> /var/log/crm-api-purge-social-media.log 2>&1

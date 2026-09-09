@@ -35,6 +35,19 @@ from .views import (
     campaign_requests_reject,
     campaign_requests_resubmit,
     integration_policy_view,
+    social_inbox_connections,
+    social_inbox_connection_detail,
+    social_conversations_list,
+    social_conversation_messages,
+    social_lead_messages,
+    social_mark_conversation_read,
+    social_update_conversation_state,
+    social_unread_count,
+    social_send_message,
+    social_send_media,
+    social_send_window,
+    social_message_attachment,
+    social_convert_conversation,
     openai_settings_view,
     openai_settings_test_view,
     ai_insights_list_view,
@@ -81,6 +94,7 @@ from .views import (
     whatsapp_call_hours,
 )
 from .whatsapp_webhook import whatsapp_webhook
+from .meta_inbox_webhook import meta_inbox_webhook
 from .views.lead_api import (
     inbound_lead_view,
     LeadApiConfigView,
@@ -174,6 +188,47 @@ urlpatterns = [
     path('whatsapp/calls/<int:pk>/terminate/', whatsapp_call_terminate, name='whatsapp_call_terminate'),
     path('whatsapp/calls/<int:pk>/recording/', whatsapp_call_recording_upload, name='whatsapp_call_recording_upload'),
     path('whatsapp/calls/<int:pk>/recording/play/', whatsapp_call_recording_play, name='whatsapp_call_recording_play'),
+    # Omni-Channel Inbox (Instagram DM + Messenger)
+    path('inbox/connections/', social_inbox_connections, name='social_inbox_connections'),
+    path('inbox/conversations/', social_conversations_list, name='social_conversations_list'),
+    path(
+        'inbox/conversations/mark-read/',
+        social_mark_conversation_read,
+        name='social_mark_conversation_read',
+    ),
+    path(
+        'inbox/conversations/state/',
+        social_update_conversation_state,
+        name='social_update_conversation_state',
+    ),
+    path(
+        'inbox/conversations/<int:pk>/messages/',
+        social_conversation_messages,
+        name='social_conversation_messages',
+    ),
+    # Feeds the lead Timeline, not the Inbox screen — one row per social message
+    # across every conversation converted onto that lead.
+    path('inbox/lead-messages/', social_lead_messages, name='social_lead_messages'),
+    path('inbox/unread-count/', social_unread_count, name='social_unread_count'),
+    path('inbox/send/', social_send_message, name='social_send_message'),
+    path('inbox/send-media/', social_send_media, name='social_send_media'),
+    path('inbox/window/', social_send_window, name='social_send_window'),
+    path(
+        'inbox/conversations/<int:pk>/convert/',
+        social_convert_conversation,
+        name='social_convert_conversation',
+    ),
+    path(
+        'inbox/messages/<int:pk>/attachment/',
+        social_message_attachment,
+        name='social_message_attachment',
+    ),
+    path(
+        'inbox/connections/<int:pk>/',
+        social_inbox_connection_detail,
+        name='social_inbox_connection_detail',
+    ),
+    path('webhooks/meta-inbox/', meta_inbox_webhook, name='meta_inbox_webhook'),
     path('webhooks/meta/', meta_webhook, name='meta_webhook'),
     path('webhooks/whatsapp/', whatsapp_webhook, name='whatsapp_webhook'),
     path('webhooks/tiktok-leadgen/', tiktok_leadgen_webhook, name='tiktok_leadgen_webhook'),

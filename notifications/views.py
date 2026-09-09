@@ -38,7 +38,14 @@ def exclude_inbox_noise_notifications(queryset):
     Hide chat-channel noise from the bell inbox (handled in Chats / FCM instead).
     """
     qs = exclude_tenant_chat_push_notifications(queryset)
-    return qs.exclude(type=NotificationType.WHATSAPP_MESSAGE_RECEIVED)
+    return qs.exclude(
+        type__in=[
+            NotificationType.WHATSAPP_MESSAGE_RECEIVED,
+            # One bell row per DM would bury everything else; the Inbox unread
+            # badge is the surface for these.
+            NotificationType.SOCIAL_MESSAGE_RECEIVED,
+        ]
+    )
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):

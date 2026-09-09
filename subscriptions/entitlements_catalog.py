@@ -19,6 +19,7 @@ FEATURE_KEYS = (
     "integration_api",
     "integration_mujeb",
     "integration_pbx",
+    "integration_meta_inbox",
 )
 
 # Quotas (integer or "unlimited"/None)
@@ -51,6 +52,7 @@ DEFAULT_FEATURES = {
     "integration_api": True,
     "integration_mujeb": True,
     "integration_pbx": True,
+    "integration_meta_inbox": True,
 }
 
 # Default usage limits: None means unlimited (keeps current behavior)
