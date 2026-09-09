@@ -787,20 +787,18 @@ def _find_placeholders_in_order(content: str):
     """Bracket/curly placeholders in left-to-right order (Meta requires {{1}}, {{2}}, ... by appearance).
 
     Each entry is (start, end, canonical, sample, getter).
+    Uses generic brace scan + normalized alias lookup so RTL marks / alef variants still match.
     """
+    from integrations.services.message_placeholders import (
+        CANONICAL_SAMPLES,
+        find_named_placeholder_spans,
+        _getter_for_canonical,
+    )
+
     matches = []
-    seen_spans = set()
-    for pattern, canonical, sample, getter in _get_placeholder_defs():
-        for m in re.finditer(pattern, content or '', re.IGNORECASE):
-            span = (m.start(), m.end())
-            if span in seen_spans:
-                continue
-            # Skip overlaps with an already-captured token
-            if any(not (span[1] <= s or span[0] >= e) for s, e in seen_spans):
-                continue
-            seen_spans.add(span)
-            matches.append((m.start(), m.end(), canonical, sample, getter))
-    matches.sort(key=lambda x: x[0])
+    for start, end, canonical in find_named_placeholder_spans(content):
+        sample = CANONICAL_SAMPLES.get(canonical, "Sample")
+        matches.append((start, end, canonical, sample, _getter_for_canonical(canonical)))
     return matches
 
 
@@ -833,6 +831,17 @@ def _attach_body_example(body_comp: dict, body_text: str, example_values: list) 
     return True
 
 
+def _attach_header_example(header_comp: dict, header_text: str, example_values: list) -> bool:
+    """Attach Meta HEADER example when the text contains {{1}}, … Returns True if positional."""
+    var_count = _positional_variable_count(header_text)
+    if var_count <= 0:
+        return False
+    samples = _default_example_values(var_count, example_values)
+    # Meta header_text is a flat list of strings (one per variable), not nested like body_text.
+    header_comp['example'] = {'header_text': samples[:var_count]}
+    return True
+
+
 def _content_to_meta_body(content):
     """Convert [Customer Name], [Company], ... to Meta {{1}}, {{2}}, ... in appearance order.
 
@@ -854,6 +863,14 @@ def _content_to_meta_body(content):
         last = end
     parts.append(content[last:])
     return ''.join(parts), ordered_examples
+
+
+def leftover_crm_placeholders_after_meta_convert(text: str) -> list[str]:
+    """Chip tokens that remain after named→{{n}} conversion (would be static in Meta)."""
+    from integrations.services.message_placeholders import leftover_crm_placeholder_tokens
+
+    converted, _samples = _content_to_meta_body(text or '')
+    return leftover_crm_placeholder_tokens(converted)
 
 
 _BRACKET_PLACEHOLDERS_BY_INDEX = [
@@ -977,9 +994,9 @@ def whatsapp_template_body_parameter_values_for_client(
     {{n}} by sync or reordered by an edit.
     """
     if canonicals:
-        n = _positional_variable_count(content)
-        if not n:
-            n = len(_find_placeholders_in_order(content)) or len(canonicals)
+        # Map length is authoritative for Meta slot count; content may still be named chips
+        # (sync keeps named CRM body) or positional {{n}}.
+        n = max(_positional_variable_count(content), len(canonicals))
         values = values_for_canonicals(list(canonicals)[:n], client, sender_name)
         # Meta gained variables the map doesn't cover (edited at Meta): pad rather than
         # guess — a placeholder dash beats sending someone else's field in that slot.
@@ -1041,6 +1058,72 @@ def count_template_body_placeholders(content: str) -> int:
     if samples:
         return len(samples)
     return _positional_variable_count(content or '')
+
+
+def count_template_placeholders(template) -> tuple[int, int]:
+    """Body and header placeholder counts, preferring meta_variable_map when present.
+
+    Content scan alone can miss RTL-edited chips; the map recorded at submit is authoritative
+    for how many Meta {{n}} slots the approved template expects.
+    """
+    vmap = template_variable_map(template)
+    body_map = vmap.get('body') if isinstance(vmap.get('body'), list) else []
+    header_map = vmap.get('header') if isinstance(vmap.get('header'), list) else []
+    body_from_content = count_template_body_placeholders(getattr(template, 'content', None) or '')
+    header_from_content = count_template_body_placeholders(getattr(template, 'header_text', None) or '')
+    body_n = max(body_from_content, len(body_map))
+    header_n = max(header_from_content, len(header_map))
+    return body_n, header_n
+
+
+def template_outbound_log_body(template, param_values=None) -> str:
+    """Human-readable body for chat history after sending a Meta template.
+
+    Fills named chips via generic render (alias lookup + _norm_key) using param_values
+    ordered by meta_variable_map / appearance, then replaces leftover {{n}}. Does not
+    depend on exact alias regex splicing succeeding.
+    """
+    from integrations.services.message_placeholders import render_message_placeholders
+
+    meta_name = meta_slug_template_name(getattr(template, 'name', None), getattr(template, 'id', None))
+    content = (getattr(template, 'content', None) or '').strip()
+    if content.lower().startswith('(imported from meta:'):
+        content = ''
+    values_list = list(param_values) if param_values is not None else []
+    if not content:
+        return f'[Template: {meta_name}]'
+    if not values_list:
+        return content[:65535]
+
+    vmap = template_variable_map(template)
+    canonicals = vmap.get('body') if isinstance(vmap.get('body'), list) and vmap.get('body') else None
+    if not canonicals:
+        canonicals = content_placeholder_canonicals(content)
+
+    values_by_canonical: dict[str, str] = {}
+    for i, canonical in enumerate(canonicals or []):
+        if not canonical:
+            continue
+        values_by_canonical[str(canonical)] = (
+            str(values_list[i]) if i < len(values_list) else '-'
+        )
+
+    out = render_message_placeholders(content, values_by_canonical, keep_unresolved=True)
+    # Fall back: splice by appearance order when aliases still remain but we have values.
+    if '{' in out or '[' in out:
+        matches = _find_placeholders_in_order(out)
+        if matches:
+            parts = []
+            last = 0
+            for i, (start, end, _canonical, _sample, _getter) in enumerate(matches):
+                parts.append(out[last:start])
+                parts.append(str(values_list[i]) if i < len(values_list) else '-')
+                last = end
+            parts.append(out[last:])
+            out = ''.join(parts)
+    for i, val in enumerate(values_list, start=1):
+        out = re.sub(rf'\{{\{{\s*{i}\s*\}}\}}', str(val), out)
+    return out[:65535]
 
 
 def _meta_category_to_crm(category: str) -> str:
@@ -1284,14 +1367,32 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 'Template content is empty.',
                 code='template_content_empty',
             )
+        leftover_body = leftover_crm_placeholders_after_meta_convert(template.content or '')
+        if leftover_body:
+            return error_response(
+                'Template body still contains unconverted placeholder chips that Meta would '
+                'treat as static text. Use the placeholder chips from the editor '
+                '(e.g. { اسم الموظف }) or remove the braces.',
+                code='whatsapp_template_unconverted_placeholders',
+                details={'tokens': leftover_body[:10]},
+            )
         components = []
-        # HEADER (optional): TEXT only for simplicity; media requires upload
+        # HEADER (optional): TEXT; convert CRM chips to Meta {{n}} like the body.
         header_type = (getattr(template, 'header_type', None) or '').strip().lower()
-        header_text = (getattr(template, 'header_text', None) or '').strip()
-        if header_type == 'text' and header_text:
-            header_comp = {'type': 'HEADER', 'format': 'TEXT', 'text': header_text[:60]}
-            if _positional_variable_count(header_text) > 0:
-                header_comp['example'] = {'header_text': ['Sample']}
+        header_text_raw = (getattr(template, 'header_text', None) or '').strip()
+        header_has_positional = False
+        if header_type == 'text' and header_text_raw:
+            leftover_header = leftover_crm_placeholders_after_meta_convert(header_text_raw)
+            if leftover_header:
+                return error_response(
+                    'Template header still contains unconverted placeholder chips that Meta '
+                    'would treat as static text. Use the editor chips or remove the braces.',
+                    code='whatsapp_template_unconverted_placeholders',
+                    details={'tokens': leftover_header[:10]},
+                )
+            header_text, header_examples = _content_to_meta_body(header_text_raw)
+            header_comp = {'type': 'HEADER', 'format': 'TEXT', 'text': (header_text or header_text_raw)[:60]}
+            header_has_positional = _attach_header_example(header_comp, header_comp['text'], header_examples)
             components.append(header_comp)
         # BODY
         body_comp = {'type': 'BODY', 'text': body_text[:1024]}
@@ -1336,7 +1437,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             'category': category,
             'components': components,
         }
-        if has_positional:
+        if has_positional or header_has_positional:
             payload['parameter_format'] = 'positional'
         url = f'{META_GRAPH_API_BASE_URL}/{wa.waba_id}/message_templates'
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}

@@ -99,3 +99,12 @@ def test_legacy_bracket_still_works():
     values = build_message_placeholder_values(FakeClient())
     out = render_message_placeholders("Hi [Customer Name] / [name]", values)
     assert out == "Hi Sara Ahmed / Sara Ahmed"
+
+
+def test_norm_key_folds_alef_and_strips_bidi():
+    from integrations.services.message_placeholders import _norm_key, canonical_for_placeholder_key
+
+    assert _norm_key(" اسم\u200f الموظف ") == _norm_key("اسم الموظف")
+    assert canonical_for_placeholder_key("إسم الموظف") == "employee_name"
+    assert canonical_for_placeholder_key(" اسم الموظف ") == "employee_name"
+

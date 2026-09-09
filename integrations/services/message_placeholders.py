@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Callable, Optional
@@ -24,9 +25,23 @@ logger = logging.getLogger(__name__)
 _BRACKET_RE = re.compile(r"\[([^\]]+)\]")
 _CURLY_RE = re.compile(r"(?<!\{)\{([^{}]+)\}(?!\})")
 
+# Arabic harakat + Koranic annotation marks commonly pasted into chips.
+_ARABIC_MARKS_RE = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+# Common alef variants → bare alef so إسم / أسم match اسم.
+_ALEF_RE = re.compile(r"[أإآٱ]")
+
 
 def _norm_key(raw: str) -> str:
-    return re.sub(r"\s+", " ", (raw or "").strip()).casefold()
+    """Normalize placeholder labels for alias lookup (preview, submit, send, log).
+
+    Strips bidi/zero-width format chars, folds Arabic alef variants, removes harakat,
+    collapses whitespace, then casefolds — so RTL-edited chips still resolve.
+    """
+    text = unicodedata.normalize("NFKC", raw or "")
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    text = _ALEF_RE.sub("ا", text)
+    text = _ARABIC_MARKS_RE.sub("", text)
+    return re.sub(r"\s+", " ", text.strip()).casefold()
 
 
 def _first_name(name: str) -> str:
@@ -262,6 +277,60 @@ def _alias_to_canonical() -> dict[str, str]:
 
 
 ALIAS_TO_CANONICAL = _alias_to_canonical()
+
+
+def canonical_for_placeholder_key(raw_key: str) -> Optional[str]:
+    """Map a chip inner label (e.g. ' اسم الموظف ') to its canonical id."""
+    return ALIAS_TO_CANONICAL.get(_norm_key(raw_key))
+
+
+def find_named_placeholder_spans(content: str) -> list[tuple[int, int, str]]:
+    """Left-to-right (start, end, canonical) for known [alias] / { alias } chips.
+
+    Uses the generic brace scanners so bidi marks / extra spaces inside chips still match
+    after _norm_key, unlike per-alias exact regexes.
+    """
+    text = content or ""
+    found: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+
+    def consider(match: re.Match) -> None:
+        span = (match.start(), match.end())
+        if span in seen:
+            return
+        if any(not (span[1] <= s or span[0] >= e) for s, e in seen):
+            return
+        canonical = canonical_for_placeholder_key(match.group(1) or "")
+        if not canonical:
+            return
+        seen.add(span)
+        found.append((span[0], span[1], canonical))
+
+    for m in _BRACKET_RE.finditer(text):
+        consider(m)
+    for m in _CURLY_RE.finditer(text):
+        consider(m)
+    found.sort(key=lambda x: x[0])
+    return found
+
+
+def leftover_crm_placeholder_tokens(text: str) -> list[str]:
+    """Chip-like `{ … }` / `[ … ]` tokens that remain after Meta {{n}} conversion.
+
+    Used to refuse submit when braces would be frozen as static Meta body text.
+    Ignores Meta positional {{n}}.
+    """
+    leftovers: list[str] = []
+    for pattern in (_BRACKET_RE, _CURLY_RE):
+        for m in pattern.finditer(text or ""):
+            inner = (m.group(1) or "").strip()
+            if not inner:
+                continue
+            # Pure digits are Meta-style positional leftovers we already converted past.
+            if re.fullmatch(r"\d+", inner):
+                continue
+            leftovers.append(m.group(0))
+    return leftovers
 
 
 def build_message_placeholder_values(

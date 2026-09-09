@@ -14,9 +14,10 @@ from integrations.oauth_utils import META_GRAPH_API_BASE_URL
 from integrations.services.message_placeholders import _user_display_name
 from integrations.views.templates_whatsapp import (
     build_whatsapp_template_components_for_client,
-    count_template_body_placeholders,
+    count_template_placeholders,
     meta_slug_template_name,
     template_body_parameter_values,
+    template_outbound_log_body,
 )
 from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
 
@@ -32,36 +33,6 @@ def normalize_whatsapp_to_digits(phone: str) -> str:
     if not raw:
         return ""
     return digits_only(normalize_phone_to_e164(raw))
-
-
-def template_outbound_log_body(template: MessageTemplate, param_values: Optional[list] = None) -> str:
-    """Human-readable body for chat history after sending a Meta template."""
-    import re
-
-    from integrations.views.templates_whatsapp import _find_placeholders_in_order
-
-    meta_name = meta_slug_template_name(template.name, template.id)
-    content = (template.content or "").strip()
-    if content.lower().startswith("(imported from meta:"):
-        content = ""
-    if param_values and content:
-        out = content
-        matches = _find_placeholders_in_order(out)
-        if matches:
-            parts = []
-            last = 0
-            for i, (start, end, _canonical, _sample, _getter) in enumerate(matches):
-                parts.append(out[last:start])
-                parts.append(str(param_values[i]) if i < len(param_values) else "-")
-                last = end
-            parts.append(out[last:])
-            out = "".join(parts)
-        for i, val in enumerate(param_values, start=1):
-            out = re.sub(rf"\{{\{{\s*{i}\s*\}}\}}", str(val), out)
-        return out[:65535]
-    if content:
-        return content[:65535]
-    return f"[Template: {meta_name}]"
 
 
 def send_approved_whatsapp_template(
@@ -94,8 +65,7 @@ def send_approved_whatsapp_template(
     if meta_st and meta_st != "APPROVED":
         return False, None, "whatsapp_template_not_approved", None
 
-    n_placeholders = count_template_body_placeholders(template.content or "")
-    header_needs = count_template_body_placeholders(getattr(template, "header_text", None) or "")
+    n_placeholders, header_needs = count_template_placeholders(template)
     # { اسم الموظف } falls back to the sender when the lead has no assignee.
     sender_name = _user_display_name(created_by) if created_by is not None else None
     param_values: list[str] = []

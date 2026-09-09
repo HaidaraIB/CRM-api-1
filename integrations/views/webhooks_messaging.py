@@ -38,9 +38,10 @@ from ..whatsapp_account_sync import resolve_whatsapp_account_for_api
 from ..whatsapp_access import user_can_access_whatsapp_chats
 from .templates_whatsapp import (
     build_whatsapp_template_components_for_client,
-    count_template_body_placeholders,
+    count_template_placeholders,
     meta_slug_template_name,
     template_body_parameter_values,
+    template_outbound_log_body,
 )
 from integrations.services.message_placeholders import _user_display_name
 from ..serializers import (
@@ -916,30 +917,7 @@ def _resolve_whatsapp_client(company, client_id, to_phone, integration_account=N
 
 def _template_outbound_log_body(template, param_values=None) -> str:
     """Human-readable body for chat history after sending a Meta template."""
-    from .templates_whatsapp import _find_placeholders_in_order
-
-    meta_name = meta_slug_template_name(template.name, template.id)
-    content = (template.content or '').strip()
-    if content.lower().startswith('(imported from meta:'):
-        content = ''
-    if param_values and content:
-        out = content
-        matches = _find_placeholders_in_order(out)
-        if matches:
-            parts = []
-            last = 0
-            for i, (start, end, _canonical, _sample, _getter) in enumerate(matches):
-                parts.append(out[last:start])
-                parts.append(str(param_values[i]) if i < len(param_values) else '-')
-                last = end
-            parts.append(out[last:])
-            out = ''.join(parts)
-        for i, val in enumerate(param_values, start=1):
-            out = re.sub(rf'\{{\{{\s*{i}\s*\}}\}}', str(val), out)
-        return out[:65535]
-    if content:
-        return content[:65535]
-    return f'[Template: {meta_name}]'
+    return template_outbound_log_body(template, param_values)
 
 
 @api_view(['GET'])
@@ -1161,8 +1139,7 @@ def whatsapp_send_template(request):
         if fill_client:
             fill_client = company.clients.select_related('company').get(pk=fill_client.pk)
 
-    n_placeholders = count_template_body_placeholders(template.content or '')
-    header_needs = count_template_body_placeholders(getattr(template, 'header_text', None) or '')
+    n_placeholders, header_needs = count_template_placeholders(template)
     body_parameters = request.data.get('body_parameters')
     if body_parameters is not None:
         if not isinstance(body_parameters, list) or not all(

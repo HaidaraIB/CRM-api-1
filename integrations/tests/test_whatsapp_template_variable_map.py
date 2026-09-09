@@ -12,7 +12,10 @@ from integrations.views.templates_whatsapp import (
     _variable_map_from_meta_components,
     build_template_variable_map,
     content_placeholder_canonicals,
+    count_template_placeholders,
+    leftover_crm_placeholders_after_meta_convert,
     template_body_parameter_values,
+    template_outbound_log_body,
     values_for_canonicals,
 )
 
@@ -232,3 +235,84 @@ def test_named_body_is_equivalent_to_its_meta_positional_form():
         "company_name",
         "customer_name",
     ]
+
+
+# Exact body from tenant company 26 / template id 24 (lead_follow_up).
+LEAD_FOLLOW_UP = (
+    "السلام عليكم معك { اسم الموظف } من { اسم الشركة } احب اتابع معك بخصوص "
+    "شراء الوحدة السكنية في المجمع هل حضرتك مازلت مهتم بالشراء ؟"
+)
+
+
+def test_lead_follow_up_map_fills_employee_then_company():
+    tpl = _template(
+        content=LEAD_FOLLOW_UP,
+        name="lead_follow_up",
+        id=24,
+        meta_variable_map={"body": ["employee_name", "company_name"]},
+    )
+    assert template_body_parameter_values(tpl, FakeClient(), sender_name="زينب نزار") == [
+        "زينب نزار",
+        "TenantCo",
+    ]
+
+
+def test_count_template_placeholders_prefers_map_over_empty_scan():
+    """Even if content had no recognizable chips, a stored map means 2 body slots."""
+    tpl = _template(
+        content="static text with no chips",
+        meta_variable_map={"body": ["employee_name", "company_name"]},
+    )
+    body_n, header_n = count_template_placeholders(tpl)
+    assert body_n == 2
+    assert header_n == 0
+
+
+def test_outbound_log_body_fills_lead_follow_up_chips():
+    tpl = _template(
+        content=LEAD_FOLLOW_UP,
+        name="lead_follow_up",
+        id=24,
+        meta_variable_map={"body": ["employee_name", "company_name"]},
+    )
+    params = template_body_parameter_values(tpl, FakeClient(), sender_name="زينب نزار")
+    out = template_outbound_log_body(tpl, params)
+    assert "{ اسم الموظف }" not in out
+    assert "{ اسم الشركة }" not in out
+    assert "زينب نزار" in out
+    assert "TenantCo" in out
+
+
+def test_bidi_mark_inside_chip_still_converts():
+    # U+200F RIGHT-TO-LEFT MARK between words — common when pasting in RTL editors.
+    content = "معك { اسم\u200f الموظف } من { اسم الشركة }"
+    matches = content_placeholder_canonicals(content)
+    assert matches == ["employee_name", "company_name"]
+    converted, samples = _content_to_meta_body(content)
+    assert "{{1}}" in converted and "{{2}}" in converted
+    assert samples == ["Employee", "Company"]
+    assert leftover_crm_placeholders_after_meta_convert(content) == []
+
+
+def test_alef_variant_chip_still_resolves():
+    # إسم (alef with hamza) should fold to اسم
+    content = "مرحبا { إسم الموظف } من { اسم الشركة }"
+    assert content_placeholder_canonicals(content) == ["employee_name", "company_name"]
+
+
+def test_leftover_unknown_braces_detected_after_convert():
+    content = "Hello { unknown_chip } and { اسم الموظف }"
+    leftovers = leftover_crm_placeholders_after_meta_convert(content)
+    assert any("unknown_chip" in t for t in leftovers)
+    # Known chip should have become {{1}}
+    converted, _ = _content_to_meta_body(content)
+    assert "{{1}}" in converted
+
+
+def test_header_chips_convert_like_body():
+    header = "من { اسم الشركة }"
+    converted, samples = _content_to_meta_body(header)
+    assert converted == "من {{1}}"
+    assert samples == ["Company"]
+    assert leftover_crm_placeholders_after_meta_convert(header) == []
+
