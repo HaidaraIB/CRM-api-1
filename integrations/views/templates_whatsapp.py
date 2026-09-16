@@ -1393,19 +1393,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 code='whatsapp_no_access_token',
             )
         existing_status = (template.meta_status or '').upper()
-        header_type_early = (getattr(template, 'header_type', None) or '').strip().lower()
-        from integrations.services.whatsapp_template_media import (
-            MEDIA_HEADER_TYPES,
-            template_has_header_media,
-        )
-        allow_resubmit_media_header = (
-            existing_status == 'APPROVED'
-            and header_type_early in MEDIA_HEADER_TYPES
-            and template_has_header_media(template)
-        )
-        if existing_status == 'PENDING' or (
-            existing_status == 'APPROVED' and not allow_resubmit_media_header
-        ):
+        if existing_status == 'PENDING':
             return error_response(
                 'This template is already submitted to WhatsApp and is awaiting review or approved.',
                 code='template_already_submitted',
