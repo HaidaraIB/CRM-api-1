@@ -58,22 +58,31 @@ def send_whatsapp_template_message(
     language = (getattr(template, "language", None) or "en_US").strip() or "en_US"
     meta_name = meta_slug_template_name(template.name, template.id)
     template_block = {"name": meta_name, "language": {"code": language}}
-    if fill_client is not None:
-        components = build_whatsapp_template_components_for_client(
-            template,
-            fill_client,
-            body_param_values=param_values if param_values else None,
-            sender_name=sender_name,
+
+    from integrations.services.whatsapp_template_media import (
+        template_has_header_media,
+        template_requires_header_media,
+    )
+
+    if template_requires_header_media(template) and not template_has_header_media(template):
+        return (
+            False,
+            None,
+            "whatsapp_template_header_media_required",
+            "Template header media is missing. Re-upload the header image in Template Management.",
+            None,
         )
-        if components:
-            template_block["components"] = components
-    elif param_values:
-        template_block["components"] = [
-            {
-                "type": "body",
-                "parameters": [{"type": "text", "text": str(p)[:1024]} for p in param_values],
-            }
-        ]
+
+    components = build_whatsapp_template_components_for_client(
+        template,
+        fill_client,
+        body_param_values=param_values if param_values else None,
+        sender_name=sender_name,
+        phone_number_id=wa_account.phone_number_id,
+        access_token=access_token,
+    )
+    if components:
+        template_block["components"] = components
 
     url = f"{META_GRAPH_API_BASE_URL}/{wa_account.phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
@@ -146,7 +155,7 @@ def send_whatsapp_template_message(
     )
     if client:
         try:
-            LeadWhatsAppMessage.objects.create(
+            msg = LeadWhatsAppMessage.objects.create(
                 client=client,
                 phone_number=to,
                 body=preview[:65535],
@@ -158,6 +167,9 @@ def send_whatsapp_template_message(
                 send_source=send_source,
                 campaign_batch=campaign_batch,
             )
+            from integrations.services.whatsapp_template_media import attach_template_header_to_message
+
+            attach_template_header_to_message(msg, template)
         except Exception:
             logger.exception("Failed to persist outbound WhatsApp template client_id=%s", getattr(client, "id", None))
 

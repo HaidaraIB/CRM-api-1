@@ -1164,6 +1164,19 @@ class MessageTemplate(models.Model):
         default='',
         help_text="نص الرأس عند اختيار header_type=text",
     )
+    header_media = models.FileField(
+        upload_to="whatsapp_templates/headers/%Y/%m/",
+        max_length=500,
+        null=True,
+        blank=True,
+        help_text="Media file for image/video/document template headers.",
+    )
+    header_media_mime = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="MIME type of header_media (image/jpeg, video/mp4, …).",
+    )
     footer = models.TextField(
         blank=True,
         default='',

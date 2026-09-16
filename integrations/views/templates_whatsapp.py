@@ -17,7 +17,9 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
 from rest_framework import permissions
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
 from crm_saas_api.responses import error_response, success_response, validation_error_response
 
 from accounts.permissions import HasActiveSubscription
@@ -727,11 +729,13 @@ def whatsapp_template_button_url_parameter_values(buttons, client) -> list:
 
 
 def build_whatsapp_template_components_for_client(
-    template, client, body_param_values=None, sender_name=None
+    template, client, body_param_values=None, sender_name=None, *, phone_number_id=None, access_token=None
 ) -> list:
     """
-    Build Meta template `components` array: header (text vars), body, dynamic URL buttons.
+    Build Meta template `components` array: header (text or media vars), body, dynamic URL buttons.
     """
+    from integrations.services.whatsapp_template_media import build_meta_send_header_component
+
     components = []
     header_type = (getattr(template, 'header_type', None) or '').strip().lower()
     header_text = (getattr(template, 'header_text', None) or '').strip()
@@ -744,6 +748,14 @@ def build_whatsapp_template_components_for_client(
                     'parameters': [{'type': 'text', 'text': p[:1024]} for p in header_vals],
                 }
             )
+    elif header_type in ('image', 'video', 'document') and phone_number_id and access_token:
+        media_header = build_meta_send_header_component(
+            template,
+            phone_number_id=str(phone_number_id),
+            access_token=access_token,
+        )
+        if media_header:
+            components.append(media_header)
 
     body_vals = body_param_values
     if body_vals is None:
@@ -1307,6 +1319,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
     """
     permission_classes = [IsAuthenticated, HasActiveSubscription, IsCompanyOwnerForTemplateWrites]
     serializer_class = MessageTemplateSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         blocked = _integration_gate(self.request.user.company, "whatsapp")
@@ -1319,6 +1332,39 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         if blocked is not None:
             raise PermissionDenied(detail={"error": "Integration is not available for your current plan.", "error_key": "plan_integration_not_included"})
         serializer.save(company=self.request.user.company)
+
+    def _normalized_request_data(self):
+        data = self.request.data.copy() if hasattr(self.request.data, 'copy') else dict(self.request.data)
+        buttons = data.get('buttons')
+        if isinstance(buttons, str) and buttons.strip():
+            try:
+                data['buttons'] = json.loads(buttons)
+            except json.JSONDecodeError:
+                pass
+        return data
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=self._normalized_request_data())
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(
+            instance,
+            data=self._normalized_request_data(),
+            partial=partial,
+        )
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'], url_path='submit-to-whatsapp')
     def submit_to_whatsapp(self, request, pk=None):
@@ -1347,7 +1393,19 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
                 code='whatsapp_no_access_token',
             )
         existing_status = (template.meta_status or '').upper()
-        if existing_status in ('PENDING', 'APPROVED'):
+        header_type_early = (getattr(template, 'header_type', None) or '').strip().lower()
+        from integrations.services.whatsapp_template_media import (
+            MEDIA_HEADER_TYPES,
+            template_has_header_media,
+        )
+        allow_resubmit_media_header = (
+            existing_status == 'APPROVED'
+            and header_type_early in MEDIA_HEADER_TYPES
+            and template_has_header_media(template)
+        )
+        if existing_status == 'PENDING' or (
+            existing_status == 'APPROVED' and not allow_resubmit_media_header
+        ):
             return error_response(
                 'This template is already submitted to WhatsApp and is awaiting review or approved.',
                 code='template_already_submitted',
@@ -1381,7 +1439,38 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         header_type = (getattr(template, 'header_type', None) or '').strip().lower()
         header_text_raw = (getattr(template, 'header_text', None) or '').strip()
         header_has_positional = False
-        if header_type == 'text' and header_text_raw:
+        if header_type in ('image', 'video', 'document'):
+            from integrations.services.whatsapp_template_media import (
+                build_meta_submit_header_component,
+                meta_app_id,
+                template_has_header_media,
+            )
+
+            if not template_has_header_media(template):
+                return error_response(
+                    'Template header media is required before submitting to WhatsApp.',
+                    code='whatsapp_template_header_media_required',
+                )
+            app_id = meta_app_id()
+            if not app_id:
+                return error_response(
+                    'WhatsApp Meta app id is not configured on the server.',
+                    code='whatsapp_meta_app_not_configured',
+                )
+            try:
+                components.append(
+                    build_meta_submit_header_component(
+                        template,
+                        app_id=app_id,
+                        access_token=token,
+                    )
+                )
+            except ValueError as exc:
+                return error_response(
+                    str(exc) or 'Could not upload template header media to Meta.',
+                    code='whatsapp_template_header_upload_failed',
+                )
+        elif header_type == 'text' and header_text_raw:
             leftover_header = leftover_crm_placeholders_after_meta_convert(header_text_raw)
             if leftover_header:
                 return error_response(

@@ -496,6 +496,7 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
     """قوالب الرسائل لمركز المراسلات."""
     channel_type_display = serializers.CharField(source='get_channel_type_display', read_only=True)
     category_display = serializers.CharField(source='get_category_display', read_only=True)
+    header_media_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = MessageTemplate
@@ -510,6 +511,9 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
             'language',
             'header_type',
             'header_text',
+            'header_media',
+            'header_media_mime',
+            'header_media_url',
             'footer',
             'buttons',
             'meta_template_id',
@@ -520,18 +524,86 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id',
+            'header_media_mime',
+            'header_media_url',
             'meta_template_id',
             'meta_status',
             'meta_variable_map',
             'created_at',
             'updated_at',
         ]
+        extra_kwargs = {
+            'header_media': {'write_only': True, 'required': False, 'allow_null': True},
+        }
+
+    def get_header_media_url(self, obj):
+        if not getattr(obj, 'header_media', None) or not obj.header_media.name:
+            return None
+        request = self.context.get('request')
+        if not request:
+            return None
+        return request.build_absolute_uri(obj.header_media.url)
 
     def validate_name(self, value):
         if not value:
             return value
         _template_name_english_only(value)
         return value.strip()
+
+    def validate(self, attrs):
+        from integrations.services.whatsapp_template_media import (
+            MEDIA_HEADER_TYPES,
+            template_has_header_media,
+            validate_header_media_upload,
+        )
+
+        instance = self.instance
+        header_type = (
+            attrs.get('header_type')
+            if 'header_type' in attrs
+            else (getattr(instance, 'header_type', None) if instance else 'none')
+        )
+        header_type = (header_type or 'none').strip().lower()
+        request = self.context.get('request')
+        uploaded = attrs.get('header_media')
+        if uploaded is None and request is not None:
+            uploaded = request.FILES.get('header_media')
+
+        if header_type in MEDIA_HEADER_TYPES:
+            has_existing = template_has_header_media(instance) if instance else False
+            if uploaded:
+                try:
+                    _kind, mime = validate_header_media_upload(uploaded, header_type)
+                except ValueError as exc:
+                    raise serializers.ValidationError({'header_media': str(exc)}) from exc
+                attrs['header_media_mime'] = mime
+                attrs['header_media'] = uploaded
+            elif not has_existing:
+                raise serializers.ValidationError(
+                    {
+                        'header_media': 'Header media file is required for this header type.',
+                        'error_key': 'whatsapp_template_header_media_required',
+                    }
+                )
+        elif 'header_type' in attrs and header_type not in MEDIA_HEADER_TYPES:
+            if instance and template_has_header_media(instance):
+                attrs['_clear_header_media'] = True
+
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop('_clear_header_media', None)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        clear_media = validated_data.pop('_clear_header_media', False)
+        if clear_media and instance.header_media:
+            instance.header_media.delete(save=False)
+            instance.header_media_mime = ''
+        new_media = validated_data.get('header_media')
+        if new_media and instance.header_media:
+            instance.header_media.delete(save=False)
+        return super().update(instance, validated_data)
 
 
 class OpenAISettingsSerializer(serializers.ModelSerializer):
