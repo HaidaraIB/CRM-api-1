@@ -10,7 +10,12 @@ from django.urls import reverse
 
 from conftest import api_body
 from crm.models import Client
-from integrations.models import CampaignBatchStatus, MessageCampaignBatch, MessageCampaignFailure
+from integrations.models import (
+    CampaignBatchStatus,
+    MessageCampaignBatch,
+    MessageCampaignFailure,
+    MessageTemplate,
+)
 
 
 @pytest.fixture
@@ -204,13 +209,224 @@ def test_send_campaign_batch_task_updates_counts_and_failures(company, employee_
         return False, None, "sms_error_send_failed", "boom", "twilio"
 
     with patch("integrations.tasks.send_company_sms", side_effect=fake_send_company_sms):
-        send_campaign_batch_task(batch.id)
+        with patch("integrations.tasks.notify_campaign_batch_complete"):
+            send_campaign_batch_task(batch.id)
 
     batch.refresh_from_db()
     assert batch.status == CampaignBatchStatus.COMPLETED
     assert batch.sent_count == 1
     assert batch.failed_count == 1
     assert MessageCampaignFailure.objects.filter(batch=batch).count() == 1
+
+
+def _sms_batch(company, employee_user, leads, **kwargs):
+    audience = [
+        {"client_id": lead.id, "phone_number": lead.phone_number, "name": lead.name}
+        for lead in leads
+    ]
+    defaults = {
+        "company": company,
+        "channel": MessageCampaignBatch.CHANNEL_SMS,
+        "requested_by": employee_user,
+        "created_by": employee_user,
+        "requires_approval": True,
+        "status": CampaignBatchStatus.APPROVED,
+        "recipient_count": len(audience),
+        "audience_snapshot": audience,
+        "message_payload": {"body": "Hi"},
+    }
+    defaults.update(kwargs)
+    return MessageCampaignBatch.objects.create(**defaults)
+
+
+@pytest.mark.django_db
+def test_campaign_batch_chunks_when_time_budget_exceeded(company, employee_user, own_lead, other_lead, db):
+    from integrations.models import TwilioSettings
+    from integrations.tasks import send_campaign_batch_task
+
+    TwilioSettings.objects.create(company=company, is_enabled=True, account_sid="AC1", twilio_number="+10000000000")
+    third = Client.objects.create(
+        company=company, name="Third", assigned_to=employee_user, phone_number="9647700000003",
+    )
+    batch = _sms_batch(company, employee_user, [own_lead, other_lead, third])
+
+    send_calls = []
+
+    def fake_send(settings, *, to_phone, body):
+        send_calls.append(to_phone)
+        return True, "SM1", None, None, "twilio"
+
+    # Budget starts at 1000; deadline 1050. First recipient ok at 1000, second check hits 1051.
+    monotonic_values = [1000.0, 1000.0, 1051.0]
+
+    with patch("integrations.tasks.send_company_sms", side_effect=fake_send):
+        with patch("integrations.tasks.time.monotonic", side_effect=monotonic_values):
+            with patch("integrations.tasks.enqueue_campaign_batch_send") as mock_enqueue:
+                with patch("integrations.tasks.notify_campaign_batch_complete") as mock_notify:
+                    send_campaign_batch_task(batch.id)
+                    mock_enqueue.assert_called_once_with(batch.id)
+                    mock_notify.assert_not_called()
+
+    batch.refresh_from_db()
+    assert batch.status == CampaignBatchStatus.SENDING
+    assert batch.sent_count == 1
+    assert send_calls == [own_lead.phone_number]
+
+    with patch("integrations.tasks.send_company_sms", side_effect=fake_send):
+        with patch("integrations.tasks.notify_campaign_batch_complete") as mock_notify:
+            send_campaign_batch_task(batch.id)
+
+    batch.refresh_from_db()
+    assert batch.status == CampaignBatchStatus.COMPLETED
+    assert batch.sent_count == 3
+    mock_notify.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_campaign_batch_resumes_from_partial_progress(company, employee_user, own_lead, other_lead, db):
+    from integrations.models import TwilioSettings
+    from integrations.tasks import send_campaign_batch_task
+
+    TwilioSettings.objects.create(company=company, is_enabled=True, account_sid="AC1", twilio_number="+10000000000")
+    batch = _sms_batch(
+        company, employee_user, [own_lead, other_lead],
+        status=CampaignBatchStatus.SENDING,
+        sent_count=1,
+    )
+
+    send_calls = []
+
+    def fake_send(settings, *, to_phone, body):
+        send_calls.append(to_phone)
+        return True, "SM1", None, None, "twilio"
+
+    with patch("integrations.tasks.send_company_sms", side_effect=fake_send):
+        with patch("integrations.tasks.notify_campaign_batch_complete"):
+            send_campaign_batch_task(batch.id)
+
+    batch.refresh_from_db()
+    assert batch.status == CampaignBatchStatus.COMPLETED
+    assert batch.sent_count == 2
+    assert send_calls == [other_lead.phone_number]
+
+
+@pytest.mark.django_db
+def test_campaign_batch_reuses_header_media_id(company, employee_user, own_lead, other_lead, db):
+    from integrations.models import IntegrationAccount, MessageTemplate, WhatsAppAccount
+    from integrations.tasks import send_campaign_batch_task
+
+    account = IntegrationAccount.objects.create(company=company, platform="whatsapp", name="WA", status="connected")
+    account.set_access_token("tok")
+    account.save(update_fields=["access_token"])
+    wa = WhatsAppAccount.objects.create(
+        company=company,
+        waba_id="waba-1",
+        phone_number_id="phone-1",
+        display_phone_number="+15550001",
+        status="connected",
+        integration_account=account,
+    )
+    wa.set_access_token("tok")
+    wa.save(update_fields=["access_token"])
+    template = MessageTemplate.objects.create(
+        company=company,
+        name="promo",
+        channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+        content="Hello",
+        header_type="image",
+    )
+    batch = MessageCampaignBatch.objects.create(
+        company=company,
+        channel=MessageCampaignBatch.CHANNEL_WHATSAPP,
+        requested_by=employee_user,
+        created_by=employee_user,
+        requires_approval=True,
+        status=CampaignBatchStatus.APPROVED,
+        recipient_count=2,
+        audience_snapshot=[
+            {"client_id": own_lead.id, "phone_number": own_lead.phone_number, "name": own_lead.name},
+            {"client_id": other_lead.id, "phone_number": other_lead.phone_number, "name": other_lead.name},
+        ],
+        message_payload={"template_id": template.id, "phone_number_id": wa.phone_number_id},
+    )
+
+    media_ids_seen = []
+
+    def fake_send(*args, **kwargs):
+        media_ids_seen.append(kwargs.get("header_media_id"))
+        return True, "wam-1", None, None, {}
+
+    with patch("integrations.tasks._resolve_batch_header_media_id", return_value=("media-cache-1", None)):
+        with patch("integrations.tasks.send_whatsapp_template_message", side_effect=fake_send):
+            with patch("integrations.tasks.time.sleep"):
+                with patch("integrations.tasks.notify_campaign_batch_complete"):
+                    send_campaign_batch_task(batch.id)
+
+    batch.refresh_from_db()
+    assert batch.status == CampaignBatchStatus.COMPLETED
+    assert media_ids_seen == ["media-cache-1", "media-cache-1"]
+
+
+@pytest.mark.django_db
+def test_campaign_batch_lock_prevents_double_send(company, employee_user, own_lead, db):
+    from django.core.cache import cache
+    from integrations.models import TwilioSettings
+    from integrations.tasks import send_campaign_batch_task
+
+    TwilioSettings.objects.create(company=company, is_enabled=True, account_sid="AC1", twilio_number="+10000000000")
+    batch = _sms_batch(company, employee_user, [own_lead])
+    cache.set(f"campaign_send:{batch.id}", "1", timeout=90)
+
+    with patch("integrations.tasks.send_company_sms") as mock_send:
+        send_campaign_batch_task(batch.id)
+        mock_send.assert_not_called()
+
+    batch.refresh_from_db()
+    assert batch.sent_count == 0
+    cache.delete(f"campaign_send:{batch.id}")
+
+
+@pytest.mark.django_db
+def test_resume_stale_campaign_batches_reenqueues_without_lock(company, employee_user, own_lead, other_lead, db):
+    from integrations.models import TwilioSettings
+    from integrations.tasks import resume_stale_campaign_batches
+
+    TwilioSettings.objects.create(company=company, is_enabled=True, account_sid="AC1", twilio_number="+10000000000")
+    batch = _sms_batch(
+        company, employee_user, [own_lead, other_lead],
+        status=CampaignBatchStatus.SENDING,
+        sent_count=1,
+    )
+
+    with patch("integrations.tasks.enqueue_campaign_batch_send", return_value=True) as mock_enqueue:
+        count = resume_stale_campaign_batches()
+
+    assert count == 1
+    mock_enqueue.assert_called_once_with(batch.id)
+
+
+@pytest.mark.django_db
+def test_build_whatsapp_template_components_uses_cached_header_media_id(company, db):
+    from integrations.views.templates_whatsapp import build_whatsapp_template_components_for_client
+
+    template = MessageTemplate.objects.create(
+        company=company,
+        name="img_tpl",
+        channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+        content="Hi",
+        header_type="image",
+    )
+    components = build_whatsapp_template_components_for_client(
+        template,
+        None,
+        header_media_id="cached-media-99",
+    )
+    assert components == [
+        {
+            "type": "header",
+            "parameters": [{"type": "image", "image": {"id": "cached-media-99"}}],
+        }
+    ]
 
 
 @pytest.mark.parametrize(

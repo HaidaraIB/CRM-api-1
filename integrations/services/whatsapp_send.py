@@ -39,6 +39,7 @@ def send_whatsapp_template_message(
     created_by=None,
     send_source: str = "manual",
     campaign_batch=None,
+    header_media_id: str | None = None,
 ):
     """Pure send primitive: calls the Graph API with an already-resolved
     WhatsApp account, logs the outbound message, and increments usage. No
@@ -80,6 +81,7 @@ def send_whatsapp_template_message(
         sender_name=sender_name,
         phone_number_id=wa_account.phone_number_id,
         access_token=access_token,
+        header_media_id=header_media_id,
     )
     if components:
         template_block["components"] = components

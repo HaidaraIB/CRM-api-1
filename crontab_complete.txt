@@ -70,6 +70,11 @@
 # 3. إعادة تعيين العملاء غير النشطين - كل ساعة (موجود بالفعل)
 5 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py run_reassign_task >> /var/log/crm_reassign.log 2>&1
 
+# 3b. استئناف حملات Messaging Center العالقة في SENDING بعد انتهاء مهلة qcluster - كل 5 دقائق
+#     يعيد إدراج الدفعات التي توقف عامل الإرسال عنها (timeout/crash) دون سلسلة المهمة التالية.
+#     آمن للتشغيل المتكرر: يتخطى الدفعات التي لها قفل عامل نشط ويكمل من sent_count + failed_count.
+1,16,31,46 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py resume_stale_campaign_batches >> /var/log/crm-api-campaign-batches.log 2>&1
+
 # ============================================
 # مهام يومية
 # ============================================

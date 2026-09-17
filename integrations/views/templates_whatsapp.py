@@ -729,12 +729,26 @@ def whatsapp_template_button_url_parameter_values(buttons, client) -> list:
 
 
 def build_whatsapp_template_components_for_client(
-    template, client, body_param_values=None, sender_name=None, *, phone_number_id=None, access_token=None
+    template,
+    client,
+    body_param_values=None,
+    sender_name=None,
+    *,
+    phone_number_id=None,
+    access_token=None,
+    header_media_id=None,
 ) -> list:
     """
     Build Meta template `components` array: header (text or media vars), body, dynamic URL buttons.
+
+    When ``header_media_id`` is provided for image/video/document headers, the
+    cached Meta media id is reused instead of uploading per recipient (campaign
+    batch sends upload once and pass the id here).
     """
-    from integrations.services.whatsapp_template_media import build_meta_send_header_component
+    from integrations.services.whatsapp_template_media import (
+        _META_PARAM_TYPE,
+        build_meta_send_header_component,
+    )
 
     components = []
     header_type = (getattr(template, 'header_type', None) or '').strip().lower()
@@ -748,14 +762,24 @@ def build_whatsapp_template_components_for_client(
                     'parameters': [{'type': 'text', 'text': p[:1024]} for p in header_vals],
                 }
             )
-    elif header_type in ('image', 'video', 'document') and phone_number_id and access_token:
-        media_header = build_meta_send_header_component(
-            template,
-            phone_number_id=str(phone_number_id),
-            access_token=access_token,
-        )
-        if media_header:
-            components.append(media_header)
+    elif header_type in ('image', 'video', 'document'):
+        param_type = _META_PARAM_TYPE.get(header_type)
+        if header_media_id and param_type:
+            media_obj = {'id': header_media_id}
+            components.append(
+                {
+                    'type': 'header',
+                    'parameters': [{'type': param_type, param_type: media_obj}],
+                }
+            )
+        elif phone_number_id and access_token:
+            media_header = build_meta_send_header_component(
+                template,
+                phone_number_id=str(phone_number_id),
+                access_token=access_token,
+            )
+            if media_header:
+                components.append(media_header)
 
     body_vals = body_param_values
     if body_vals is None:
