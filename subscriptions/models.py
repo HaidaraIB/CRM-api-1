@@ -167,6 +167,14 @@ class Subscription(models.Model):
     )
     is_active = models.BooleanField(default=True)
     auto_renew = models.BooleanField(default=False)
+    trial_code = models.ForeignKey(
+        "TrialCode",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subscriptions",
+        help_text="Launch trial code that started this period (cleared on paid conversion).",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -209,6 +217,76 @@ class Subscription(models.Model):
         """
         days_left = self.days_until_expiry()
         return 0 < days_left <= days_threshold
+
+
+class TrialCode(models.Model):
+    """Admin-issued code granting a time-boxed trial on a paid plan."""
+
+    code = models.CharField(max_length=32, unique=True, db_index=True)
+    label = models.CharField(max_length=255, blank=True, default="")
+    trial_days = models.PositiveSmallIntegerField()
+    plan = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name="trial_codes")
+    max_redemptions = models.PositiveIntegerField(default=1)
+    redeemed_count = models.PositiveIntegerField(default=0)
+    starts_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_trial_codes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "trial_codes"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["label", "-created_at"]),
+            models.Index(fields=["is_active", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return self.code
+
+    @property
+    def is_exhausted(self) -> bool:
+        return self.redeemed_count >= self.max_redemptions
+
+
+class TrialCodeRedemption(models.Model):
+    """Immutable record of a trial code redemption."""
+
+    code = models.ForeignKey(TrialCode, on_delete=models.CASCADE, related_name="redemptions")
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="trial_code_redemptions"
+    )
+    subscription = models.ForeignKey(
+        Subscription, on_delete=models.CASCADE, related_name="trial_code_redemptions"
+    )
+    trial_days = models.PositiveSmallIntegerField()
+    plan_id_snapshot = models.PositiveIntegerField()
+    trial_ends_at = models.DateTimeField()
+    owner_email = models.CharField(max_length=255, blank=True, default="")
+    owner_name = models.CharField(max_length=255, blank=True, default="")
+    redeemed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "trial_code_redemptions"
+        ordering = ["-redeemed_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["code", "company"],
+                name="trial_code_redemption_unique_per_company",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.code_id} -> company {self.company_id}"
 
 
 class PaymentGateway(models.Model):

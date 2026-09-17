@@ -8,7 +8,21 @@ from .gateway_config import (
     merge_config_for_write,
     strip_masked_values,
 )
-from .models import Plan, Subscription, Payment, Invoice, Broadcast, PaymentGateway
+from .models import (
+    Plan,
+    Subscription,
+    Payment,
+    Invoice,
+    Broadcast,
+    PaymentGateway,
+    TrialCode,
+    TrialCodeRedemption,
+)
+from .services.trial_codes import (
+    is_paid_plan,
+    normalize_trial_code,
+    validate_trial_code_format,
+)
 from .services.gateway_activation import apply_exclusive_activation
 
 
@@ -508,4 +522,164 @@ class PaymentGatewayListSerializer(serializers.ModelSerializer):
             "description",
             "status",
             "enabled",
+        ]
+
+
+class TrialCodeValidateSerializer(serializers.Serializer):
+    code = serializers.CharField(max_length=32)
+
+    def validate_code(self, value):
+        from .services.trial_codes import TrialCodeError, normalize_trial_code, validate_trial_code_format
+
+        raw = normalize_trial_code(value or "")
+        if not raw:
+            raise serializers.ValidationError("Code is required.")
+        try:
+            validate_trial_code_format(raw)
+        except TrialCodeError as exc:
+            raise serializers.ValidationError(exc.message)
+        return raw
+
+
+class TrialCodeListSerializer(serializers.ModelSerializer):
+    plan_name = serializers.CharField(source="plan.name", read_only=True)
+    is_exhausted = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = TrialCode
+        fields = [
+            "id",
+            "code",
+            "label",
+            "trial_days",
+            "plan",
+            "plan_name",
+            "max_redemptions",
+            "redeemed_count",
+            "is_exhausted",
+            "starts_at",
+            "expires_at",
+            "is_active",
+            "notes",
+            "created_at",
+        ]
+
+
+class TrialCodeSerializer(serializers.ModelSerializer):
+    plan_name = serializers.CharField(source="plan.name", read_only=True)
+    is_exhausted = serializers.BooleanField(read_only=True)
+    created_by_username = serializers.CharField(
+        source="created_by.username", read_only=True, allow_null=True
+    )
+
+    class Meta:
+        model = TrialCode
+        fields = [
+            "id",
+            "code",
+            "label",
+            "trial_days",
+            "plan",
+            "plan_name",
+            "max_redemptions",
+            "redeemed_count",
+            "is_exhausted",
+            "starts_at",
+            "expires_at",
+            "is_active",
+            "notes",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "redeemed_count",
+            "is_exhausted",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class TrialCodeCreateSerializer(serializers.ModelSerializer):
+    code = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    class Meta:
+        model = TrialCode
+        fields = [
+            "code",
+            "label",
+            "trial_days",
+            "plan",
+            "max_redemptions",
+            "starts_at",
+            "expires_at",
+            "is_active",
+            "notes",
+        ]
+
+    def validate_code(self, value):
+        from .services.trial_codes import TrialCodeError, generate_unique_code
+
+        raw = normalize_trial_code(value or "")
+        if not raw:
+            return generate_unique_code()
+        try:
+            validate_trial_code_format(raw)
+        except TrialCodeError as exc:
+            raise serializers.ValidationError(exc.message)
+        if TrialCode.objects.filter(code=raw).exists():
+            raise serializers.ValidationError("This code already exists.")
+        return raw
+
+    def validate_trial_days(self, value):
+        days = int(value or 0)
+        if days < 1 or days > 365:
+            raise serializers.ValidationError("Trial days must be between 1 and 365.")
+        return days
+
+    def validate_max_redemptions(self, value):
+        n = int(value or 0)
+        if n < 1:
+            raise serializers.ValidationError("Max redemptions must be at least 1.")
+        return n
+
+    def validate_plan(self, plan):
+        if not is_paid_plan(plan):
+            raise serializers.ValidationError("Trial codes must target a paid plan.")
+        return plan
+
+
+class TrialCodeBatchGenerateSerializer(serializers.Serializer):
+    label = serializers.CharField(max_length=255)
+    trial_days = serializers.IntegerField(min_value=1, max_value=365)
+    plan = serializers.PrimaryKeyRelatedField(queryset=Plan.objects.all())
+    quantity = serializers.IntegerField(min_value=1, max_value=500)
+    starts_at = serializers.DateTimeField(required=False, allow_null=True)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class TrialCodeRedemptionSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+    code_value = serializers.CharField(source="code.code", read_only=True)
+
+    class Meta:
+        model = TrialCodeRedemption
+        fields = [
+            "id",
+            "code",
+            "code_value",
+            "company",
+            "company_name",
+            "subscription",
+            "trial_days",
+            "plan_id_snapshot",
+            "trial_ends_at",
+            "owner_email",
+            "owner_name",
+            "redeemed_at",
         ]

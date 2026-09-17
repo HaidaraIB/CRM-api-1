@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import Plan, Subscription, Payment, Invoice, InvoiceSequence, Broadcast, PaymentGateway
+from .models import (
+    Plan,
+    Subscription,
+    Payment,
+    Invoice,
+    InvoiceSequence,
+    Broadcast,
+    PaymentGateway,
+    TrialCode,
+    TrialCodeRedemption,
+)
 
 
 @admin.register(Plan)
@@ -273,6 +283,68 @@ class BroadcastAdmin(admin.ModelAdmin):
     ]
     ordering = ["-created_at"]
     readonly_fields = ["sent_at", "created_at", "updated_at"]
+
+
+class TrialCodeRedemptionInline(admin.TabularInline):
+    model = TrialCodeRedemption
+    extra = 0
+    readonly_fields = [
+        "company",
+        "subscription",
+        "trial_days",
+        "plan_id_snapshot",
+        "trial_ends_at",
+        "owner_email",
+        "owner_name",
+        "redeemed_at",
+    ]
+    can_delete = False
+
+
+@admin.register(TrialCode)
+class TrialCodeAdmin(admin.ModelAdmin):
+    list_display = [
+        "code",
+        "label",
+        "plan",
+        "trial_days",
+        "redeemed_count",
+        "max_redemptions",
+        "is_active",
+        "starts_at",
+        "expires_at",
+        "created_at",
+    ]
+    list_filter = ["is_active", "plan", "created_at"]
+    search_fields = ["code", "label", "notes"]
+    ordering = ["-created_at"]
+    readonly_fields = ["redeemed_count", "created_at", "updated_at"]
+    inlines = [TrialCodeRedemptionInline]
+
+
+@admin.register(TrialCodeRedemption)
+class TrialCodeRedemptionAdmin(admin.ModelAdmin):
+    list_display = [
+        "code",
+        "company",
+        "trial_days",
+        "trial_ends_at",
+        "owner_email",
+        "redeemed_at",
+    ]
+    list_filter = ["redeemed_at"]
+    search_fields = ["code__code", "company__name", "owner_email"]
+    readonly_fields = [
+        "code",
+        "company",
+        "subscription",
+        "trial_days",
+        "plan_id_snapshot",
+        "trial_ends_at",
+        "owner_email",
+        "owner_name",
+        "redeemed_at",
+    ]
 
 
 @admin.register(PaymentGateway)

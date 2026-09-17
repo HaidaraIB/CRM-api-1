@@ -8,6 +8,11 @@ from .fib import create_fib_payment, fib_callback
 from .paytabs import create_paytabs_payment, paytabs_return, paytabs_callback
 from .qicard import create_qicard_payment, qicard_return, qicard_webhook
 from .stripe_gateway import create_stripe_payment, stripe_return, stripe_webhook
+from .trial_codes import (
+    TrialCodeViewSet,
+    redeem_trial_code_subscription,
+    validate_trial_code_public,
+)
 from .viewsets_public import (
     BroadcastViewSet,
     InvoiceViewSet,
@@ -37,6 +42,9 @@ __all__ = [
     "schedule_subscription_downgrade",
     "cancel_pending_plan_change",
     "switch_subscription_plan_free",
+    "TrialCodeViewSet",
+    "validate_trial_code_public",
+    "redeem_trial_code_subscription",
     "check_payment_status",
     "create_alqaseh_payment",
     "alqaseh_return",

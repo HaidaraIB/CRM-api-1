@@ -205,6 +205,7 @@ class BillingScopeMiddleware(MiddlewareMixin):
         # Read-only pricing preview: the login screen offers "change plan" as an
         # alternative to renewing, and that page prices the change before checkout.
         "/api/subscriptions/preview-change/",
+        "/api/subscriptions/redeem-trial-code/",
     ]
 
     def process_request(self, request):

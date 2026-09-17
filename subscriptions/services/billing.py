@@ -199,12 +199,14 @@ def apply_successful_payment(
         subscription.billing_cycle = billing_cycle
         subscription.subscription_status = SubscriptionStatus.ACTIVE
         subscription.is_active = True
+        subscription.trial_code = None
         subscription.save(
             update_fields=[
                 "plan",
                 "billing_cycle",
                 "subscription_status",
                 "is_active",
+                "trial_code",
                 "updated_at",
             ]
         )
@@ -230,6 +232,7 @@ def apply_successful_payment(
         subscription.billing_cycle = billing_cycle
         subscription.subscription_status = SubscriptionStatus.ACTIVE
         subscription.is_active = True
+        subscription.trial_code = None
         subscription.save(
             update_fields=[
                 "current_period_start",
@@ -237,6 +240,7 @@ def apply_successful_payment(
                 "billing_cycle",
                 "subscription_status",
                 "is_active",
+                "trial_code",
                 "updated_at",
             ]
         )
@@ -263,6 +267,7 @@ def apply_successful_payment(
     subscription.is_active = True
     subscription.pending_plan = None
     subscription.pending_billing_cycle = None
+    subscription.trial_code = None
     subscription.save(
         update_fields=[
             "plan",
@@ -273,6 +278,7 @@ def apply_successful_payment(
             "is_active",
             "pending_plan",
             "pending_billing_cycle",
+            "trial_code",
             "updated_at",
         ]
     )

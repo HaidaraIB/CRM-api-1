@@ -135,6 +135,9 @@ from subscriptions.views import (
     schedule_subscription_downgrade,
     cancel_pending_plan_change,
     switch_subscription_plan_free,
+    TrialCodeViewSet,
+    validate_trial_code_public,
+    redeem_trial_code_subscription,
 )
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
@@ -217,6 +220,7 @@ router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
 router.register(r"payments", PaymentViewSet, basename="payment")
 router.register(r"invoices", InvoiceViewSet, basename="invoice")
 router.register(r"payment-gateways", PaymentGatewayViewSet, basename="paymentgateway")
+router.register(r"trial-codes", TrialCodeViewSet, basename="trialcode")
 
 router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
@@ -277,6 +281,11 @@ v1_patterns = [
     path("payments/alqaseh-webhook/", alqaseh_webhook, name="alqaseh_webhook"),
     path("payment-status/<int:subscription_id>/", check_payment_status, name="check_payment_status"),
     path("subscriptions/switch-plan-free/", switch_subscription_plan_free, name="switch_subscription_plan_free"),
+    path(
+        "subscriptions/redeem-trial-code/",
+        redeem_trial_code_subscription,
+        name="redeem_trial_code_subscription",
+    ),
     path("subscriptions/preview-change/", preview_subscription_change, name="preview_subscription_change"),
     path("subscriptions/schedule-downgrade/", schedule_subscription_downgrade, name="schedule_subscription_downgrade"),
     path(
@@ -338,6 +347,7 @@ v1_patterns = [
     path("auth/request-2fa/", request_two_factor_auth, name="request_two_factor_auth"),
     path("auth/verify-2fa/", verify_two_factor_auth, name="verify_two_factor_auth"),
     path("public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
+    path("public/trial-codes/validate/", validate_trial_code_public, name="validate_trial_code_public"),
     path("public/payment-gateways/", PublicPaymentGatewayListView.as_view(), name="public_payment_gateway_list"),
     path(
         "public/mobile-app-version/",

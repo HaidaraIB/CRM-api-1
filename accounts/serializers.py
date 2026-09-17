@@ -1023,6 +1023,7 @@ class RegisterCompanySerializer(serializers.Serializer):
         required=False,
         default='monthly'
     )
+    trial_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     def _request_can_skip_phone_verification(self, request):
         if not request:
@@ -1115,6 +1116,16 @@ class RegisterCompanySerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"email_verification_token": ["Email does not match verification token."]}
             )
+
+        trial_code = (attrs.get("trial_code") or "").strip()
+        if trial_code:
+            from subscriptions.services.trial_codes import TrialCodeError, validate_trial_code
+
+            try:
+                validate_trial_code(trial_code)
+            except TrialCodeError as exc:
+                raise serializers.ValidationError({"trial_code": [exc.message]})
+
         return attrs
 
     def validate_company(self, value):
@@ -1176,6 +1187,7 @@ class RegisterCompanySerializer(serializers.Serializer):
         owner_data = validated_data['owner']
         plan_id = validated_data.get('plan_id')
         billing_cycle = validated_data.get('billing_cycle', 'monthly')
+        trial_code_raw = (validated_data.pop("trial_code", None) or "").strip()
 
         # Create owner user
         owner = User.objects.create_user(
@@ -1209,10 +1221,18 @@ class RegisterCompanySerializer(serializers.Serializer):
         owner.company = company
         owner.save()
 
-        # Create subscription if plan is provided
+        # Create subscription if plan or trial code is provided
         subscription = None
         requires_payment = False
-        if plan_id:
+        if trial_code_raw:
+            from subscriptions.services.trial_codes import redeem_trial_code
+
+            subscription = redeem_trial_code(
+                raw_code=trial_code_raw,
+                company=company,
+                owner=owner,
+            )
+        elif plan_id:
             try:
                 plan = Plan.objects.get(id=plan_id)
                 # Free/trial plans never require payment and do not have billing cycles.
