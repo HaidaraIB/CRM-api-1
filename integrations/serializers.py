@@ -578,11 +578,11 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({'header_media': str(exc)}) from exc
                 attrs['header_media_mime'] = mime
                 attrs['header_media'] = uploaded
+                self._header_media_mime = mime
             elif not has_existing:
                 raise serializers.ValidationError(
                     {
                         'header_media': 'Header media file is required for this header type.',
-                        'error_key': 'whatsapp_template_header_media_required',
                     }
                 )
         elif 'header_type' in attrs and header_type not in MEDIA_HEADER_TYPES:
@@ -593,17 +593,29 @@ class MessageTemplateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('_clear_header_media', None)
-        return super().create(validated_data)
+        validated_data.pop('header_media_mime', None)
+        mime = getattr(self, '_header_media_mime', None)
+        instance = super().create(validated_data)
+        if mime:
+            instance.header_media_mime = mime
+            instance.save(update_fields=['header_media_mime'])
+        return instance
 
     def update(self, instance, validated_data):
         clear_media = validated_data.pop('_clear_header_media', False)
+        validated_data.pop('header_media_mime', None)
+        mime = getattr(self, '_header_media_mime', None)
         if clear_media and instance.header_media:
             instance.header_media.delete(save=False)
             instance.header_media_mime = ''
         new_media = validated_data.get('header_media')
         if new_media and instance.header_media:
             instance.header_media.delete(save=False)
-        return super().update(instance, validated_data)
+        instance = super().update(instance, validated_data)
+        if mime:
+            instance.header_media_mime = mime
+            instance.save(update_fields=['header_media_mime'])
+        return instance
 
 
 class OpenAISettingsSerializer(serializers.ModelSerializer):

@@ -1274,6 +1274,84 @@ def _fetch_all_meta_message_templates(waba_id: str, token: str):
     return all_items, None
 
 
+def _delete_meta_message_template(waba_id: str, token: str, hsm_id: str, name: str):
+    """
+    Delete one WhatsApp message template from Meta by ID + name.
+    Returns (True, None) on success or (False, error_details dict).
+    """
+    hsm_id = str(hsm_id or '').strip()
+    name = (name or '').strip()
+    if not hsm_id or not name:
+        return False, {'message': 'Missing template id or name for Meta delete.'}
+    url = f'{META_GRAPH_API_BASE_URL}/{waba_id}/message_templates'
+    headers = {'Authorization': f'Bearer {token}'}
+    try:
+        resp = requests.delete(
+            url,
+            params={'hsm_id': hsm_id, 'name': name},
+            headers=headers,
+            timeout=30,
+        )
+        data = resp.json() if resp.content else {}
+        if resp.status_code == 200 and isinstance(data, dict) and data.get('success'):
+            return True, None
+        meta_msg = None
+        if isinstance(data, dict):
+            err = data.get('error')
+            if isinstance(err, dict):
+                meta_msg = err.get('error_user_msg') or err.get('message')
+        return False, (
+            data
+            if isinstance(data, dict)
+            else {'raw': resp.text, 'message': meta_msg or resp.text}
+        )
+    except requests.RequestException as e:
+        return False, {'message': str(e) or 'Could not reach Meta to delete the template.'}
+
+
+def _is_whatsapp_template_channel(channel_type) -> bool:
+    return (channel_type or '').lower() in ('whatsapp', 'whatsapp_api')
+
+
+def _delete_whatsapp_template_on_meta_or_response(instance, company):
+    """
+    Delete a CRM WhatsApp template on Meta when it was submitted/synced there.
+    Returns None on success/skip, or an error Response when Meta delete must run but fails.
+    """
+    if not _is_whatsapp_template_channel(instance.channel_type):
+        return None
+    meta_id = str(instance.meta_template_id or '').strip()
+    if not meta_id:
+        return None
+
+    wa, err_resp = _connected_wa_or_response(company)
+    if err_resp is not None:
+        return err_resp
+    token = wa.get_access_token()
+    if not token:
+        return error_response(
+            'WhatsApp account has no access token.',
+            code='whatsapp_no_access_token',
+        )
+
+    meta_name = meta_slug_template_name(instance.name, instance.id)
+    ok, details = _delete_meta_message_template(wa.waba_id, token, meta_id, meta_name)
+    if ok:
+        return None
+    meta_msg = None
+    if isinstance(details, dict):
+        err = details.get('error')
+        if isinstance(err, dict):
+            meta_msg = err.get('error_user_msg') or err.get('message')
+        meta_msg = meta_msg or details.get('message')
+    return error_response(
+        meta_msg or 'Meta API rejected the template deletion.',
+        code='meta_template_delete_failed',
+        details=details if isinstance(details, dict) else {'raw': str(details)},
+        status_code=status.HTTP_502_BAD_GATEWAY,
+    )
+
+
 def _connected_wa_or_response(company):
     """Return (WhatsAppAccount, None) or (None, error Response)."""
     wa, err = resolve_whatsapp_account_for_api(company)
@@ -1334,7 +1412,12 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         serializer.save(company=self.request.user.company)
 
     def _normalized_request_data(self):
-        data = self.request.data.copy() if hasattr(self.request.data, 'copy') else dict(self.request.data)
+        data = {}
+        for key in self.request.data:
+            values = self.request.data.getlist(key)
+            data[key] = values[0] if len(values) == 1 else values
+        for key in self.request.FILES:
+            data[key] = self.request.FILES[key]
         buttons = data.get('buttons')
         if isinstance(buttons, str) and buttons.strip():
             try:
@@ -1365,6 +1448,14 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        meta_err = _delete_whatsapp_template_on_meta_or_response(instance, request.user.company)
+        if meta_err is not None:
+            return meta_err
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'], url_path='submit-to-whatsapp')
     def submit_to_whatsapp(self, request, pk=None):

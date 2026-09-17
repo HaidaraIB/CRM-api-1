@@ -118,3 +118,41 @@ def test_upload_template_header_handle(mock_post):
     )
     assert handle == '4::abc'
     assert mock_post.call_count == 2
+
+
+@pytest.mark.django_db
+def test_multipart_template_create_with_header_and_buttons(authenticated_admin, subscription):
+    import json
+
+    from integrations.models import MessageTemplate
+
+    upload = SimpleUploadedFile(
+        'header.jpg',
+        b'\xff\xd8\xff' + b'x' * 100,
+        content_type='image/jpeg',
+    )
+    buttons = json.dumps(
+        [
+            {'type': 'reply', 'button_text': 'Yes'},
+            {'type': 'reply', 'button_text': 'No'},
+        ]
+    )
+    response = authenticated_admin.post(
+        '/api/v1/integrations/templates/',
+        data={
+            'name': 'test_photo_tpl',
+            'channel_type': 'whatsapp_api',
+            'content': 'Hello body',
+            'category': 'marketing',
+            'language': 'ar',
+            'header_type': 'image',
+            'footer': 'shatalarab.city',
+            'buttons': buttons,
+            'header_media': upload,
+        },
+        format='multipart',
+    )
+    assert response.status_code == 201, response.content.decode()
+    tpl = MessageTemplate.objects.get(name='test_photo_tpl')
+    assert tpl.header_media.name
+    assert tpl.header_media_mime == 'image/jpeg'
