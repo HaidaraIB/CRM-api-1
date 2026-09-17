@@ -1298,6 +1298,30 @@ def _fetch_all_meta_message_templates(waba_id: str, token: str):
     return all_items, None
 
 
+def _meta_error_message(details) -> str | None:
+    if not isinstance(details, dict):
+        return None
+    err = details.get('error')
+    if isinstance(err, dict):
+        return err.get('error_user_msg') or err.get('message')
+    msg = details.get('message')
+    return str(msg) if msg else None
+
+
+def _meta_template_delete_not_found(details) -> bool:
+    """True when Meta delete failed because the template is already gone."""
+    if not isinstance(details, dict):
+        return False
+    err = details.get('error')
+    if isinstance(err, dict):
+        msg = (err.get('message') or '').lower()
+        if err.get('code') in (100, 404, 132001):
+            return True
+        if 'not exist' in msg or 'does not exist' in msg or 'not found' in msg:
+            return True
+    return False
+
+
 def _delete_meta_message_template(waba_id: str, token: str, hsm_id: str, name: str):
     """
     Delete one WhatsApp message template from Meta by ID + name.
@@ -1519,6 +1543,18 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             )
         meta_name = meta_slug_template_name(template.name, template.id)
         language = (getattr(template, 'language', None) or request.data.get('language') or 'en_US').strip() or 'en_US'
+        existing_meta_id = str(template.meta_template_id or '').strip()
+        if existing_meta_id and existing_status in ('APPROVED', 'REJECTED'):
+            ok, del_details = _delete_meta_message_template(
+                wa.waba_id, token, existing_meta_id, meta_name
+            )
+            if not ok and not _meta_template_delete_not_found(del_details):
+                return error_response(
+                    _meta_error_message(del_details)
+                    or 'Could not delete the previous Meta template before resubmitting.',
+                    code='meta_template_delete_failed',
+                    details=del_details if isinstance(del_details, dict) else {'raw': del_details},
+                )
         category_map = {
             'auth': 'AUTHENTICATION',
             'marketing': 'MARKETING',
@@ -1641,11 +1677,7 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
             resp = requests.post(url, json=payload, headers=headers, timeout=30)
             data = resp.json() if resp.content else {}
             if resp.status_code not in (200, 201):
-                meta_msg = None
-                if isinstance(data, dict):
-                    err = data.get('error')
-                    if isinstance(err, dict):
-                        meta_msg = err.get('error_user_msg') or err.get('message')
+                meta_msg = _meta_error_message(data if isinstance(data, dict) else None)
                 return error_response(
                     meta_msg or 'Meta API rejected the template submission.',
                     code='meta_template_submit_failed',
