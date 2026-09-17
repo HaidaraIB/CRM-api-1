@@ -68,6 +68,7 @@ from accounts.views import (
 )
 from companies.views import CompanyViewSet
 from crm.report_views import EmployeeReportView, TeamsReportView, MarketingReportView, CallReportView
+from crm.activity_views import ActivitiesListView
 from crm.views import (
     ClientViewSet,
     DealViewSet,
@@ -353,6 +354,7 @@ v1_patterns = [
     path("integrations/", include(integrations_urls)),
     path("sync/", include("sync.urls")),
     path("crm/feature-policies/", feature_policy_view, name="feature_policy"),
+    path("activities/", ActivitiesListView.as_view(), name="activities_list"),
     path("reports/employees/", EmployeeReportView.as_view(), name="reports_employees"),
     path("reports/teams/", TeamsReportView.as_view(), name="reports_teams"),
     path("reports/marketing/", MarketingReportView.as_view(), name="reports_marketing"),
