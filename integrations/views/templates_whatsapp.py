@@ -1436,10 +1436,14 @@ class MessageTemplateViewSet(viewsets.ModelViewSet):
         serializer.save(company=self.request.user.company)
 
     def _normalized_request_data(self):
+        raw = self.request.data
         data = {}
-        for key in self.request.data:
-            values = self.request.data.getlist(key)
-            data[key] = values[0] if len(values) == 1 else values
+        if hasattr(raw, 'getlist'):
+            for key in raw:
+                values = raw.getlist(key)
+                data[key] = values[0] if len(values) == 1 else values
+        elif raw:
+            data = dict(raw)
         for key in self.request.FILES:
             data[key] = self.request.FILES[key]
         buttons = data.get('buttons')

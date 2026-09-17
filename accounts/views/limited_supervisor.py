@@ -28,6 +28,7 @@ from ..serializers import (
     build_user_auth_payload,
 )
 from ..permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSupervisors, HasActiveSubscription, IsSuperAdmin
+from ..supervisor_permissions import ensure_supervisor_permissions_for_company
 from companies.models import Company
 from django.conf import settings
 from django.db import transaction
@@ -115,6 +116,12 @@ class SupervisorViewSet(viewsets.ModelViewSet):
         if not user.company:
             return SupervisorPermission.objects.none()
         return SupervisorPermission.objects.filter(user__company=user.company).select_related('user')
+
+    def list(self, request, *args, **kwargs):
+        company = getattr(request.user, "company", None)
+        if company:
+            ensure_supervisor_permissions_for_company(company)
+        return super().list(request, *args, **kwargs)
 
     def get_serializer_class(self):
         if self.action == 'create':

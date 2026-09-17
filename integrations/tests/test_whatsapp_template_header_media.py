@@ -156,3 +156,25 @@ def test_multipart_template_create_with_header_and_buttons(authenticated_admin, 
     tpl = MessageTemplate.objects.get(name='test_photo_tpl')
     assert tpl.header_media.name
     assert tpl.header_media_mime == 'image/jpeg'
+
+
+@pytest.mark.django_db
+def test_json_patch_template_update_without_multipart(authenticated_admin, company, subscription):
+    from integrations.models import MessageTemplate
+
+    tpl = MessageTemplate.objects.create(
+        company=company,
+        name='json_patch_tpl',
+        channel_type=MessageTemplate.CHANNEL_WHATSAPP_API,
+        content='Hello',
+        category=MessageTemplate.CATEGORY_MARKETING,
+        header_type='none',
+    )
+    response = authenticated_admin.patch(
+        f'/api/v1/integrations/templates/{tpl.id}/',
+        data={'footer': 'updated footer'},
+        format='json',
+    )
+    assert response.status_code == 200, response.content.decode()
+    tpl.refresh_from_db()
+    assert tpl.footer == 'updated footer'
