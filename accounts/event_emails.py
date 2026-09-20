@@ -299,3 +299,115 @@ def send_news_published_email(user, news, language="en"):
         "support_email": SMTPSettings.get_settings().from_email,
     }
     return _send_event_email(user, subject, "news_published", context, lang)
+
+
+def _send_raw_event_email(to_email, subject, template_name, context, language="en"):
+    """Send a transactional email to an arbitrary address (no User row)."""
+    from django.template.loader import render_to_string
+
+    to_email = (to_email or "").strip()
+    if not to_email:
+        return False
+    smtp_settings = SMTPSettings.get_settings()
+    if not smtp_settings.is_active:
+        logger.warning("Outbound email is not active; skipping event email to %s.", to_email)
+        return False
+    lang = language if language in EMAIL_LANGUAGES else "en"
+    suffix = "_ar" if lang == "ar" else "_en"
+    full_name = f"accounts/event_emails/{template_name}{suffix}.html"
+    html_content = render_to_string(full_name, context)
+    plain_body = strip_tags(html_content)
+    connection = _get_smtp_connection()
+    from_email = format_platform_from_address(smtp_settings)
+    email = EmailMultiAlternatives(
+        subject=subject,
+        body=plain_body,
+        from_email=from_email,
+        to=[to_email],
+        connection=connection,
+    )
+    email.attach_alternative(html_content, "text/html")
+    email.send()
+    logger.info("Event email sent to %s: %s", to_email, template_name)
+    return True
+
+
+def _format_demo_booking_local_time(booking, settings_obj):
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    tz_name = getattr(settings_obj, "timezone", None) or "Asia/Baghdad"
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("Asia/Baghdad")
+    local = booking.starts_at.astimezone(tz)
+    return local.strftime("%Y-%m-%d %H:%M")
+
+
+def send_demo_booking_confirmation_email(booking, settings_obj):
+    lang = (booking.language or "en").lower()
+    if lang not in EMAIL_LANGUAGES:
+        lang = "en"
+    when_str = _format_demo_booking_local_time(booking, settings_obj)
+    tz_label = settings_obj.timezone or "Asia/Baghdad"
+    if lang == "ar":
+        subject = "تم تأكيد حجز عرض النظام - LOOP CRM"
+        contact_line = "سيتواصل معك فريقنا قريباً لتأكيد التفاصيل وبدء الجلسة."
+    else:
+        subject = "Your LOOP CRM demo is confirmed"
+        contact_line = "Our team will contact you shortly to confirm details and walk you through the system."
+    context = {
+        "greeting_name": booking.name or ("مرحباً" if lang == "ar" else "there"),
+        "booking_id": booking.id,
+        "session_time": f"{when_str} ({tz_label})",
+        "contact_line": contact_line,
+        "support_email": SMTPSettings.get_settings().from_email,
+    }
+    return _send_raw_event_email(
+        booking.email, subject, "demo_booking_confirmation", context, lang
+    )
+
+
+def send_demo_booking_admin_notifications(booking, settings_obj):
+    from accounts.models import User
+
+    smtp_settings = SMTPSettings.get_settings()
+    if not smtp_settings.is_active:
+        logger.warning("Outbound email is not active; skipping demo booking admin notifications.")
+        return 0
+    when_str = _format_demo_booking_local_time(booking, settings_obj)
+    tz_label = settings_obj.timezone or "Asia/Baghdad"
+    admins = User.objects.filter(is_superuser=True, is_active=True).exclude(email="")
+    sent = 0
+    seen = set()
+    for admin in admins:
+        em = (admin.email or "").strip().lower()
+        if not em or em in seen:
+            continue
+        if em in SUPPORT_TICKET_SUPERADMIN_NOTIFY_SKIP_EMAILS:
+            continue
+        seen.add(em)
+        lang = (getattr(admin, "language", None) or "en").lower()
+        if lang not in EMAIL_LANGUAGES:
+            lang = "en"
+        if lang == "ar":
+            subject = f"حجز عرض نظام جديد #{booking.id} - LOOP CRM"
+        else:
+            subject = f"New demo booking #{booking.id} - LOOP CRM"
+        context = {
+            "greeting_name": admin.first_name or admin.username
+            or ("مرحباً" if lang == "ar" else "there"),
+            "booking_id": booking.id,
+            "guest_name": booking.name,
+            "guest_email": booking.email,
+            "guest_phone": booking.phone,
+            "company_name": booking.company_name or "—",
+            "session_time": f"{when_str} ({tz_label})",
+            "notes": (booking.notes or "").strip() or "—",
+            "support_email": smtp_settings.from_email,
+        }
+        if _send_raw_event_email(
+            admin.email, subject, "demo_booking_new_admin", context, lang
+        ):
+            sent += 1
+    return sent

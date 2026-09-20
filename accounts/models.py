@@ -513,6 +513,10 @@ class LimitedAdmin(models.Model):
         default=False,
         help_text="Can manage Loop user guide articles and news posts",
     )
+    can_manage_demo_bookings = models.BooleanField(
+        default=False,
+        help_text="Can manage public demo bookings and availability",
+    )
     can_manage_settings = models.BooleanField(default=False)
     can_manage_limited_admins = models.BooleanField(default=False, help_text="Can manage other limited admins")
     
@@ -538,6 +542,7 @@ class LimitedAdmin(models.Model):
             'view_reports': self.can_view_reports,
             'manage_communication': self.can_manage_communication,
             'manage_content': self.can_manage_content,
+            'manage_demo_bookings': self.can_manage_demo_bookings,
             'manage_settings': self.can_manage_settings,
             'manage_limited_admins': self.can_manage_limited_admins,
         }

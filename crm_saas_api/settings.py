@@ -237,6 +237,7 @@ INSTALLED_APPS = [
     "notifications",
     "support",
     "platform_content",
+    "demo_bookings",
     "tenant_chat",
     "company_library",
     "sync",

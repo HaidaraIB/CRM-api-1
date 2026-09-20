@@ -628,6 +628,11 @@ class CanManageContent(LimitedAdminPermission):
     required_permission = "can_manage_content"
 
 
+class CanManageDemoBookings(LimitedAdminPermission):
+    message = "You do not have permission to manage demo bookings."
+    required_permission = "can_manage_demo_bookings"
+
+
 class CanManageSettings(LimitedAdminPermission):
     message = "You do not have permission to manage settings."
     write_permission = "can_manage_settings"

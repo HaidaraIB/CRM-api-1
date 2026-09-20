@@ -141,6 +141,15 @@ from subscriptions.views import (
 )
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
+from demo_bookings.views import (
+    DemoBookingAdminViewSet,
+    DemoBookingBlockedDateViewSet,
+    DemoBookingPublicConfigView,
+    DemoBookingPublicSlotsView,
+    DemoBookingSettingsView,
+    create_demo_booking_public,
+    lookup_demo_booking_public,
+)
 from platform_content.views import (
     GuideArticleAdminViewSet,
     GuideCategoryAdminViewSet,
@@ -226,6 +235,12 @@ router.register(r"broadcasts", BroadcastViewSet, basename="broadcast")
 router.register(r"limited-admins", LimitedAdminViewSet, basename="limitedadmin")
 router.register(r"supervisors", SupervisorViewSet, basename="supervisor")
 router.register(r"support-tickets", SupportTicketViewSet, basename="supportticket")
+router.register(r"demo-bookings", DemoBookingAdminViewSet, basename="demobooking")
+router.register(
+    r"demo-booking-blocked-dates",
+    DemoBookingBlockedDateViewSet,
+    basename="demobookingblockeddate",
+)
 router.register(r"guide-categories", GuideCategoryAdminViewSet, basename="guidecategory")
 router.register(r"guide-articles", GuideArticleAdminViewSet, basename="guidearticle")
 router.register(r"news-posts", NewsPostAdminViewSet, basename="newspost")
@@ -358,6 +373,31 @@ v1_patterns = [
         "public/maintenance-status/",
         MaintenanceStatusPublicView.as_view(),
         name="public_maintenance_status",
+    ),
+    path(
+        "public/demo-bookings/config/",
+        DemoBookingPublicConfigView.as_view(),
+        name="public_demo_booking_config",
+    ),
+    path(
+        "public/demo-bookings/slots/",
+        DemoBookingPublicSlotsView.as_view(),
+        name="public_demo_booking_slots",
+    ),
+    path(
+        "public/demo-bookings/",
+        create_demo_booking_public,
+        name="public_demo_booking_create",
+    ),
+    path(
+        "public/demo-bookings/lookup/",
+        lookup_demo_booking_public,
+        name="public_demo_booking_lookup",
+    ),
+    path(
+        "demo-booking-settings/",
+        DemoBookingSettingsView.as_view(),
+        name="demo_booking_settings",
     ),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("auth/verify/", TokenVerifyView.as_view(), name="token_verify"),
