@@ -1,10 +1,12 @@
 """Tests for public demo booking and admin management."""
 
 from datetime import date, datetime, timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.utils import timezone
 from rest_framework import status
 
@@ -91,6 +93,9 @@ def test_create_booking_and_double_book(api_client, demo_settings):
     }
     first = api_client.post("/api/v1/public/demo-bookings/", payload, format="json")
     assert first.status_code == status.HTTP_201_CREATED
+    assert first.json()["data"]["status"] == DemoBookingStatus.PENDING
+    if connection.vendor == "postgresql":
+        assert first.json()["data"]["id"] >= 1000
     payload_dup_slot = {
         **payload,
         "email": "visitor2@example.com",
@@ -237,3 +242,122 @@ def test_is_slot_available_matches_engine(demo_settings):
         pytest.skip("No slots in current window")
     starts = datetime.fromisoformat(slots[0]["starts_at"].replace("Z", "+00:00"))
     assert is_slot_available(demo_settings, starts)
+
+
+@pytest.mark.django_db
+def test_create_rejects_empty_phone(api_client, demo_settings):
+    tz = ZoneInfo("Asia/Baghdad")
+    today = timezone.now().astimezone(tz).date()
+    slots = compute_available_slots(demo_settings, today, today)
+    if not slots:
+        pytest.skip("No slots in current window")
+    resp = api_client.post(
+        "/api/v1/public/demo-bookings/",
+        {
+            "starts_at": slots[0]["starts_at"],
+            "name": "No Phone",
+            "email": "nophone@example.com",
+            "phone": "   ",
+        },
+        format="json",
+    )
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_pending_booking_hides_slot(api_client, demo_settings):
+    tz = ZoneInfo("Asia/Baghdad")
+    today = timezone.now().astimezone(tz).date()
+    slots = compute_available_slots(demo_settings, today, today)
+    if not slots:
+        pytest.skip("No slots in current window")
+    starts_at = slots[0]["starts_at"]
+    api_client.post(
+        "/api/v1/public/demo-bookings/",
+        {
+            "starts_at": starts_at,
+            "name": "Hold Slot",
+            "email": "hold@example.com",
+            "phone": "+9647700000088",
+        },
+        format="json",
+    )
+    after = compute_available_slots(demo_settings, today, today)
+    assert not any(s["starts_at"] == starts_at for s in after)
+
+
+@pytest.mark.django_db
+@patch("demo_bookings.notifications.send_admin_message", return_value=(True, {}))
+@patch("accounts.event_emails._send_raw_event_email", return_value=True)
+def test_admin_approve_pending(
+    _mock_email, _mock_wa, api_client, demo_settings, super_admin
+):
+    tz = ZoneInfo("Asia/Baghdad")
+    today = timezone.now().astimezone(tz).date()
+    slots = compute_available_slots(demo_settings, today, today)
+    assert slots
+    created = api_client.post(
+        "/api/v1/public/demo-bookings/",
+        {
+            "starts_at": slots[0]["starts_at"],
+            "name": "Approve Me",
+            "email": "approve@example.com",
+            "phone": "+9647700000077",
+        },
+        format="json",
+    )
+    booking_id = created.json()["data"]["id"]
+    _auth(api_client, super_admin)
+    response = api_client.post(f"/api/v1/demo-bookings/{booking_id}/approve/")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["data"]["status"] == DemoBookingStatus.CONFIRMED
+
+
+@pytest.mark.django_db
+@patch("demo_bookings.notifications.send_admin_message", return_value=(True, {}))
+@patch("accounts.event_emails._send_raw_event_email", return_value=True)
+def test_admin_not_confirm_pending(
+    _mock_email, _mock_wa, api_client, demo_settings, super_admin
+):
+    tz = ZoneInfo("Asia/Baghdad")
+    today = timezone.now().astimezone(tz).date()
+    slots = compute_available_slots(demo_settings, today, today)
+    assert len(slots) >= 1
+    created = api_client.post(
+        "/api/v1/public/demo-bookings/",
+        {
+            "starts_at": slots[0]["starts_at"],
+            "name": "Soft No",
+            "email": "softno@example.com",
+            "phone": "+9647700000066",
+        },
+        format="json",
+    )
+    booking_id = created.json()["data"]["id"]
+    _auth(api_client, super_admin)
+    response = api_client.post(f"/api/v1/demo-bookings/{booking_id}/not-confirm/")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["data"]["status"] == DemoBookingStatus.NOT_CONFIRMED
+
+
+@pytest.mark.django_db
+def test_admin_cannot_patch_pending_to_confirmed(api_client, demo_settings, super_admin):
+    tz = ZoneInfo("Asia/Baghdad")
+    today = timezone.now().astimezone(tz).date()
+    slots = compute_available_slots(demo_settings, today, today)
+    starts = datetime.fromisoformat(slots[0]["starts_at"].replace("Z", "+00:00"))
+    booking = DemoBooking.objects.create(
+        name="Pending",
+        email="pending@example.com",
+        phone="+9647700000055",
+        starts_at=starts,
+        ends_at=starts + timedelta(minutes=30),
+        status=DemoBookingStatus.PENDING,
+    )
+    _auth(api_client, super_admin)
+    response = api_client.patch(
+        f"/api/v1/demo-bookings/{booking.id}/",
+        {"status": "confirmed"},
+        format="json",
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST

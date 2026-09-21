@@ -344,6 +344,30 @@ def _format_demo_booking_local_time(booking, settings_obj):
     return local.strftime("%Y-%m-%d %H:%M")
 
 
+def send_demo_booking_request_received_email(booking, settings_obj):
+    lang = (booking.language or "en").lower()
+    if lang not in EMAIL_LANGUAGES:
+        lang = "en"
+    when_str = _format_demo_booking_local_time(booking, settings_obj)
+    tz_label = settings_obj.timezone or "Asia/Baghdad"
+    if lang == "ar":
+        subject = "تم استلام طلب جلسة شرح النظام - LOOP CRM"
+        contact_line = "سنرسل لك رسالة عند مراجعة طلبك. يمكنك متابعة الحالة عبر صفحة الحجز."
+    else:
+        subject = "We received your LOOP CRM walkthrough request"
+        contact_line = "We will email you once your request has been reviewed. You can check status anytime on the booking page."
+    context = {
+        "greeting_name": booking.name or ("مرحباً" if lang == "ar" else "there"),
+        "booking_id": booking.id,
+        "session_time": f"{when_str} ({tz_label})",
+        "contact_line": contact_line,
+        "support_email": SMTPSettings.get_settings().from_email,
+    }
+    return _send_raw_event_email(
+        booking.email, subject, "demo_booking_request_received", context, lang
+    )
+
+
 def send_demo_booking_confirmation_email(booking, settings_obj):
     lang = (booking.language or "en").lower()
     if lang not in EMAIL_LANGUAGES:
@@ -352,10 +376,10 @@ def send_demo_booking_confirmation_email(booking, settings_obj):
     tz_label = settings_obj.timezone or "Asia/Baghdad"
     if lang == "ar":
         subject = "تم تأكيد حجز عرض النظام - LOOP CRM"
-        contact_line = "سيتواصل معك فريقنا قريباً لتأكيد التفاصيل وبدء الجلسة."
+        contact_line = "تم تأكيد جلسة الشرح. نتطلع إلى لقائك في الموعد المحدد."
     else:
         subject = "Your LOOP CRM demo is confirmed"
-        contact_line = "Our team will contact you shortly to confirm details and walk you through the system."
+        contact_line = "Your session is confirmed. We look forward to walking you through the system at the scheduled time."
     context = {
         "greeting_name": booking.name or ("مرحباً" if lang == "ar" else "there"),
         "booking_id": booking.id,
@@ -365,6 +389,34 @@ def send_demo_booking_confirmation_email(booking, settings_obj):
     }
     return _send_raw_event_email(
         booking.email, subject, "demo_booking_confirmation", context, lang
+    )
+
+
+def send_demo_booking_not_confirmed_email(booking, settings_obj):
+    lang = (booking.language or "en").lower()
+    if lang not in EMAIL_LANGUAGES:
+        lang = "en"
+    when_str = _format_demo_booking_local_time(booking, settings_obj)
+    tz_label = settings_obj.timezone or "Asia/Baghdad"
+    if lang == "ar":
+        subject = "تحديث بخصوص طلب جلسة شرح النظام - LOOP CRM"
+        contact_line = (
+            "يمكنك اختيار موعد آخر من صفحة الحجز، أو التواصل معنا وسنساعدك في إيجاد وقت مناسب."
+        )
+    else:
+        subject = "Update on your LOOP CRM walkthrough request"
+        contact_line = (
+            "You may choose another time on the booking page, or contact us and we will help find a suitable slot."
+        )
+    context = {
+        "greeting_name": booking.name or ("مرحباً" if lang == "ar" else "there"),
+        "booking_id": booking.id,
+        "session_time": f"{when_str} ({tz_label})",
+        "contact_line": contact_line,
+        "support_email": SMTPSettings.get_settings().from_email,
+    }
+    return _send_raw_event_email(
+        booking.email, subject, "demo_booking_not_confirmed", context, lang
     )
 
 

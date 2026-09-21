@@ -7,6 +7,7 @@ from .models import (
     DemoBookingSettings,
     DemoBookingStatus,
 )
+from .services import normalize_email, normalize_phone
 
 
 class DemoBookingSettingsSerializer(serializers.ModelSerializer):
@@ -74,6 +75,21 @@ class DemoBookingCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True, default="")
     language = serializers.CharField(max_length=8, required=False, default="en")
 
+    def validate_email(self, value):
+        normalized = normalize_email(value)
+        if not normalized:
+            raise serializers.ValidationError("Email is required.")
+        return normalized
+
+    def validate_phone(self, value):
+        normalized = normalize_phone(value)
+        if not normalized:
+            raise serializers.ValidationError("Phone is required.")
+        digits = "".join(c for c in normalized if c.isdigit())
+        if len(digits) < 8:
+            raise serializers.ValidationError("Enter a valid phone number.")
+        return normalized
+
     def validate_language(self, value):
         lang = (value or "en").lower()
         return lang if lang in ("en", "ar") else "en"
@@ -110,3 +126,14 @@ class DemoBookingStatusSerializer(serializers.ModelSerializer):
         if value not in DemoBookingStatus.values:
             raise serializers.ValidationError("Invalid status.")
         return value
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance and instance.status == DemoBookingStatus.PENDING:
+            raise serializers.ValidationError(
+                {"status": "Use approve or not-confirm for pending bookings."}
+            )
+        new_status = attrs.get("status")
+        if new_status in (DemoBookingStatus.PENDING, DemoBookingStatus.NOT_CONFIRMED):
+            raise serializers.ValidationError({"status": "Invalid status transition."})
+        return attrs

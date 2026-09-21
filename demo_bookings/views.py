@@ -6,7 +6,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
@@ -27,11 +27,12 @@ from .serializers import (
 from .services import (
     compute_available_slots,
     dates_with_slots,
-    has_upcoming_confirmed_booking,
+    has_upcoming_active_booking,
     is_slot_available,
     normalize_email,
     normalize_phone,
 )
+from .notifications import DemoBookingTransitionError, approve_demo_booking, not_confirm_demo_booking
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +51,12 @@ def _send_demo_booking_emails_async(booking_id: int):
         try:
             from accounts.event_emails import (
                 send_demo_booking_admin_notifications,
-                send_demo_booking_confirmation_email,
+                send_demo_booking_request_received_email,
             )
 
             booking = DemoBooking.objects.get(pk=booking_id)
             settings_obj = DemoBookingSettings.get_settings()
-            send_demo_booking_confirmation_email(booking, settings_obj)
+            send_demo_booking_request_received_email(booking, settings_obj)
             send_demo_booking_admin_notifications(booking, settings_obj)
         except Exception:
             logger.exception("Failed to send demo booking emails for id=%s", booking_id)
@@ -122,12 +123,12 @@ def create_demo_booking_public(request):
     starts_at = starts_at.astimezone(dt_timezone.utc).replace(microsecond=0)
     email = normalize_email(data["email"])
     phone = normalize_phone(data["phone"])
-    if has_upcoming_confirmed_booking(email=email):
+    if has_upcoming_active_booking(email=email):
         return error_response(
             "You already have an upcoming demo booking with this email.",
             code="duplicate_booking",
         )
-    if has_upcoming_confirmed_booking(phone=phone):
+    if has_upcoming_active_booking(phone=phone):
         return error_response(
             "You already have an upcoming demo booking with this phone number.",
             code="duplicate_booking",
@@ -152,7 +153,7 @@ def create_demo_booking_public(request):
                 notes=(data.get("notes") or "").strip(),
                 starts_at=starts_at,
                 ends_at=ends_at,
-                status=DemoBookingStatus.CONFIRMED,
+                status=DemoBookingStatus.PENDING,
                 language=data.get("language") or "en",
             )
     except Exception as exc:
@@ -235,7 +236,7 @@ class DemoBookingAdminViewSet(
     queryset = DemoBooking.objects.all().order_by("-starts_at")
     permission_classes = [IsAuthenticated, CanManageDemoBookings]
     filterset_fields = []
-    http_method_names = ["get", "patch", "delete", "head", "options"]
+    http_method_names = ["get", "patch", "delete", "post", "head", "options"]
 
     def get_serializer_class(self):
         if self.action in ("partial_update", "update"):
@@ -271,6 +272,36 @@ class DemoBookingAdminViewSet(
         serializer.save()
         instance.refresh_from_db()
         return success_response(data=DemoBookingListSerializer(instance).data)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        booking = self.get_object()
+        try:
+            updated = approve_demo_booking(booking)
+        except DemoBookingTransitionError as exc:
+            if exc.code == "not_pending":
+                return error_response(
+                    "Only pending bookings can be approved.",
+                    code="invalid_status",
+                    status_code=status.HTTP_409_CONFLICT,
+                )
+            raise
+        return success_response(data=DemoBookingListSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="not-confirm")
+    def not_confirm(self, request, pk=None):
+        booking = self.get_object()
+        try:
+            updated = not_confirm_demo_booking(booking)
+        except DemoBookingTransitionError as exc:
+            if exc.code == "not_pending":
+                return error_response(
+                    "Only pending bookings can be marked as not confirmed.",
+                    code="invalid_status",
+                    status_code=status.HTTP_409_CONFLICT,
+                )
+            raise
+        return success_response(data=DemoBookingListSerializer(updated).data)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

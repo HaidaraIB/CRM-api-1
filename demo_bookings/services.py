@@ -52,7 +52,14 @@ def normalize_phone(phone: str) -> str:
 
 
 def confirmed_bookings_queryset():
-    return DemoBooking.objects.filter(status=DemoBookingStatus.CONFIRMED)
+    """Bookings that occupy a public slot (pending hold or confirmed)."""
+    return DemoBooking.objects.filter(
+        status__in=(DemoBookingStatus.PENDING, DemoBookingStatus.CONFIRMED)
+    )
+
+
+def active_slot_bookings_queryset():
+    return confirmed_bookings_queryset()
 
 
 def occupied_starts_utc(from_dt: datetime, to_dt: datetime) -> set[datetime]:
@@ -177,9 +184,12 @@ def is_slot_available(settings_obj: DemoBookingSettings, starts_at_utc: datetime
     return False
 
 
-def has_upcoming_confirmed_booking(*, email: str | None = None, phone: str | None = None) -> bool:
+def has_upcoming_active_booking(*, email: str | None = None, phone: str | None = None) -> bool:
     now = timezone.now()
-    q = Q(status=DemoBookingStatus.CONFIRMED, starts_at__gte=now)
+    q = Q(
+        status__in=(DemoBookingStatus.PENDING, DemoBookingStatus.CONFIRMED),
+        starts_at__gte=now,
+    )
     if email:
         q &= Q(email__iexact=normalize_email(email))
     if phone:
@@ -187,3 +197,8 @@ def has_upcoming_confirmed_booking(*, email: str | None = None, phone: str | Non
     if not email and not phone:
         return False
     return DemoBooking.objects.filter(q).exists()
+
+
+def has_upcoming_confirmed_booking(*, email: str | None = None, phone: str | None = None) -> bool:
+    """Backward-compatible alias."""
+    return has_upcoming_active_booking(email=email, phone=phone)

@@ -24,7 +24,9 @@ WEEKDAY_KEYS = (
 
 
 class DemoBookingStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
     CONFIRMED = "confirmed", "Confirmed"
+    NOT_CONFIRMED = "not_confirmed", "Not confirmed"
     COMPLETED = "completed", "Completed"
     CANCELLED = "cancelled", "Cancelled"
     NO_SHOW = "no_show", "No show"
@@ -82,7 +84,7 @@ class DemoBooking(models.Model):
     status = models.CharField(
         max_length=20,
         choices=DemoBookingStatus.choices,
-        default=DemoBookingStatus.CONFIRMED,
+        default=DemoBookingStatus.PENDING,
         db_index=True,
     )
     language = models.CharField(max_length=8, default="en")
@@ -95,8 +97,9 @@ class DemoBooking(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["starts_at"],
-                condition=Q(status=DemoBookingStatus.CONFIRMED),
-                name="unique_confirmed_demo_booking_starts_at",
+                condition=Q(status=DemoBookingStatus.PENDING)
+                | Q(status=DemoBookingStatus.CONFIRMED),
+                name="unique_active_demo_booking_starts_at",
             ),
         ]
 
