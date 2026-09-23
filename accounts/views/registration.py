@@ -1,3 +1,6 @@
+import logging
+import threading
+
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes as throttle_decorator
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -7,6 +10,7 @@ from crm_saas_api.throttles import AuthRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from ..models import User, Role, EmailVerification, PasswordReset, TwoFactorAuth, LimitedAdmin, SupervisorPermission, ImpersonationSession
 from ..serializers import (
     UserSerializer,
@@ -48,9 +52,45 @@ from ..utils import (
     send_password_reset_email,
     send_two_factor_auth_email,
 )
-import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _send_company_registration_admin_emails_async(
+    company_id, owner_id, subscription_id, requires_payment
+):
+    """Fire-and-forget emails so registration HTTP responses are not blocked by SMTP."""
+
+    def _run():
+        try:
+            from accounts.event_emails import (
+                send_company_registration_admin_notifications,
+            )
+            from companies.models import Company
+            from subscriptions.models import Subscription
+
+            company = Company.objects.get(pk=company_id)
+            owner = User.objects.get(pk=owner_id)
+            subscription = None
+            if subscription_id:
+                subscription = Subscription.objects.select_related("plan").get(
+                    pk=subscription_id
+                )
+            send_company_registration_admin_notifications(
+                company,
+                owner,
+                subscription=subscription,
+                requires_payment=requires_payment,
+            )
+        except Exception as e:
+            logger.exception(
+                "Failed to send super-admin company registration notification: %s",
+                e,
+            )
+
+    transaction.on_commit(
+        lambda: threading.Thread(target=_run, daemon=True).start()
+    )
 
 
 def _request_can_manage_settings(request) -> bool:
@@ -156,6 +196,13 @@ def register_company(request):
             }
 
         response_data["email_verification"] = verification_info
+
+        _send_company_registration_admin_emails_async(
+            company.id,
+            owner.id,
+            subscription.id if subscription else None,
+            requires_payment,
+        )
 
         return success_response(data=response_data, status_code=status.HTTP_201_CREATED)
 

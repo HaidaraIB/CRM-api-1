@@ -198,6 +198,103 @@ def send_support_ticket_new_admin_notifications(creator_user, ticket):
     return sent
 
 
+def _company_registration_payment_status(subscription, requires_payment, lang):
+    if requires_payment:
+        return (
+            "يلزم إتمام الدفع"
+            if lang == "ar"
+            else "Payment required"
+        )
+    if subscription is None:
+        return (
+            "لم يتم اختيار خطة"
+            if lang == "ar"
+            else "No plan selected"
+        )
+    plan = getattr(subscription, "plan", None)
+    trial_days = int(getattr(plan, "trial_days", 0) or 0)
+    price_monthly = float(getattr(plan, "price_monthly", 0) or 0)
+    price_yearly = float(getattr(plan, "price_yearly", 0) or 0)
+    if trial_days > 0 and price_monthly <= 0 and price_yearly <= 0:
+        return (
+            f"تجربة مجانية ({trial_days} يوم)"
+            if lang == "ar"
+            else f"Free trial ({trial_days} days)"
+        )
+    if price_monthly <= 0 and price_yearly <= 0:
+        return "خطة مجانية" if lang == "ar" else "Free plan"
+    return "خطة مدفوعة" if lang == "ar" else "Paid plan"
+
+
+def send_company_registration_admin_notifications(
+    company, owner, subscription=None, requires_payment=False
+):
+    """
+    Email all active users with the SUPER_ADMIN role about a new self-service
+    company registration.
+    Skips addresses in SUPPORT_TICKET_SUPERADMIN_NOTIFY_SKIP_EMAILS.
+    """
+    from accounts.models import Role, User
+
+    smtp_settings = SMTPSettings.get_settings()
+    if not smtp_settings.is_active:
+        logger.warning(
+            "Outbound email is not active; skipping super-admin company registration notifications."
+        )
+        return 0
+
+    owner_name = owner.get_full_name().strip() or owner.username
+    owner_email = owner.email or "—"
+    owner_phone = getattr(owner, "phone", None) or "—"
+    plan = getattr(subscription, "plan", None) if subscription else None
+
+    admins = User.objects.filter(
+        role=Role.SUPER_ADMIN.value, is_active=True
+    ).exclude(email="")
+    sent = 0
+    seen = set()
+    for admin in admins:
+        em = (admin.email or "").strip().lower()
+        if not em or em in seen:
+            continue
+        if em in SUPPORT_TICKET_SUPERADMIN_NOTIFY_SKIP_EMAILS:
+            continue
+        seen.add(em)
+        lang = (getattr(admin, "language", None) or "en").lower()
+        if lang not in EMAIL_LANGUAGES:
+            lang = "en"
+        if lang == "ar":
+            subject = "تسجيل شركة جديدة - LOOP CRM"
+            localized_plan_name = (
+                plan.name_ar
+                if plan and getattr(plan, "name_ar", None)
+                else (plan.name if plan else "—")
+            )
+        else:
+            subject = "New company registration - LOOP CRM"
+            localized_plan_name = plan.name if plan else "—"
+        context = {
+            "greeting_name": admin.first_name or admin.username
+            or ("مرحباً" if lang == "ar" else "there"),
+            "company_name": company.name,
+            "company_domain": company.domain,
+            "specialization": company.specialization or "—",
+            "owner_name": owner_name,
+            "owner_email": owner_email,
+            "owner_phone": owner_phone,
+            "plan_name": localized_plan_name,
+            "payment_status": _company_registration_payment_status(
+                subscription, requires_payment, lang
+            ),
+            "support_email": smtp_settings.from_email,
+        }
+        if _send_event_email(
+            admin, subject, "company_registration_new_admin", context, lang
+        ):
+            sent += 1
+    return sent
+
+
 def send_integration_token_invalid_email(
     user,
     *,
