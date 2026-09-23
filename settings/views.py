@@ -288,11 +288,11 @@ class SMTPSettingsViewSet(viewsets.ModelViewSet):
 class PlatformTwilioSettingsViewSet(viewsets.ModelViewSet):
     """
     ViewSet for platform Twilio settings (admin SMS broadcast).
-    Singleton pattern - only one instance (pk=1). GET and PUT only.
+    Singleton pattern - only one instance (pk=1). GET and partial PATCH/PUT.
     """
     permission_classes = [IsAuthenticated, CanManageSettings]
     serializer_class = PlatformTwilioSettingsSerializer
-    http_method_names = ["get", "put", "head", "options"]
+    http_method_names = ["get", "put", "patch", "head", "options"]
 
     def get_queryset(self):
         return PlatformTwilioSettings.objects.filter(pk=1)
@@ -313,12 +313,13 @@ class PlatformTwilioSettingsViewSet(viewsets.ModelViewSet):
 class PlatformWhatsAppSettingsViewSet(viewsets.ModelViewSet):
     """
     Platform WhatsApp Cloud API settings (signup OTP + admin messaging).
-    Singleton (pk=1). GET and PUT only.
+    Singleton (pk=1). GET and partial PATCH/PUT.
+    The admin panel sends only changed fields, so PATCH must be allowed.
     """
 
     permission_classes = [IsAuthenticated, CanManageSettings]
     serializer_class = PlatformWhatsAppSettingsSerializer
-    http_method_names = ["get", "put", "head", "options"]
+    http_method_names = ["get", "put", "patch", "head", "options"]
 
     def get_queryset(self):
         return PlatformWhatsAppSettings.objects.filter(pk=1)

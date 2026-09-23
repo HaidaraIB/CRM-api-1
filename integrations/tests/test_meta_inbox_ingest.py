@@ -15,6 +15,16 @@ from integrations.services.meta_inbox_ingest import process_entry
 
 pytestmark = pytest.mark.django_db
 
+
+@pytest.fixture(autouse=True)
+def _stub_meta_profile_fetch(monkeypatch):
+    """Ingest tests should not hit Meta Graph for sender profiles."""
+    monkeypatch.setattr(
+        'integrations.services.meta_inbox_profile.fetch_contact_profile',
+        lambda contact, *, page_token: {},
+    )
+
+
 IGSID = "4900000000000001"
 PSID = "5900000000000001"
 
