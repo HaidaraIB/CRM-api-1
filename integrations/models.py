@@ -1952,7 +1952,7 @@ class SocialMessage(models.Model):
         default=DIRECTION_OUTBOUND,
     )
     external_message_id = models.CharField(
-        max_length=128,
+        max_length=255,
         blank=True,
         default="",
         help_text="Meta message id (mid). Meta redelivers aggressively — this dedupes.",

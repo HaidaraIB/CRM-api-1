@@ -179,6 +179,22 @@ class TestDedupe:
         assert process_entry("instagram", entry) == 0
         assert SocialMessage.objects.filter(external_message_id="duplicate-mid").count() == 1
 
+    def test_long_instagram_mid_is_stored_and_deduped(self, meta_inbox_connection):
+        """Real Instagram mids can exceed 128 chars (base64-style opaque strings)."""
+        from integrations.models import SocialMessage
+
+        long_mid = (
+            "aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDAxMzc4MzE1NTk0OjM0MDI4MjM2Njg0"
+            "MTcxMDMwMTI0NDI1OTgyODMxNzQxMzE0NjM0NDozMjMzMzcxMTQyNTMwMTE0NzM3MjI2MjI3"
+            "OTkyOTEzNTEwNAZDZD"
+        )
+        assert len(long_mid) > 128
+
+        entry = ig_entry(meta_inbox_connection, mid=long_mid)
+        assert process_entry("instagram", entry) == 1
+        assert process_entry("instagram", entry) == 0
+        assert SocialMessage.objects.filter(external_message_id=long_mid).count() == 1
+
 
 class TestEcho:
     def test_echo_is_outbound_and_does_not_mark_unread(self, meta_inbox_connection):
