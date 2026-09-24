@@ -33,10 +33,13 @@ from sync.version import bump_company_slice
 from ..models import (
     IntegrationAccount,
     IntegrationPlatform,
+    MessageTemplate,
     MetaInboxConnection,
+    SocialChannel,
     SocialConversation,
     SocialMessage,
     WhatsAppConversationStatus,
+    WhatsAppInboxNumber,
 )
 from ..policy import get_effective_integration_policy, get_plan_integration_access
 from ..services.meta_inbox_connections import (
@@ -296,6 +299,26 @@ def _serialize_lead_message(message) -> dict:
     }
 
 
+def _serialize_conversation_connection(conversation) -> dict:
+    if conversation.wa_inbox_number_id:
+        wa = conversation.wa_inbox_number
+        return {
+            'id': wa.id,
+            'page_name': None,
+            'ig_username': None,
+            'display_phone_number': wa.display_phone_number,
+            'phone_number_id': wa.phone_number_id,
+        }
+    conn = conversation.connection
+    return {
+        'id': conn.id if conn else None,
+        'page_name': conn.page_name if conn else None,
+        'ig_username': conn.ig_username if conn else None,
+        'display_phone_number': None,
+        'phone_number_id': None,
+    }
+
+
 def _serialize_conversation(conversation) -> dict:
     client = conversation.client
     assigned = conversation.assigned_to
@@ -312,11 +335,7 @@ def _serialize_conversation(conversation) -> dict:
         'last_message_preview': conversation.last_message_preview,
         'last_inbound_at': conversation.last_inbound_at,
         'contact': _serialize_contact(conversation.contact),
-        'connection': {
-            'id': conversation.connection_id,
-            'page_name': conversation.connection.page_name,
-            'ig_username': conversation.connection.ig_username,
-        },
+        'connection': _serialize_conversation_connection(conversation),
         'assigned_to': (
             {
                 'id': assigned.id,
@@ -371,7 +390,7 @@ def _conversation_base_queryset(user):
     return filter_social_conversations_queryset(
         user,
         SocialConversation.objects.select_related(
-            'contact', 'connection', 'assigned_to', 'client'
+            'contact', 'connection', 'wa_inbox_number', 'assigned_to', 'client'
         ),
     )
 
@@ -426,7 +445,7 @@ def social_conversations_list(request):
     status_filter = (request.query_params.get('status') or 'all').strip().lower()
     ordering = (request.query_params.get('ordering') or '-last_message_at').strip()
 
-    if channel in ('instagram', 'messenger'):
+    if channel in ('instagram', 'messenger', 'whatsapp'):
         qs = qs.filter(channel=channel)
 
     if assignment == 'mine':
@@ -503,6 +522,10 @@ def social_conversations_list(request):
     total = qs.count()
     rows = list(qs[offset:offset + limit])
 
+    from ..services.meta_inbox_profile import refresh_profiles_for_conversations
+
+    refresh_profiles_for_conversations(rows)
+
     return tag(
         success_response(
             data={
@@ -522,7 +545,7 @@ def _get_conversation_or_error(request, pk):
     """Returns (conversation, error_response). Denied reads answer 404, never 403."""
     conversation = (
         SocialConversation.objects.select_related(
-            'contact', 'connection', 'assigned_to', 'client'
+            'contact', 'connection', 'wa_inbox_number', 'assigned_to', 'client'
         )
         .filter(pk=pk)
         .first()
@@ -1009,6 +1032,186 @@ def social_message_attachment(request, pk: int):
     # private: this is an ACL-filtered payload, no shared cache may hold it.
     response['Cache-Control'] = 'private, max-age=3600'
     return response
+
+
+# --- WhatsApp inbox number (Integrations tab) ----------------------------------
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def social_inbox_whatsapp_numbers(request):
+    """GET /integrations/inbox/whatsapp-numbers/ — owner/admin only."""
+    user = request.user
+    company = getattr(user, 'company', None)
+    if not company or not user.is_admin():
+        return error_response(
+            'Only the account owner can manage inbox connections.',
+            code='meta_inbox_admin_only',
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    gate = _inbox_gate(company)
+    if gate is not None:
+        return gate
+    account = IntegrationAccount.objects.filter(
+        company=company,
+        platform=IntegrationPlatform.WHATSAPP_INBOX,
+    ).first()
+    numbers = (
+        WhatsAppInboxNumber.objects.filter(company=company)
+        .exclude(status='disconnected')
+        .order_by('-created_at')
+    )
+    from ..services.whatsapp_inbox_numbers import serialize_inbox_number
+
+    return success_response(
+        data={
+            'account': (
+                {
+                    'id': account.id,
+                    'name': account.name,
+                    'status': account.status,
+                    'external_account_name': account.external_account_name,
+                    'error_message': account.error_message,
+                }
+                if account
+                else None
+            ),
+            'numbers': [serialize_inbox_number(n) for n in numbers],
+        }
+    )
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, HasActiveSubscription])
+def social_inbox_whatsapp_number_detail(request, pk: int):
+    """DELETE — disconnect inbox number (keeps conversation history)."""
+    user = request.user
+    company = getattr(user, 'company', None)
+    if not company or not user.is_admin():
+        return error_response(
+            'Only the account owner can manage inbox connections.',
+            code='meta_inbox_admin_only',
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    row = WhatsAppInboxNumber.objects.filter(pk=pk, company=company).first()
+    if not row:
+        return error_response(
+            'Number not found.',
+            code='whatsapp_inbox_number_not_found',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    from ..services.whatsapp_inbox_numbers import disconnect_inbox_number, serialize_inbox_number
+
+    disconnect_inbox_number(row)
+    return success_response(
+        data={'number': serialize_inbox_number(row)},
+        message='Inbox number disconnected.',
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription, CanUseSocialInbox])
+def social_send_template(request):
+    """POST /integrations/inbox/send-template/ — {conversation, template_id}"""
+    data = request.data or {}
+    conversation, err = _get_conversation_or_error(request, data.get('conversation'))
+    if err is not None:
+        return err
+    if conversation.channel != SocialChannel.WHATSAPP:
+        return error_response(
+            'Templates are only supported for WhatsApp inbox conversations.',
+            code='bad_request',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    gate = _inbox_gate(conversation.company)
+    if gate is not None:
+        return gate
+    wa_plan = get_plan_integration_access(conversation.company, 'whatsapp')
+    if not wa_plan['enabled']:
+        return error_response(
+            wa_plan['message'],
+            code='plan_integration_disabled',
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    template_id = data.get('template_id')
+    try:
+        template_id = int(template_id)
+    except (TypeError, ValueError):
+        return error_response(
+            'template_id is required.',
+            code='bad_request',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    template = MessageTemplate.objects.filter(
+        pk=template_id, company=conversation.company
+    ).first()
+    if not template:
+        return error_response(
+            'Template not found.',
+            code='bad_request',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    inbox_number = conversation.wa_inbox_number
+    if not inbox_number or inbox_number.status != 'connected':
+        return error_response(
+            'WhatsApp inbox number is not connected.',
+            code='whatsapp_inbox_not_connected',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    token = inbox_number.get_access_token()
+    if not token:
+        return error_response(
+            'Reconnect the WhatsApp inbox number.',
+            code='whatsapp_inbox_token_missing',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from integrations.services.whatsapp_template_send import send_approved_whatsapp_template
+
+    client = conversation.client
+    to_phone = conversation.contact.external_id
+    ok, wam_id, error_key, _raw = send_approved_whatsapp_template(
+        company=conversation.company,
+        template=template,
+        to_phone=to_phone,
+        client=client,
+        phone_number_id=inbox_number.phone_number_id,
+        sender_access_token=token,
+        created_by=request.user,
+        persist_message=False,
+    )
+    if not ok:
+        return error_response(
+            'Could not send the template.',
+            code=error_key or 'social_send_failed',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    message = SocialMessage.objects.create(
+        conversation=conversation,
+        direction=SocialMessage.DIRECTION_OUTBOUND,
+        body=template.name,
+        external_message_id=wam_id or '',
+        created_by=request.user,
+        delivery_status='sent',
+        is_read=True,
+        sent_at=timezone.now(),
+    )
+    conversation.last_message_at = message.sent_at
+    conversation.last_message_direction = SocialMessage.DIRECTION_OUTBOUND
+    conversation.last_message_preview = (template.name or '')[:280]
+    conversation.save(
+        update_fields=[
+            'last_message_at', 'last_message_direction', 'last_message_preview', 'updated_at'
+        ]
+    )
+    return success_response(
+        data={'message': _serialize_message(message)},
+        status_code=status.HTTP_201_CREATED,
+    )
 
 
 # --- Convert to lead -----------------------------------------------------------

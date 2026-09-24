@@ -90,6 +90,20 @@ class IntegrationAccountCreateSerializer(serializers.ModelSerializer):
         if request and getattr(request.user, 'is_authenticated', False):
             company = getattr(request.user, 'company', None)
             if company and platform:
+                # Inbox tab must use `whatsapp_inbox`; older clients still POST `whatsapp`.
+                # When CRM WhatsApp already exists, treat that as inbox signup intent.
+                if platform == IntegrationPlatform.WHATSAPP:
+                    has_crm_wa = IntegrationAccount.objects.filter(
+                        company=company,
+                        platform=IntegrationPlatform.WHATSAPP,
+                    ).exists()
+                    has_inbox_wa = IntegrationAccount.objects.filter(
+                        company=company,
+                        platform=IntegrationPlatform.WHATSAPP_INBOX,
+                    ).exists()
+                    if has_crm_wa and not has_inbox_wa:
+                        platform = IntegrationPlatform.WHATSAPP_INBOX
+                        data['platform'] = platform
                 if IntegrationAccount.objects.filter(company=company, platform=platform).exists():
                     raise serializers.ValidationError({
                         'platform': (

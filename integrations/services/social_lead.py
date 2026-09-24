@@ -5,11 +5,10 @@ This is the moment a conversation stops being a DM and becomes a lead. Everythin
 before it is deliberately lead-less, so this is also the only place the plan's
 max_clients quota is charged for a social contact.
 
-Instagram and Messenger DMs carry no phone number, so the created lead is usually
-phone-less. That is safe against the company-wide unique phone key (its constraint
-is conditional on a non-empty normalized value), but it does mean the lead will
-not be matched by find_client_by_phone later. Never fabricate a placeholder phone
-to work around that — it would consume the unique key for the whole company.
+A phone number is required on every conversion. Instagram and Messenger do not
+carry one — the agent must enter it. WhatsApp inbox contacts store the customer's
+wa_id on the contact; that value is used when the payload omits phone. Never
+fabricate a placeholder number.
 """
 
 from __future__ import annotations
@@ -30,7 +29,39 @@ logger = logging.getLogger(__name__)
 CHANNEL_LABELS = {
     SocialChannel.INSTAGRAM: 'Instagram DM',
     SocialChannel.MESSENGER: 'Facebook Messenger',
+    SocialChannel.WHATSAPP: 'WhatsApp',
 }
+
+
+def _conversation_integration_account(conversation):
+    if conversation.connection_id and conversation.connection:
+        return conversation.connection.integration_account
+    wa = getattr(conversation, 'wa_inbox_number', None)
+    if wa is not None and getattr(wa, 'integration_account_id', None):
+        return wa.integration_account
+    return None
+
+
+def _resolve_convert_phone(conversation, payload: dict) -> str:
+    from integrations.services.phone_match import canonical_phone_key
+    from integrations.services.twilio_phone import normalize_phone_to_e164
+
+    raw = (payload.get('phone') or '').strip()
+    if not raw and conversation.channel == SocialChannel.WHATSAPP:
+        raw = (conversation.contact.external_id or '').strip()
+    if not raw:
+        raise ConvertError(
+            'social_phone_required',
+            'A phone number is required to convert this conversation to a lead.',
+            status_code=400,
+        )
+    if not canonical_phone_key(raw):
+        raise ConvertError(
+            'social_phone_invalid',
+            'Enter a valid phone number.',
+            status_code=400,
+        )
+    return normalize_phone_to_e164(raw)
 
 
 class ConvertError(Exception):
@@ -87,7 +118,7 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
             details={'client_id': conversation.client_id},
         )
 
-    phone = (payload.get('phone') or '').strip()
+    phone = _resolve_convert_phone(conversation, payload)
 
     # Charge the quota before anything is created.
     try:
@@ -147,7 +178,7 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
             company=company,
             name=name,
             source=conversation.channel,
-            integration_account=conversation.connection.integration_account,
+            integration_account=_conversation_integration_account(conversation),
             external_lead_id=external_lead_id,
             phone_number=phone or None,
             notes=(payload.get('notes') or '').strip(),
@@ -186,12 +217,9 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
             str(getattr(exc, 'message', None) or exc) or 'The selected assignee is unavailable.',
         )
 
-    # Only create a phone row when there actually is a phone. A placeholder would
-    # consume the company-wide unique key.
-    if phone:
-        ClientPhoneNumber.objects.create(
-            client=client, phone_number=phone, phone_type='mobile', is_primary=True
-        )
+    ClientPhoneNumber.objects.create(
+        client=client, phone_number=phone, phone_type='mobile', is_primary=True
+    )
 
     ClientEvent.objects.create(
         client=client,
@@ -216,9 +244,10 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
 
     _notify_after_commit(conversation, client, assignee, actor)
 
-    if conversation.connection.integration_account_id:
+    integration_account = _conversation_integration_account(conversation)
+    if integration_account:
         IntegrationLog.objects.create(
-            account=conversation.connection.integration_account,
+            account=integration_account,
             action='meta_inbox_lead_converted',
             status='success',
             message=f"Conversation {conversation.id} converted to lead {client.id}",

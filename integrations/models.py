@@ -17,6 +17,7 @@ class IntegrationPlatform(models.TextChoices):
     # a different Meta app, and unique_together (company, platform, external_account_id)
     # keeps a tenant's Lead Ads connection independent of their inbox connection.
     META_INBOX = 'meta_inbox', 'Meta Inbox (Instagram DM / Messenger)'
+    WHATSAPP_INBOX = 'whatsapp_inbox', 'WhatsApp Inbox'
 
 
 class IntegrationAccount(models.Model):
@@ -1644,6 +1645,7 @@ class WhatsAppCallErrorLog(models.Model):
 class SocialChannel(models.TextChoices):
     INSTAGRAM = 'instagram', 'Instagram Direct'
     MESSENGER = 'messenger', 'Facebook Messenger'
+    WHATSAPP = 'whatsapp', 'WhatsApp'
 
 
 class MetaInboxConnection(models.Model):
@@ -1751,6 +1753,68 @@ class MetaInboxConnection(models.Model):
             self.page_access_token = None
 
 
+class WhatsAppInboxNumber(models.Model):
+    """
+    WhatsApp Cloud API number used only for the Omni-Channel Inbox.
+
+    Kept separate from WhatsAppAccount so CRM auto-lead creation and outbound
+    sends never pick this number by accident.
+    """
+
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        related_name='whatsapp_inbox_numbers',
+    )
+    integration_account = models.ForeignKey(
+        IntegrationAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='whatsapp_inbox_numbers',
+    )
+    waba_id = models.CharField(max_length=64)
+    phone_number_id = models.CharField(max_length=64, unique=True)
+    business_id = models.CharField(max_length=64, blank=True, default="")
+    display_phone_number = models.CharField(max_length=32, blank=True, default="")
+    access_token = models.TextField(blank=True, null=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('connected', 'Connected'),
+            ('disconnected', 'Disconnected'),
+            ('error', 'Error'),
+        ],
+        default='connected',
+    )
+    error_message = models.TextField(blank=True, null=True)
+    last_webhook_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'whatsapp_inbox_numbers'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['company', 'status']),
+            models.Index(fields=['phone_number_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.company.name} - {self.display_phone_number or self.phone_number_id}"
+
+    def get_access_token(self):
+        if not self.access_token:
+            return None
+        return decrypt_token(self.access_token)
+
+    def set_access_token(self, token):
+        if token:
+            self.access_token = encrypt_token(token)
+        else:
+            self.access_token = None
+
+
 class SocialContact(models.Model):
     """
     A person who messaged the business on Instagram or Messenger.
@@ -1770,6 +1834,15 @@ class SocialContact(models.Model):
         MetaInboxConnection,
         on_delete=models.CASCADE,
         related_name='contacts',
+        null=True,
+        blank=True,
+    )
+    wa_inbox_number = models.ForeignKey(
+        WhatsAppInboxNumber,
+        on_delete=models.CASCADE,
+        related_name='contacts',
+        null=True,
+        blank=True,
     )
     channel = models.CharField(max_length=16, choices=SocialChannel.choices)
     external_id = models.CharField(
@@ -1798,10 +1871,18 @@ class SocialContact(models.Model):
                 fields=['company', 'channel', 'external_id'],
                 name='uniq_social_contact_company_channel_ext',
             ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(connection__isnull=False, wa_inbox_number__isnull=True)
+                    | models.Q(connection__isnull=True, wa_inbox_number__isnull=False)
+                ),
+                name='social_contact_one_inbox_source',
+            ),
         ]
         indexes = [
             models.Index(fields=['company', 'channel']),
             models.Index(fields=['connection', 'external_id']),
+            models.Index(fields=['wa_inbox_number', 'external_id']),
         ]
 
     def __str__(self):
@@ -1831,6 +1912,15 @@ class SocialConversation(models.Model):
         MetaInboxConnection,
         on_delete=models.CASCADE,
         related_name='conversations',
+        null=True,
+        blank=True,
+    )
+    wa_inbox_number = models.ForeignKey(
+        WhatsAppInboxNumber,
+        on_delete=models.CASCADE,
+        related_name='conversations',
+        null=True,
+        blank=True,
     )
     contact = models.ForeignKey(
         SocialContact,
@@ -1911,7 +2001,20 @@ class SocialConversation(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=['connection', 'contact'],
+                condition=models.Q(connection__isnull=False),
                 name='uniq_social_conv_connection_contact',
+            ),
+            models.UniqueConstraint(
+                fields=['wa_inbox_number', 'contact'],
+                condition=models.Q(wa_inbox_number__isnull=False),
+                name='uniq_social_conv_wa_inbox_contact',
+            ),
+            models.CheckConstraint(
+                check=(
+                    models.Q(connection__isnull=False, wa_inbox_number__isnull=True)
+                    | models.Q(connection__isnull=True, wa_inbox_number__isnull=False)
+                ),
+                name='social_conv_one_inbox_source',
             ),
         ]
         indexes = [

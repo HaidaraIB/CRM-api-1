@@ -46,6 +46,7 @@ def send_approved_whatsapp_template(
     created_by=None,
     campaign_batch=None,
     persist_message: bool = True,
+    sender_access_token: Optional[str] = None,
 ) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
     """
     Send an APPROVED WhatsApp template via Graph API.
@@ -78,13 +79,17 @@ def send_approved_whatsapp_template(
         if n_placeholders > 0 and len(param_values) != n_placeholders:
             return False, None, "whatsapp_template_parameter_count", None
 
-    wa_account, wa_err = resolve_whatsapp_account_for_api(company, phone_number_id)
-    if not wa_account:
-        return False, None, wa_err or "no_connected_whatsapp_number", None
-
-    access_token = wa_account.get_access_token()
-    if not access_token:
-        return False, None, "whatsapp_no_access_token", None
+    if sender_access_token and phone_number_id:
+        access_token = sender_access_token
+        send_phone_number_id = str(phone_number_id)
+    else:
+        wa_account, wa_err = resolve_whatsapp_account_for_api(company, phone_number_id)
+        if not wa_account:
+            return False, None, wa_err or "no_connected_whatsapp_number", None
+        access_token = wa_account.get_access_token()
+        if not access_token:
+            return False, None, "whatsapp_no_access_token", None
+        send_phone_number_id = wa_account.phone_number_id
 
     from integrations.services.whatsapp_template_media import (
         template_has_header_media,
@@ -105,13 +110,13 @@ def send_approved_whatsapp_template(
         client,
         body_param_values=param_values if param_values else None,
         sender_name=sender_name,
-        phone_number_id=wa_account.phone_number_id,
+        phone_number_id=send_phone_number_id,
         access_token=access_token,
     )
     if components:
         template_block["components"] = components
 
-    url = f"{META_GRAPH_API_BASE_URL}/{wa_account.phone_number_id}/messages"
+    url = f"{META_GRAPH_API_BASE_URL}/{send_phone_number_id}/messages"
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     payload = {
         "messaging_product": "whatsapp",
@@ -126,7 +131,7 @@ def send_approved_whatsapp_template(
     except requests.RequestException as e:
         logger.warning(
             "WhatsApp template send request error: phone_number_id=%s to=%s error=%s",
-            wa_account.phone_number_id,
+            send_phone_number_id,
             to[-4:] if len(to) > 4 else to,
             e,
         )
@@ -164,7 +169,7 @@ def send_approved_whatsapp_template(
                 body=preview[:65535],
                 direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
                 whatsapp_message_id=wam_id,
-                phone_number_id=wa_account.phone_number_id,
+                phone_number_id=send_phone_number_id,
                 delivery_status="sent",
                 created_by=created_by,
                 send_source=send_source

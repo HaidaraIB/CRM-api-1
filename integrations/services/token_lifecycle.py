@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # (fb_exchange_token) rather than a refresh_token field. meta_inbox belongs here:
 # without it the 60-day user token expires and never renews, and the inbox goes
 # silently dead — sends fail with code 190 and webhooks keep arriving unanswered.
-META_LIKE_PLATFORMS = frozenset({"meta", "whatsapp", "meta_inbox"})
+META_LIKE_PLATFORMS = frozenset({"meta", "whatsapp", "whatsapp_inbox", "meta_inbox"})
 TOKEN_INVALID_NOTIFY_COOLDOWN = timedelta(hours=24)
 REFRESH_BEFORE_EXPIRY = timedelta(days=7)
 

@@ -1,10 +1,8 @@
 """
 Phase 6 — convert an inbox conversation into a CRM lead.
 
-This is where a DM finally becomes a lead. The phone-less case is the one to
-watch: Instagram carries no phone number, so most converted leads have none, and
-nothing may fabricate a placeholder — that would consume the company-wide unique
-phone key.
+Phone is required on every conversion. WhatsApp inbox contacts may omit phone in
+the payload when external_id holds the customer's wa_id.
 """
 
 import pytest
@@ -14,9 +12,17 @@ from conftest import api_body
 
 pytestmark = pytest.mark.django_db
 
+CONVERT_PHONE = "+9647701234567"
+
 
 def convert_url(pk):
     return f"/api/v1/integrations/inbox/conversations/{pk}/convert/"
+
+
+def convert_payload(**extra):
+    base = {"phone": CONVERT_PHONE, "auto_assign": False}
+    base.update(extra)
+    return base
 
 
 @pytest.fixture
@@ -69,7 +75,7 @@ class TestConvertHappyPath:
 
         response = authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert response.status_code == 201
@@ -107,7 +113,7 @@ class TestConvertHappyPath:
         )
         authenticated_call_center.post(
             convert_url(conv.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert Client.objects.get().source == "messenger"
@@ -117,7 +123,7 @@ class TestConvertHappyPath:
 
         authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         event = ClientEvent.objects.get(event_type="created")
@@ -131,7 +137,9 @@ class TestConvertHappyPath:
 
         authenticated_call_center.post(
             convert_url(conversation.id),
-            {"name": "Renamed Lead", "assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(
+                name="Renamed Lead", assigned_to=employee_user.id
+            ),
             format="json",
         )
         assert Client.objects.get().name == "Renamed Lead"
@@ -148,7 +156,9 @@ class TestConvertHappyPath:
             "crm.assignment.get_auto_assign_employee", lambda company: employee_user
         )
         response = authenticated_call_center.post(
-            convert_url(conversation.id), {"auto_assign": True}, format="json"
+            convert_url(conversation.id),
+            convert_payload(auto_assign=True),
+            format="json",
         )
         assert response.status_code == 201
         assert Client.objects.get().assigned_to_id == employee_user.id
@@ -163,50 +173,42 @@ class TestConvertHappyPath:
             "crm.assignment.has_assignable_employee", lambda company: False
         )
         response = authenticated_call_center.post(
-            convert_url(conversation.id), {"auto_assign": True}, format="json"
+            convert_url(conversation.id),
+            convert_payload(auto_assign=True),
+            format="json",
         )
         assert response.status_code == 201
         assert Client.objects.get().assigned_to_id is None
 
 
-class TestPhonelessLead:
-    def test_no_phone_creates_no_phone_row(
+class TestPhoneRequired:
+    def test_missing_phone_returns_400(
         self, authenticated_call_center, conversation, employee_user
     ):
-        from crm.models import Client, ClientPhoneNumber
-
-        authenticated_call_center.post(
-            convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
-            format="json",
-        )
-        client = Client.objects.get()
-        assert client.phone_number is None
-        assert ClientPhoneNumber.objects.count() == 0
-
-    def test_two_phoneless_converts_coexist(
-        self, authenticated_call_center, conversation, second_conversation, employee_user
-    ):
-        """
-        The company-wide unique phone key is conditional on a non-empty normalized
-        value, so many phone-less leads must coexist. This is why nothing may
-        fabricate a placeholder number.
-        """
         from crm.models import Client
 
-        first = authenticated_call_center.post(
+        response = authenticated_call_center.post(
             convert_url(conversation.id),
             {"assigned_to": employee_user.id, "auto_assign": False},
             format="json",
         )
-        second = authenticated_call_center.post(
-            convert_url(second_conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+        assert response.status_code == 400
+        assert response.data["error"]["code"] == "social_phone_required"
+        assert Client.objects.count() == 0
+
+    def test_invalid_phone_returns_400(
+        self, authenticated_call_center, conversation, employee_user
+    ):
+        from crm.models import Client
+
+        response = authenticated_call_center.post(
+            convert_url(conversation.id),
+            {"phone": "not-a-phone", "assigned_to": employee_user.id, "auto_assign": False},
             format="json",
         )
-        assert first.status_code == 201
-        assert second.status_code == 201
-        assert Client.objects.count() == 2
+        assert response.status_code == 400
+        assert response.data["error"]["code"] == "social_phone_invalid"
+        assert Client.objects.count() == 0
 
     def test_supplied_phone_creates_primary_row(
         self, authenticated_call_center, conversation, employee_user
@@ -215,7 +217,7 @@ class TestPhonelessLead:
 
         authenticated_call_center.post(
             convert_url(conversation.id),
-            {"phone": "+9647701234567", "assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         row = ClientPhoneNumber.objects.get()
@@ -255,12 +257,12 @@ class TestDuplicateHandling:
 
         authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         second = authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert second.status_code == 409
@@ -287,7 +289,9 @@ class TestQuota:
         monkeypatch.setattr("integrations.services.social_lead.require_quota", deny)
 
         response = authenticated_call_center.post(
-            convert_url(conversation.id), {"auto_assign": False}, format="json"
+            convert_url(conversation.id),
+            convert_payload(auto_assign=False),
+            format="json",
         )
         assert response.status_code == 403
         assert response.data["error"]["code"] == "plan_quota_max_clients_exceeded"
@@ -301,7 +305,7 @@ class TestConvertAccessControl:
     ):
         response = authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert response.status_code == 201
@@ -309,7 +313,7 @@ class TestConvertAccessControl:
     def test_owner_may_convert(self, authenticated_admin, conversation, employee_user):
         response = authenticated_admin.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert response.status_code == 201
@@ -318,7 +322,9 @@ class TestConvertAccessControl:
         from crm.models import Client
 
         response = authenticated_employee.post(
-            convert_url(conversation.id), {"auto_assign": True}, format="json"
+            convert_url(conversation.id),
+            convert_payload(auto_assign=True),
+            format="json",
         )
         assert response.status_code == 403
         assert Client.objects.count() == 0
@@ -342,7 +348,9 @@ class TestConvertAccessControl:
             channel="instagram",
         )
         response = authenticated_call_center.post(
-            convert_url(conv.id), {"auto_assign": False}, format="json"
+            convert_url(conv.id),
+            convert_payload(auto_assign=False),
+            format="json",
         )
         assert response.status_code == 404
         assert Client.objects.count() == 0
@@ -352,7 +360,7 @@ class TestConvertAccessControl:
 
         response = authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": 999999, "auto_assign": False},
+            convert_payload(assigned_to=999999),
             format="json",
         )
         assert response.status_code == 400
@@ -364,7 +372,7 @@ class TestConvertAccessControl:
     ):
         response = authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": other_admin_user.id, "auto_assign": False},
+            convert_payload(assigned_to=other_admin_user.id),
             format="json",
         )
         assert response.status_code == 400
@@ -379,13 +387,12 @@ class TestNotifications:
 
         authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert Notification.objects.filter(
             user=employee_user, type=NotificationType.LEAD_ASSIGNED
         ).exists()
-        # The agent who performed the action does not need telling.
         assert not Notification.objects.filter(
             user=call_center_user, type=NotificationType.LEAD_ASSIGNED
         ).exists()
@@ -397,7 +404,7 @@ class TestNotifications:
 
         authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert IntegrationLog.objects.filter(action="meta_inbox_lead_converted").exists()
@@ -410,9 +417,6 @@ class TestConvertedConversationVisibility:
         """Conversion is what gives a scoped employee access to the conversation."""
         from rest_framework.test import APIClient
 
-        # A separate client on purpose: authenticated_call_center and
-        # authenticated_employee share the one api_client fixture, so requesting
-        # both would leave only the last force_authenticate in effect.
         employee_client = APIClient()
         employee_client.force_authenticate(user=employee_user)
 
@@ -421,7 +425,7 @@ class TestConvertedConversationVisibility:
 
         response = authenticated_call_center.post(
             convert_url(conversation.id),
-            {"assigned_to": employee_user.id, "auto_assign": False},
+            convert_payload(assigned_to=employee_user.id),
             format="json",
         )
         assert response.status_code == 201

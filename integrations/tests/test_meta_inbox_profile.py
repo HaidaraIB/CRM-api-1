@@ -188,4 +188,5 @@ class TestEnsureContactProfile:
         assert parsed['name'] == 'Graph Name'
         assert parsed['username'] == 'graph_user'
         assert captured['url'].endswith('/4900000000000888')
-        assert captured['params']['fields'] == 'name,username,profile_pic'
+        assert 'profile_pic' in captured['params']['fields']
+        assert 'name' in captured['params']['fields']

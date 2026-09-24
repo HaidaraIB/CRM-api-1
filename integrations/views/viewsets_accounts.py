@@ -388,6 +388,33 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                     'Reconnect or run whatsapp_repair_subscriptions --register --pin=XXXXXX.'
                 ).strip()
 
+    if account.platform == 'whatsapp_inbox':
+        token = token_data['access_token']
+        session = embedded_signup_session if isinstance(embedded_signup_session, dict) else {}
+        waba_id = str(session.get('waba_id') or '').strip()
+        phone_number_id = str(session.get('phone_number_id') or '').strip()
+        business_id = str(session.get('business_id') or '').strip() or None
+        from ..services.whatsapp_inbox_numbers import (
+            InboxNumberConflictError,
+            upsert_inbox_number_from_embedded_signup,
+        )
+        if waba_id and phone_number_id:
+            try:
+                upsert_inbox_number_from_embedded_signup(
+                    account,
+                    token,
+                    waba_id=waba_id,
+                    phone_number_id=phone_number_id,
+                    business_id=business_id,
+                )
+            except InboxNumberConflictError as exc:
+                account.status = 'error'
+                account.error_message = exc.message
+            except Exception as e:
+                logger.warning("WhatsApp inbox embedded signup failed: %s", e)
+                account.status = 'error'
+                account.error_message = str(e)[:500]
+
     # After Meta reconnect, refresh page tokens so leadgen fetch works immediately.
     if account.platform == 'meta' and account.status == 'connected':
         try:
@@ -697,7 +724,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             request.session[f'oauth_account_id_{state}'] = account.id
             auth_url = oauth_handler.get_authorization_url(state)
             data = {'authorization_url': auth_url, 'state': state}
-            if account.platform == 'whatsapp':
+            if account.platform in ('whatsapp', 'whatsapp_inbox'):
                 cfg = getattr(settings, 'WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID', '') or ''
                 app_id = getattr(settings, 'WHATSAPP_CLIENT_ID', '') or ''
                 data['embedded_signup'] = {
@@ -717,7 +744,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         Does not use OAuth state — caller must be authenticated and own this integration account.
         """
         account = self.get_object()
-        if account.platform != 'whatsapp':
+        if account.platform not in ('whatsapp', 'whatsapp_inbox'):
             return error_response(
                 'This action is only for WhatsApp integration accounts.',
                 code='bad_request',
@@ -996,6 +1023,10 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             self._meta_cache_invalidate(account.id)
         elif account.platform == 'whatsapp':
             disconnect_whatsapp_accounts_for_integration(account)
+        elif account.platform == 'whatsapp_inbox':
+            from ..services.whatsapp_inbox_numbers import disconnect_whatsapp_inbox_for_integration
+
+            disconnect_whatsapp_inbox_for_integration(account)
         elif account.platform == 'meta_inbox':
             from ..services.meta_inbox_connections import disconnect_page
             for connection in MetaInboxConnection.objects.filter(
@@ -1107,6 +1138,10 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         elif instance.platform == 'whatsapp':
             # Prevent orphaned WhatsAppAccount rows (SET_NULL) from staying connected+tokened.
             disconnect_whatsapp_accounts_for_integration(instance)
+        elif instance.platform == 'whatsapp_inbox':
+            from ..services.whatsapp_inbox_numbers import disconnect_whatsapp_inbox_for_integration
+
+            disconnect_whatsapp_inbox_for_integration(instance)
         elif instance.platform == 'meta_inbox':
             from ..services.meta_inbox_connections import disconnect_page
             for connection in MetaInboxConnection.objects.filter(

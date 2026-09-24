@@ -69,6 +69,12 @@ def describe_window(conversation) -> dict:
     can disable the input and show the right hint instead of letting an agent
     type a message that will be rejected.
     """
+    from ..models import SocialChannel
+    from .whatsapp_inbox_send import describe_whatsapp_window
+
+    if conversation.channel == SocialChannel.WHATSAPP:
+        return describe_whatsapp_window(conversation)
+
     last_inbound = getattr(conversation, 'last_inbound_at', None)
     if not last_inbound:
         return {
@@ -166,6 +172,17 @@ def send_message(
     Does not raise on Graph failure — callers persist the failure onto the
     message row so the agent sees a failed bubble with a retry affordance.
     """
+    from ..models import SocialChannel
+    from .whatsapp_inbox_send import send_whatsapp_inbox_message
+
+    if conversation.channel == SocialChannel.WHATSAPP:
+        return send_whatsapp_inbox_message(
+            conversation,
+            text=text,
+            attachment_type=attachment_type,
+            attachment_file=attachment_file,
+        )
+
     connection = conversation.connection
     page_token = connection.get_page_access_token()
     if not page_token:

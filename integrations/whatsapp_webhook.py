@@ -282,6 +282,17 @@ def process_whatsapp_message(message, phone_number_id):
         process_platform_admin_inbound(message)
         return
 
+    from integrations.models import WhatsAppInboxNumber
+    from integrations.services.whatsapp_inbox_ingest import process_whatsapp_inbox_message
+
+    inbox_number = WhatsAppInboxNumber.objects.filter(
+        phone_number_id=phone_number_id,
+        status='connected',
+    ).select_related('company').first()
+    if inbox_number:
+        process_whatsapp_inbox_message(inbox_number, message)
+        return
+
     wa_account = WhatsAppAccount.objects.filter(
         phone_number_id=phone_number_id,
         status='connected',
@@ -433,6 +444,18 @@ def process_whatsapp_status_update(status_obj, phone_number_id=None):
 
     if not message_id or not status:
         return
+
+    if phone_number_id:
+        from integrations.models import WhatsAppInboxNumber
+        from integrations.services.whatsapp_inbox_ingest import process_whatsapp_inbox_status
+
+        inbox_number = WhatsAppInboxNumber.objects.filter(
+            phone_number_id=phone_number_id,
+            status='connected',
+        ).first()
+        if inbox_number:
+            process_whatsapp_inbox_status(inbox_number, status_obj)
+            return
 
     error_text = ''
     if errors:

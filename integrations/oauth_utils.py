@@ -925,7 +925,7 @@ def get_oauth_handler(platform):
         return MetaOAuth()
     if platform_lower == 'meta_inbox':
         return MetaInboxOAuth()
-    if platform_lower == 'whatsapp':
+    if platform_lower in ('whatsapp', 'whatsapp_inbox'):
         return WhatsAppOAuth()
     raise ValueError(f"منصة غير مدعومة: {platform}")
 

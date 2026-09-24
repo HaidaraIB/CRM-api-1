@@ -116,9 +116,9 @@ dependency of `instagram_basic`).
    fall back). A fallback would let the Lead Ads app's secret forge inbox
    messages. There is an explicit test.
 
-4. **Never fabricate a phone number on convert.** IG/Messenger carry none. A
-   placeholder would consume the company-wide unique phone key
-   (`uniq_company_phone_normalized`). Phone-less leads are correct and expected.
+4. **Phone is required on convert.** IG/Messenger carry none — the agent must
+   enter one. WhatsApp inbox contacts may omit phone in the payload when
+   `external_id` holds the wa_id. Never fabricate a placeholder number.
 
 5. **Never send outside the messaging window.** No templates exist for these
    channels — only the `HUMAN_AGENT` tag (7 days), gated behind

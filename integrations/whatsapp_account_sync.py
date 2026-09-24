@@ -196,6 +196,9 @@ def upsert_whatsapp_account_from_embedded_signup(
     Disconnects any other connected phones on this integration.
     """
     phone_number_id = str(phone_number_id).strip()
+    from .services.whatsapp_inbox_numbers import assert_crm_phone_not_used_by_inbox
+
+    assert_crm_phone_not_used_by_inbox(account.company_id, phone_number_id)
     profile = _fetch_phone_profile(access_token, phone_number_id)
     display = profile['display']
     verified_name = profile['verified_name']

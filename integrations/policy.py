@@ -26,6 +26,7 @@ INTEGRATION_POLICY_PLATFORMS = (
     "mujeb",
     "pbx",
     "meta_inbox",
+    "whatsapp_inbox",
 )
 PLAN_INTEGRATION_FEATURE_MAP = {
     "meta": "integration_meta",
@@ -38,6 +39,7 @@ PLAN_INTEGRATION_FEATURE_MAP = {
     "mujeb": "integration_mujeb",
     "pbx": "integration_pbx",
     "meta_inbox": "integration_meta_inbox",
+    "whatsapp_inbox": "integration_meta_inbox",
 }
 SMS_INTEGRATION_PLATFORMS = ("twilio", "otpiq")
 INTEGRATION_POLICY_DEFAULTS = {
