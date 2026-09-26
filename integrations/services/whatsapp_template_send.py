@@ -47,6 +47,7 @@ def send_approved_whatsapp_template(
     campaign_batch=None,
     persist_message: bool = True,
     sender_access_token: Optional[str] = None,
+    body_parameters: Optional[list[str]] = None,
 ) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
     """
     Send an APPROVED WhatsApp template via Graph API.
@@ -70,7 +71,11 @@ def send_approved_whatsapp_template(
     # { اسم الموظف } falls back to the sender when the lead has no assignee.
     sender_name = _user_display_name(created_by) if created_by is not None else None
     param_values: list[str] = []
-    if n_placeholders > 0 or header_needs > 0:
+    if body_parameters is not None:
+        param_values = [str(p) for p in body_parameters]
+        if n_placeholders > 0 and len(param_values) != n_placeholders:
+            return False, None, "whatsapp_template_parameter_count", None
+    elif n_placeholders > 0 or header_needs > 0:
         if client is None:
             return False, None, "client_required_for_placeholders", None
         param_values = template_body_parameter_values(

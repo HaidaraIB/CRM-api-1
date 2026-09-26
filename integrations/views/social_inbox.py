@@ -56,6 +56,7 @@ from ..social_conversation_state import sweep_expired_snoozes
 from ..social_inbox_access import (
     filter_social_conversations_queryset,
     require_social_conversation_access,
+    user_can_delete_social_history,
     user_sees_all_social_conversations,
 )
 
@@ -776,6 +777,39 @@ def social_update_conversation_state(request):
         conversation.is_unsubscribed = bool(data.get('is_unsubscribed'))
         update_fields.append('is_unsubscribed')
 
+    if 'assigned_to' in data:
+        if not user_sees_all_social_conversations(request.user):
+            return error_response(
+                'Not allowed to change assignment.',
+                code='social_forbidden',
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        from accounts.models import User
+
+        assignee_id = data.get('assigned_to')
+        if assignee_id in (None, '', 0, '0'):
+            conversation.assigned_to = None
+        else:
+            try:
+                assignee_pk = int(assignee_id)
+            except (TypeError, ValueError):
+                return error_response(
+                    'Invalid assignee.',
+                    code='bad_request',
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            assignee = User.objects.filter(
+                pk=assignee_pk, company=conversation.company, is_active=True
+            ).first()
+            if not assignee:
+                return error_response(
+                    'Assignee not found.',
+                    code='social_assignee_not_found',
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            conversation.assigned_to = assignee
+        update_fields.append('assigned_to')
+
     if not update_fields:
         return error_response(
             'Nothing to update.',
@@ -832,7 +866,15 @@ def social_send_window(request):
     return success_response(data=describe_window(conversation))
 
 
-def _persist_and_send(request, conversation, *, text=None, attachment_type=None, upload=None):
+def _persist_and_send(
+    request,
+    conversation,
+    *,
+    text=None,
+    attachment_type=None,
+    upload=None,
+    is_voice_note: bool = False,
+):
     """
     Persist the outbound row first, then call Graph.
 
@@ -848,6 +890,7 @@ def _persist_and_send(request, conversation, *, text=None, attachment_type=None,
         is_read=True,
         sent_at=timezone.now(),
         attachment_kind=attachment_type or None,
+        is_voice_note=bool(is_voice_note and attachment_type == 'audio'),
     )
 
     if upload is not None:
@@ -867,12 +910,23 @@ def _persist_and_send(request, conversation, *, text=None, attachment_type=None,
             logger.exception("Meta Inbox: failed storing outbound attachment")
 
     try:
-        result = send_message(
-            conversation,
-            text=text,
-            attachment_type=attachment_type,
-            attachment_file=upload,
-        )
+        if upload is not None and conversation.channel == SocialChannel.WHATSAPP:
+            from ..services.whatsapp_inbox_send import send_whatsapp_inbox_message
+
+            result = send_whatsapp_inbox_message(
+                conversation,
+                text=text,
+                attachment_type=attachment_type,
+                attachment_file=upload,
+                is_voice_note=is_voice_note,
+            )
+        else:
+            result = send_message(
+                conversation,
+                text=text,
+                attachment_type=attachment_type,
+                attachment_file=upload,
+            )
     except SendWindowClosed:
         # Refused locally — no Graph call was made. Drop the row so a blocked
         # attempt does not litter the thread.
@@ -983,12 +1037,14 @@ def social_send_media(request):
         )
 
     kind = social_kind_for_upload(upload, requested=data.get('kind'))
+    is_voice = str(data.get('is_voice_note') or '').lower() in ('1', 'true', 'yes')
     return _persist_and_send(
         request,
         conversation,
         text=(data.get('text') or '').strip() or None,
         attachment_type=kind,
         upload=upload,
+        is_voice_note=is_voice,
     )
 
 
@@ -1173,6 +1229,14 @@ def social_send_template(request):
 
     client = conversation.client
     to_phone = conversation.contact.external_id
+    body_parameters = data.get('body_parameters')
+    if body_parameters is not None and not isinstance(body_parameters, list):
+        return error_response(
+            'body_parameters must be a list of strings.',
+            code='bad_request',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
     ok, wam_id, error_key, _raw = send_approved_whatsapp_template(
         company=conversation.company,
         template=template,
@@ -1182,6 +1246,7 @@ def social_send_template(request):
         sender_access_token=token,
         created_by=request.user,
         persist_message=False,
+        body_parameters=body_parameters,
     )
     if not ok:
         return error_response(
@@ -1212,6 +1277,122 @@ def social_send_template(request):
         data={'message': _serialize_message(message)},
         status_code=status.HTTP_201_CREATED,
     )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, HasActiveSubscription, CanUseSocialInbox])
+def social_send_location(request):
+    """POST /integrations/inbox/send-location/ — WhatsApp inbox channel only."""
+    from decimal import Decimal, InvalidOperation
+
+    from ..services.whatsapp_inbox_send import send_whatsapp_inbox_location
+
+    data = request.data or {}
+    conversation, err = _get_conversation_or_error(request, data.get('conversation'))
+    if err is not None:
+        return err
+    if conversation.channel != SocialChannel.WHATSAPP:
+        return error_response(
+            'Location is only supported for WhatsApp inbox conversations.',
+            code='bad_request',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    gate = _inbox_gate(conversation.company)
+    if gate is not None:
+        return gate
+    try:
+        lat = Decimal(str(data.get('latitude')))
+        lng = Decimal(str(data.get('longitude')))
+    except (InvalidOperation, TypeError, ValueError):
+        return error_response(
+            'latitude and longitude are required.',
+            code='bad_request',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if not (-90 <= float(lat) <= 90) or not (-180 <= float(lng) <= 180):
+        return error_response(
+            'Invalid latitude or longitude.',
+            code='bad_request',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    name = (data.get('name') or '').strip()[:255]
+    address = (data.get('address') or '').strip()[:512]
+
+    message = SocialMessage.objects.create(
+        conversation=conversation,
+        direction=SocialMessage.DIRECTION_OUTBOUND,
+        body=name or address or 'Location',
+        created_by=request.user,
+        delivery_status='pending',
+        is_read=True,
+        sent_at=timezone.now(),
+        attachment_kind=SocialMessage.AttachmentKind.LOCATION,
+        location_latitude=lat,
+        location_longitude=lng,
+        location_name=name,
+        location_address=address,
+    )
+    result = send_whatsapp_inbox_location(
+        conversation,
+        latitude=lat,
+        longitude=lng,
+        name=name,
+        address=address,
+    )
+    if result['ok']:
+        message.external_message_id = result['mid'] or ''
+        message.delivery_status = 'sent'
+        message.save(update_fields=['external_message_id', 'delivery_status'])
+        conversation.last_message_at = message.sent_at
+        conversation.last_message_direction = SocialMessage.DIRECTION_OUTBOUND
+        conversation.last_message_preview = (message.body or '')[:280]
+        conversation.save(
+            update_fields=[
+                'last_message_at',
+                'last_message_direction',
+                'last_message_preview',
+                'updated_at',
+            ]
+        )
+        return success_response(
+            data={'message': _serialize_message(message)},
+            status_code=status.HTTP_201_CREATED,
+        )
+    message.delivery_status = 'failed'
+    message.delivery_error = (result['error_message'] or '')[:512]
+    message.error_key = result['error_key'] or ''
+    message.save(update_fields=['delivery_status', 'delivery_error', 'error_key'])
+    return error_response(
+        result['error_message'] or 'Could not send location.',
+        code=result['error_key'] or 'social_send_failed',
+        details={'message': _serialize_message(message)},
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated, HasActiveSubscription, CanUseSocialInbox])
+def social_delete_conversation(request, pk: int):
+    """DELETE /integrations/inbox/conversations/<pk>/ — owner only."""
+    if not user_can_delete_social_history(request.user):
+        return error_response(
+            'Only the company owner can delete inbox conversations.',
+            code='social_forbidden',
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    conversation = filter_social_conversations_queryset(
+        request.user, SocialConversation.objects.filter(pk=pk)
+    ).first()
+    if not conversation:
+        return error_response(
+            'Conversation not found.',
+            code='social_conversation_not_found',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    company_id = conversation.company_id
+    conversation.delete()
+    bump_company_slice('inbox', company_id)
+    return success_response(data={'deleted': True, 'conversation_id': pk})
 
 
 # --- Convert to lead -----------------------------------------------------------

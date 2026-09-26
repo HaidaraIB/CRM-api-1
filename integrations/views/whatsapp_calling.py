@@ -15,8 +15,10 @@ from crm_saas_api.responses import error_response, success_response, validation_
 from integrations.services.whatsapp_call_error_logs import log_whatsapp_call_error
 from integrations.models import (
     MessageTemplate,
+    SocialConversation,
     WhatsAppAccount,
     WhatsAppCall,
+    WhatsAppInboxNumber,
     WhatsAppCallDirection,
     WhatsAppCallErrorSource,
     WhatsAppCallRecordingStatus,
@@ -34,6 +36,7 @@ from integrations.services.whatsapp_calling import (
     WhatsAppCallingError,
     call_permission_allows_start,
     enable_calling_on_account,
+    enable_calling_on_sender,
     ensure_client_call_for_whatsapp_call,
     find_call_permission_template,
     get_call_permissions,
@@ -47,11 +50,17 @@ from integrations.services.whatsapp_calling import (
     stream_wa_recording,
     verify_wa_playback_token,
 )
+from integrations.social_inbox_access import (
+    filter_social_conversations_queryset,
+    user_can_access_social_inbox,
+    user_sees_all_social_conversations,
+)
 from integrations.whatsapp_access import (
     user_can_access_client,
     user_can_access_whatsapp_calls,
     user_sees_all_company_leads,
 )
+from integrations.services.whatsapp_sender import CrmSender, InboxSender
 from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
 from integrations.views.webhooks_messaging import _integration_gate
 from sync.conditional import conditional_token, not_modified, tag
@@ -162,6 +171,9 @@ def _serialize_call(call: WhatsAppCall, request=None) -> dict:
         "agent": call.agent_id,
         "agent_username": getattr(call.agent, "username", None) if call.agent_id else None,
         "whatsapp_account_id": call.whatsapp_account_id,
+        "wa_inbox_number_id": call.wa_inbox_number_id,
+        "social_conversation_id": call.social_conversation_id,
+        "call_source": "inbox" if call.wa_inbox_number_id else "crm",
         "offer_sdp": call.offer_sdp or None,
         "answer_sdp": call.answer_sdp or None,
         "started_at": call.started_at.isoformat() if call.started_at else None,
@@ -178,25 +190,49 @@ def _serialize_call(call: WhatsAppCall, request=None) -> dict:
     }
 
 
+def _user_can_use_calling_api(user) -> bool:
+    return user_can_access_whatsapp_calls(user) or user_can_access_social_inbox(user)
+
+
 def _company_calls_qs(user):
     qs = WhatsAppCall.objects.filter(company=user.company).select_related(
         "client",
         "client__status",
         "agent",
         "whatsapp_account",
+        "wa_inbox_number",
+        "social_conversation",
     )
-    if user_sees_all_company_leads(user):
-        return qs
-    # Staff: only assigned leads + unassigned ringing (so they can pick up unknown callers
-    # only if policy allows — for MVP, staff only see calls for their clients OR
-    # ringing inbound with no client yet assigned to anyone).
     from django.db.models import Q
 
-    return qs.filter(
-        Q(client__assigned_to_id=user.id)
-        | Q(client__isnull=True, status=WhatsAppCallStatus.RINGING, agent__isnull=True)
-        | Q(agent_id=user.id)
-    )
+    crm_qs = qs.filter(whatsapp_account__isnull=False)
+    inbox_qs = qs.filter(wa_inbox_number__isnull=False)
+    if user_sees_all_social_conversations(user):
+        allowed_inbox = inbox_qs
+    elif user_can_access_social_inbox(user):
+        allowed_inbox = inbox_qs.filter(
+            Q(social_conversation__client__assigned_to_id=user.id)
+            | Q(
+                social_conversation__client__isnull=True,
+                status=WhatsAppCallStatus.RINGING,
+                agent__isnull=True,
+            )
+            | Q(agent_id=user.id)
+        )
+    else:
+        allowed_inbox = inbox_qs.none()
+
+    if user_sees_all_company_leads(user):
+        allowed_crm = crm_qs
+    elif user_can_access_whatsapp_calls(user):
+        allowed_crm = crm_qs.filter(
+            Q(client__assigned_to_id=user.id)
+            | Q(client__isnull=True, status=WhatsAppCallStatus.RINGING, agent__isnull=True)
+            | Q(agent_id=user.id)
+        )
+    else:
+        allowed_crm = crm_qs.none()
+    return (allowed_crm | allowed_inbox).distinct()
 
 
 def _get_call_for_user(user, call_id: int) -> WhatsAppCall | None:
@@ -216,13 +252,30 @@ def _resolve_account(user, account_id=None) -> tuple[WhatsAppAccount | None, str
     return wa, err
 
 
+def _resolve_calling_target(
+    user, *, account_id=None, inbox_number_id=None
+) -> tuple[CrmSender | InboxSender | None, str | None]:
+    company = user.company
+    if inbox_number_id:
+        row = WhatsAppInboxNumber.objects.filter(
+            company=company, pk=inbox_number_id, status="connected"
+        ).first()
+        if not row:
+            return None, "whatsapp_inbox_number_not_found"
+        return InboxSender(row), None
+    wa, err = _resolve_account(user, account_id)
+    if not wa:
+        return None, err
+    return CrmSender(wa), None
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_calls_list(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     # The costliest of the polled call endpoints: seven count() queries for the
@@ -257,6 +310,7 @@ def whatsapp_calls_list(request):
     )
     search = (request.query_params.get("search") or "").strip()
     client_id = request.query_params.get("client")
+    conversation_id = request.query_params.get("conversation")
     ordering = (request.query_params.get("ordering") or "-created_at").strip()
 
     # Non-status filters first so sidebar counters match the filtered set.
@@ -279,6 +333,11 @@ def whatsapp_calls_list(request):
             qs = qs.filter(client_id=int(client_id))
         except (TypeError, ValueError):
             return validation_error_response({"client": ["Invalid client id"]})
+    if conversation_id:
+        try:
+            qs = qs.filter(social_conversation_id=int(conversation_id))
+        except (TypeError, ValueError):
+            return validation_error_response({"conversation": ["Invalid conversation id"]})
     if search:
         from django.db.models import Q
 
@@ -341,7 +400,7 @@ def whatsapp_calls_pending(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     # Polled hard while a call is in progress, and the answer only changes when a
@@ -420,7 +479,7 @@ def whatsapp_calls_live(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     # Note this short-circuits the stale-row reaping below, which is a side effect
@@ -523,7 +582,7 @@ def whatsapp_calls_live(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_detail(request, pk: int):
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
@@ -534,7 +593,7 @@ def whatsapp_call_detail(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_pre_accept(request, pk: int):
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
@@ -561,7 +620,7 @@ def whatsapp_call_pre_accept(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_accept(request, pk: int):
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
@@ -607,7 +666,7 @@ def whatsapp_call_accept(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_reject(request, pk: int):
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
@@ -628,7 +687,7 @@ def whatsapp_call_reject(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_terminate(request, pk: int):
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
@@ -681,13 +740,15 @@ def whatsapp_call_initiate(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     to = (request.data.get("to") or request.data.get("phone") or "").strip()
     sdp = (request.data.get("sdp") or "").strip()
     client_id = request.data.get("client")
     account_id = request.data.get("whatsapp_account_id")
+    inbox_number_id = request.data.get("wa_inbox_number_id")
+    conversation_id = request.data.get("conversation") or request.data.get("conversation_id")
     skip_permission_check = (request.data.get("skip_permission_check") or False) is True
 
     if not to:
@@ -695,14 +756,19 @@ def whatsapp_call_initiate(request):
     if not sdp:
         return validation_error_response({"to": ["Required"], "sdp": ["Required"]})
 
-    wa, err = _resolve_account(request.user, account_id)
-    if not wa:
+    sender, err = _resolve_calling_target(
+        request.user,
+        account_id=account_id,
+        inbox_number_id=inbox_number_id,
+    )
+    if not sender:
         return error_response(
             "No connected WhatsApp number for this company.",
             code=err or "no_connected_whatsapp_number",
             status_code=400,
         )
-    if not wa.calling_enabled:
+    config = sender.calling_config
+    if not config.calling_enabled:
         return error_response(
             "WhatsApp calling is not enabled on this number. Enable it in Integrations → WhatsApp.",
             status_code=400,
@@ -711,13 +777,27 @@ def whatsapp_call_initiate(request):
 
     from integrations.services.phone_match import find_client_by_phone
     from crm.models import Client
+    from integrations.social_inbox_access import require_social_conversation_access
 
     client = None
+    social_conversation = None
+    if isinstance(sender, InboxSender):
+        if conversation_id:
+            social_conversation = filter_social_conversations_queryset(
+                request.user,
+                SocialConversation.objects.filter(pk=conversation_id),
+            ).first()
+            if not social_conversation:
+                return error_response("Conversation not found", status_code=404)
+            denied = require_social_conversation_access(request.user, social_conversation)
+            if denied:
+                return error_response("Conversation not found", status_code=404)
+            client = social_conversation.client
     if client_id:
         client = Client.objects.filter(company=request.user.company, pk=client_id).first()
         if not client or not user_can_access_client(request.user, client):
             return error_response("Lead not found", status_code=404)
-    else:
+    elif client is None and isinstance(sender, CrmSender):
         client = find_client_by_phone(request.user.company, to)
         if client and not user_can_access_client(request.user, client):
             return error_response("Lead not found", status_code=404)
@@ -725,7 +805,7 @@ def whatsapp_call_initiate(request):
     to_digits = "".join(c for c in to if c.isdigit())
     if not skip_permission_check:
         try:
-            perms = get_call_permissions(wa, to_digits)
+            perms = get_call_permissions(sender, to_digits)
         except WhatsAppCallingError as exc:
             return _calling_error_response(
                 exc,
@@ -735,7 +815,8 @@ def whatsapp_call_initiate(request):
                     "agent": request.user,
                     "client": client,
                     "peer_phone": to_digits,
-                    "whatsapp_account": wa,
+                    "whatsapp_account": sender.whatsapp_account if isinstance(sender, CrmSender) else None,
+                    "wa_inbox_number": sender.inbox_number if isinstance(sender, InboxSender) else None,
                 },
             )
         if not call_permission_allows_start(perms):
@@ -747,7 +828,8 @@ def whatsapp_call_initiate(request):
                 agent=request.user,
                 client=client,
                 peer_phone=to_digits,
-                whatsapp_account=wa,
+                whatsapp_account=sender.whatsapp_account if isinstance(sender, CrmSender) else None,
+                wa_inbox_number=sender.inbox_number if isinstance(sender, InboxSender) else None,
                 meta_details={"permissions": perms},
             )
             return error_response(
@@ -759,7 +841,7 @@ def whatsapp_call_initiate(request):
 
     try:
         body = graph_call_action(
-            wa,
+            sender,
             action="connect",
             to=to_digits,
             sdp=sdp,
@@ -774,7 +856,8 @@ def whatsapp_call_initiate(request):
                 "agent": request.user,
                 "client": client,
                 "peer_phone": to_digits,
-                "whatsapp_account": wa,
+                "whatsapp_account": sender.whatsapp_account if isinstance(sender, CrmSender) else None,
+                "wa_inbox_number": sender.inbox_number if isinstance(sender, InboxSender) else None,
             },
         )
 
@@ -785,23 +868,32 @@ def whatsapp_call_initiate(request):
     if not meta_call_id:
         meta_call_id = str(body.get("id") or body.get("call_id") or "").strip()
     if not meta_call_id:
-        # Meta may only return success; webhook will create/update — use provisional id
-        meta_call_id = f"pending.{wa.phone_number_id}.{timezone.now().timestamp()}"
+        meta_call_id = f"pending.{sender.phone_number_id}.{timezone.now().timestamp()}"
 
-    call = WhatsAppCall.objects.create(
-        company=request.user.company,
-        whatsapp_account=wa,
-        meta_call_id=meta_call_id,
-        direction=WhatsAppCallDirection.OUTBOUND,
-        status=WhatsAppCallStatus.RINGING,
-        peer_phone=to_digits,
-        client=client,
-        agent=request.user,
-        offer_sdp=sdp,
-        started_at=timezone.now(),
-        recording_status=WhatsAppCallRecordingStatus.NONE,
-        raw_payload={"initiate_response": body},
-    )
+    create_kwargs = {
+        "company": request.user.company,
+        "meta_call_id": meta_call_id,
+        "direction": WhatsAppCallDirection.OUTBOUND,
+        "status": WhatsAppCallStatus.RINGING,
+        "peer_phone": to_digits,
+        "client": client,
+        "agent": request.user,
+        "offer_sdp": sdp,
+        "started_at": timezone.now(),
+        "recording_status": WhatsAppCallRecordingStatus.NONE,
+        "raw_payload": {"initiate_response": body},
+    }
+    if isinstance(sender, InboxSender):
+        create_kwargs["wa_inbox_number"] = sender.inbox_number
+        create_kwargs["social_conversation"] = social_conversation
+    else:
+        create_kwargs["whatsapp_account"] = sender.account
+
+    call = WhatsAppCall.objects.create(**create_kwargs)
+    if isinstance(sender, InboxSender) and not call.social_conversation_id:
+        updates = sender.link_call(call, peer_phone=to_digits, peer_name="")
+        if updates:
+            call.save(update_fields=list(dict.fromkeys(updates + ["updated_at"])))
     return success_response(_serialize_call(call, request), status_code=201)
 
 
@@ -826,7 +918,7 @@ def whatsapp_call_permission_request(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     to = (request.data.get("to") or request.data.get("phone") or "").strip()
@@ -982,7 +1074,7 @@ def whatsapp_call_permission_request(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_permissions(request):
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     to = (request.query_params.get("to") or request.query_params.get("phone") or "").strip()
     if not to:
@@ -1017,8 +1109,13 @@ def whatsapp_calling_enable(request):
     if not request.user.is_admin():
         return error_response("Only admins can enable WhatsApp calling", status_code=403)
 
-    wa, err = _resolve_account(request.user, request.data.get("whatsapp_account_id"))
-    if not wa:
+    inbox_number_id = request.data.get("wa_inbox_number_id")
+    sender, err = _resolve_calling_target(
+        request.user,
+        account_id=request.data.get("whatsapp_account_id"),
+        inbox_number_id=inbox_number_id,
+    )
+    if not sender:
         return error_response(
             "No connected WhatsApp number for this company.",
             code=err or "no_connected_whatsapp_number",
@@ -1027,34 +1124,38 @@ def whatsapp_calling_enable(request):
 
     # Cloud Calling requires a Cloud-API-only number. Coexistence (Business app + API)
     # keeps voice/video on the app only — Meta rejects enable with #141000.
-    integ_meta = {}
-    if wa.integration_account_id and isinstance(
-        getattr(wa.integration_account, "metadata", None), dict
-    ):
-        integ_meta = wa.integration_account.metadata or {}
-    if integ_meta.get("coexistence") or integ_meta.get("is_on_biz_app") is True:
-        return error_response(
-            "WhatsApp Cloud Calling is not available on coexistence numbers "
-            "(Business app + Cloud API). Meta keeps voice/video on the Business app only. "
-            "Use a Cloud-API-only number to enable calling in the CRM.",
-            code="whatsapp_calling_coexistence_unsupported",
-            details={
-                "coexistence": True,
-                "display_phone_number": wa.display_phone_number,
-                "phone_number_id": wa.phone_number_id,
-            },
-            status_code=400,
-        )
+    if isinstance(sender, CrmSender):
+        wa = sender.account
+        integ_meta = {}
+        if wa.integration_account_id and isinstance(
+            getattr(wa.integration_account, "metadata", None), dict
+        ):
+            integ_meta = wa.integration_account.metadata or {}
+        if integ_meta.get("coexistence") or integ_meta.get("is_on_biz_app") is True:
+            return error_response(
+                "WhatsApp Cloud Calling is not available on coexistence numbers "
+                "(Business app + Cloud API). Meta keeps voice/video on the Business app only. "
+                "Use a Cloud-API-only number to enable calling in the CRM.",
+                code="whatsapp_calling_coexistence_unsupported",
+                details={
+                    "coexistence": True,
+                    "display_phone_number": wa.display_phone_number,
+                    "phone_number_id": wa.phone_number_id,
+                },
+                status_code=400,
+            )
 
     try:
-        body = enable_calling_on_account(wa)
+        body = enable_calling_on_sender(sender)
     except WhatsAppCallingError as exc:
         return _calling_error_response(exc)
-    wa.refresh_from_db()
+    config = sender.calling_config
+    config.refresh_from_db()
     return success_response(
         {
-            "calling_enabled": wa.calling_enabled,
-            "whatsapp_account_id": wa.id,
+            "calling_enabled": config.calling_enabled,
+            "whatsapp_account_id": config.id if isinstance(sender, CrmSender) else None,
+            "wa_inbox_number_id": config.id if isinstance(sender, InboxSender) else None,
             "graph": body,
         }
     )
@@ -1063,7 +1164,7 @@ def whatsapp_calling_enable(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_call_recording_upload(request, pk: int):
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     call = _get_call_for_user(request.user, pk)
     if not call:
@@ -1134,7 +1235,7 @@ def whatsapp_call_agent_status(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     if request.method == "GET":
@@ -1166,7 +1267,7 @@ def whatsapp_call_agent_status_team(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
     if not user_sees_all_company_leads(request.user):
         return error_response("Not allowed to view team call status", status_code=403)
@@ -1212,44 +1313,50 @@ def whatsapp_call_hours(request):
     gate = _integration_gate(request.user.company, "whatsapp")
     if not gate.get("enabled"):
         return error_response(gate.get("message") or "WhatsApp disabled", status_code=403)
-    if not user_can_access_whatsapp_calls(request.user):
+    if not _user_can_use_calling_api(request.user):
         return error_response('WhatsApp call access is disabled for your account', code='whatsapp_access_disabled', status_code=403)
 
     account_id = request.query_params.get("whatsapp_account_id") or request.data.get(
         "whatsapp_account_id"
     )
-    wa, err = _resolve_account(request.user, account_id)
-    if not wa:
+    inbox_number_id = request.query_params.get("wa_inbox_number_id") or request.data.get(
+        "wa_inbox_number_id"
+    )
+    sender, err = _resolve_calling_target(
+        request.user, account_id=account_id, inbox_number_id=inbox_number_id
+    )
+    if not sender:
         return error_response(
             "No connected WhatsApp number for this company.",
             code=err or "no_connected_whatsapp_number",
             status_code=400,
         )
+    config = sender.calling_config
 
     if request.method == "GET":
-        return success_response(serialize_call_hours(wa))
+        return success_response(serialize_call_hours(config))
 
     if not _user_can_manage_call_hours(request.user):
         return error_response("Not allowed to manage call hours", status_code=403)
 
     enabled = request.data.get("enabled")
     if enabled is not None:
-        wa.call_hours_enabled = bool(enabled)
+        config.call_hours_enabled = bool(enabled)
 
     tz = request.data.get("timezone")
     if tz is not None:
-        wa.call_hours_timezone = str(tz).strip()[:64]
+        config.call_hours_timezone = str(tz).strip()[:64]
 
     weekly = request.data.get("weekly")
     if weekly is not None:
-        wa.call_hours_weekly = normalize_weekly_schedule(weekly)
+        config.call_hours_weekly = normalize_weekly_schedule(weekly)
 
     msg = request.data.get("out_of_hours_message")
     if msg is not None:
-        wa.out_of_hours_message = str(msg)[:4000]
+        config.out_of_hours_message = str(msg)[:4000]
 
     sync_meta = request.data.get("sync_meta", True)
-    wa.save(
+    config.save(
         update_fields=[
             "call_hours_enabled",
             "call_hours_timezone",
@@ -1261,15 +1368,15 @@ def whatsapp_call_hours(request):
 
     meta_result = None
     meta_error = None
-    if sync_meta and wa.calling_enabled:
+    if sync_meta and config.calling_enabled:
         try:
-            meta_result = sync_call_hours_to_meta(wa)
+            meta_result = sync_call_hours_to_meta(config)
         except WhatsAppCallingError as exc:
             meta_error = str(exc)
         except Exception as exc:
             meta_error = str(exc)
 
-    payload = serialize_call_hours(wa)
+    payload = serialize_call_hours(config)
     if meta_result is not None:
         payload["meta_sync"] = meta_result
     if meta_error:

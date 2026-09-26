@@ -23,6 +23,13 @@ from integrations.models import (
     WhatsAppCallRecordingStatus,
     WhatsAppCallStatus,
 )
+from integrations.services.whatsapp_sender import (
+    CrmSender,
+    InboxSender,
+    ResolvedSender,
+    resolve_whatsapp_sender,
+    sender_for_call,
+)
 from integrations.oauth_utils import META_GRAPH_API_BASE_URL
 from integrations.storage.recordings import open_recording, save_recording
 
@@ -39,20 +46,27 @@ class WhatsAppCallingError(Exception):
         self.body = body
 
 
-def _token(account: WhatsAppAccount) -> str:
-    token = account.get_access_token()
+def _as_sender(account_or_sender: WhatsAppAccount | ResolvedSender) -> ResolvedSender:
+    if isinstance(account_or_sender, (CrmSender, InboxSender)):
+        return account_or_sender
+    return CrmSender(account_or_sender)
+
+
+def _token(sender: WhatsAppAccount | ResolvedSender) -> str:
+    resolved = _as_sender(sender)
+    token = resolved.get_access_token()
     if not token:
         raise WhatsAppCallingError("WhatsApp account has no access token")
     return token
 
 
-def _graph_post(account: WhatsAppAccount, path: str, payload: dict) -> dict:
+def _graph_post(account_or_sender: WhatsAppAccount | ResolvedSender, path: str, payload: dict) -> dict:
     url = f"{META_GRAPH_API_BASE_URL}/{path.lstrip('/')}"
     try:
         resp = requests.post(
             url,
             headers={
-                "Authorization": f"Bearer {_token(account)}",
+                "Authorization": f"Bearer {_token(account_or_sender)}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -79,12 +93,12 @@ def _graph_post(account: WhatsAppAccount, path: str, payload: dict) -> dict:
     return body if isinstance(body, dict) else {"data": body}
 
 
-def _graph_get(account: WhatsAppAccount, path: str, params: dict | None = None) -> dict:
+def _graph_get(account_or_sender: WhatsAppAccount | ResolvedSender, path: str, params: dict | None = None) -> dict:
     url = f"{META_GRAPH_API_BASE_URL}/{path.lstrip('/')}"
     try:
         resp = requests.get(
             url,
-            headers={"Authorization": f"Bearer {_token(account)}"},
+            headers={"Authorization": f"Bearer {_token(account_or_sender)}"},
             params=params or {},
             timeout=30,
         )
@@ -118,33 +132,43 @@ def is_seed_whatsapp_account(account: WhatsAppAccount) -> bool:
     return token.startswith("seed-fake")
 
 
-def enable_calling_on_account(account: WhatsAppAccount) -> dict:
+def enable_calling_on_sender(sender: WhatsAppAccount | ResolvedSender) -> dict:
     """POST /{phone-number-id}/settings — enable Cloud Calling."""
-    if is_seed_whatsapp_account(account):
-        if not account.calling_enabled:
-            account.calling_enabled = True
-            account.save(update_fields=["calling_enabled", "updated_at"])
+    from integrations.services.whatsapp_sender import is_seed_sender
+
+    resolved = _as_sender(sender)
+    config = resolved.calling_config
+    if is_seed_sender(resolved):
+        if not config.calling_enabled:
+            config.calling_enabled = True
+            config.save(update_fields=["calling_enabled", "updated_at"])
         return {"success": True, "seed": True, "calling": {"status": "ENABLED"}}
 
     body = _graph_post(
-        account,
-        f"{account.phone_number_id}/settings",
+        resolved,
+        f"{resolved.phone_number_id}/settings",
         {"calling": {"status": "ENABLED"}},
     )
-    if not account.calling_enabled:
-        account.calling_enabled = True
-        account.save(update_fields=["calling_enabled", "updated_at"])
+    if not config.calling_enabled:
+        config.calling_enabled = True
+        config.save(update_fields=["calling_enabled", "updated_at"])
     return body
 
 
-def get_calling_settings(account: WhatsAppAccount) -> dict:
-    return _graph_get(account, f"{account.phone_number_id}/settings")
+def enable_calling_on_account(account: WhatsAppAccount) -> dict:
+    return enable_calling_on_sender(CrmSender(account))
 
 
-def get_call_permissions(account: WhatsAppAccount, user_wa_id: str) -> dict:
+def get_calling_settings(account_or_sender: WhatsAppAccount | ResolvedSender) -> dict:
+    sender = _as_sender(account_or_sender)
+    return _graph_get(sender, f"{sender.phone_number_id}/settings")
+
+
+def get_call_permissions(account_or_sender: WhatsAppAccount | ResolvedSender, user_wa_id: str) -> dict:
+    sender = _as_sender(account_or_sender)
     return _graph_get(
-        account,
-        f"{account.phone_number_id}/call_permissions",
+        sender,
+        f"{sender.phone_number_id}/call_permissions",
         params={"user_wa_id": user_wa_id},
     )
 
@@ -187,7 +211,7 @@ def call_permission_allows_start(permission_payload: dict) -> bool:
 
 
 def graph_call_action(
-    account: WhatsAppAccount,
+    account_or_sender: WhatsAppAccount | ResolvedSender,
     *,
     action: str,
     call_id: str | None = None,
@@ -195,6 +219,7 @@ def graph_call_action(
     sdp: str | None = None,
     sdp_type: str | None = None,
 ) -> dict:
+    sender = _as_sender(account_or_sender)
     payload: dict[str, Any] = {
         "messaging_product": "whatsapp",
         "action": action,
@@ -205,7 +230,7 @@ def graph_call_action(
         payload["to"] = "".join(c for c in to if c.isdigit())
     if sdp and sdp_type:
         payload["session"] = {"sdp_type": sdp_type, "sdp": sdp}
-    return _graph_post(account, f"{account.phone_number_id}/calls", payload)
+    return _graph_post(sender, f"{sender.phone_number_id}/calls", payload)
 
 
 def send_call_permission_request(
@@ -335,12 +360,8 @@ def process_calls_webhook_value(value: dict, *, waba_id: str | None = None) -> l
         logger.warning("WhatsApp calls webhook missing phone_number_id")
         return []
 
-    account = (
-        WhatsAppAccount.objects.select_related("company")
-        .filter(phone_number_id=phone_number_id)
-        .first()
-    )
-    if not account:
+    sender = resolve_whatsapp_sender(phone_number_id)
+    if not sender:
         logger.warning(
             "WhatsApp calls webhook: unknown phone_number_id=%s waba_id=%s",
             phone_number_id,
@@ -354,29 +375,39 @@ def process_calls_webhook_value(value: dict, *, waba_id: str | None = None) -> l
     for call_obj in value.get("calls") or []:
         if not isinstance(call_obj, dict):
             continue
-        call = _upsert_from_call_event(account, call_obj, peer_name=peer_name, raw_value=value)
+        call = _upsert_from_call_event(sender, call_obj, peer_name=peer_name, raw_value=value)
         if call:
             results.append(call)
 
     for status_obj in value.get("statuses") or []:
         if not isinstance(status_obj, dict):
             continue
-        call = _apply_status_event(account, status_obj, raw_value=value)
+        call = _apply_status_event(sender, status_obj, raw_value=value)
         if call:
             results.append(call)
 
     return results
 
 
+def _call_get_or_create_defaults(sender: ResolvedSender, direction, peer, peer_name, raw_value):
+    return {
+        "company": sender.company,
+        "direction": direction,
+        "status": WhatsAppCallStatus.RINGING,
+        "peer_phone": peer,
+        "peer_name": peer_name,
+        "started_at": timezone.now(),
+        "raw_payload": raw_value,
+    }
+
+
 def _upsert_from_call_event(
-    account: WhatsAppAccount,
+    sender: ResolvedSender,
     call_obj: dict,
     *,
     peer_name: str,
     raw_value: dict,
 ) -> Optional[WhatsAppCall]:
-    from integrations.services.whatsapp_client import ensure_client_for_whatsapp_phone
-
     meta_call_id = str(call_obj.get("id") or "").strip()
     if not meta_call_id:
         return None
@@ -399,18 +430,15 @@ def _upsert_from_call_event(
     sdp = (session.get("sdp") or "") if isinstance(session, dict) else ""
     sdp_type = ((session.get("sdp_type") or "") if isinstance(session, dict) else "").lower()
 
+    defaults = _call_get_or_create_defaults(sender, direction, peer, peer_name, raw_value)
+    defaults["started_at"] = _parse_ts(call_obj.get("timestamp")) or defaults["started_at"]
+    if isinstance(sender, CrmSender):
+        lookup = {"whatsapp_account": sender.account, "meta_call_id": meta_call_id}
+    else:
+        lookup = {"wa_inbox_number": sender.inbox_number, "meta_call_id": meta_call_id}
     call, _created = WhatsAppCall.objects.select_for_update().get_or_create(
-        whatsapp_account=account,
-        meta_call_id=meta_call_id,
-        defaults={
-            "company": account.company,
-            "direction": direction,
-            "status": WhatsAppCallStatus.RINGING,
-            "peer_phone": peer,
-            "peer_name": peer_name,
-            "started_at": _parse_ts(call_obj.get("timestamp")) or timezone.now(),
-            "raw_payload": raw_value,
-        },
+        **lookup,
+        defaults=defaults,
     )
 
     updates: list[str] = []
@@ -475,15 +503,8 @@ def _upsert_from_call_event(
     updates.append("raw_payload")
     updates.append("updated_at")
 
-    if not call.client_id and call.peer_phone:
-        client = ensure_client_for_whatsapp_phone(
-            account.company,
-            call.peer_phone,
-            integration_account=account.integration_account,
-        )
-        if client:
-            call.client = client
-            updates.append("client")
+    link_updates = sender.link_call(call, peer_phone=peer, peer_name=peer_name)
+    updates.extend(link_updates)
 
     call.save(update_fields=list(dict.fromkeys(updates)))
     if event == "terminate":
@@ -499,8 +520,9 @@ def _upsert_from_call_event(
                 reject_inbound_out_of_hours,
             )
 
-            if not is_within_call_hours(account):
-                reject_inbound_out_of_hours(call)
+            config = sender.calling_config
+            if not is_within_call_hours(config):
+                reject_inbound_out_of_hours(call, sender=sender)
                 call.refresh_from_db()
         except Exception:
             logger.exception("Out-of-hours inbound handling failed call=%s", call.id)
@@ -523,7 +545,7 @@ def _upsert_from_call_event(
 
 
 def _apply_status_event(
-    account: WhatsAppAccount,
+    sender: ResolvedSender,
     status_obj: dict,
     *,
     raw_value: dict,
@@ -531,11 +553,15 @@ def _apply_status_event(
     meta_call_id = str(status_obj.get("id") or status_obj.get("call_id") or "").strip()
     if not meta_call_id:
         return None
-    call = (
-        WhatsAppCall.objects.select_for_update()
-        .filter(whatsapp_account=account, meta_call_id=meta_call_id)
-        .first()
-    )
+    if isinstance(sender, CrmSender):
+        qs = WhatsAppCall.objects.select_for_update().filter(
+            whatsapp_account=sender.account, meta_call_id=meta_call_id
+        )
+    else:
+        qs = WhatsAppCall.objects.select_for_update().filter(
+            wa_inbox_number=sender.inbox_number, meta_call_id=meta_call_id
+        )
+    call = qs.first()
     if not call:
         return None
 

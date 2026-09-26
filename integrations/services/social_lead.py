@@ -153,6 +153,11 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
                     'client', 'converted_at', 'converted_by', 'assigned_to', 'updated_at'
                 ]
             )
+            from integrations.models import WhatsAppCall
+
+            WhatsAppCall.objects.filter(
+                social_conversation_id=conversation.id, client__isnull=True
+            ).update(client_id=existing.id)
             return {'client': existing, 'duplicate': True, 'assignee': existing.assigned_to}
 
     assignee = _resolve_assignee(
@@ -241,6 +246,12 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
             'client', 'assigned_to', 'converted_at', 'converted_by', 'updated_at'
         ]
     )
+
+    from integrations.models import WhatsAppCall
+
+    WhatsAppCall.objects.filter(
+        social_conversation_id=conversation.id, client__isnull=True
+    ).update(client_id=client.id)
 
     _notify_after_commit(conversation, client, assignee, actor)
 

@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 from django.contrib.auth import get_user_model
 from companies.models import Company
 from .encryption import encrypt_token, decrypt_token
@@ -284,7 +285,39 @@ class OAuthState(models.Model):
         return f"state={self.state[:8]}... account={self.account_id}"
 
 
-class WhatsAppAccount(models.Model):
+class WhatsAppCallingConfig(models.Model):
+    """Shared WhatsApp Cloud Calling settings for CRM and inbox numbers."""
+
+    calling_enabled = models.BooleanField(
+        default=False,
+        help_text="Whether WhatsApp Cloud Calling is enabled for this phone number",
+    )
+    call_hours_enabled = models.BooleanField(
+        default=False,
+        help_text="When true, enforce weekly call hours (synced to Meta call_hours when possible).",
+    )
+    call_hours_timezone = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="IANA timezone for call hours (e.g. Asia/Baghdad).",
+    )
+    call_hours_weekly = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Per-day schedule: {monday: {closed, open, close}, ...} times HH:MM.",
+    )
+    out_of_hours_message = models.TextField(
+        blank=True,
+        default="",
+        help_text="Text sent to the customer when an inbound call arrives outside call hours.",
+    )
+
+    class Meta:
+        abstract = True
+
+
+class WhatsAppAccount(WhatsAppCallingConfig):
     """
     جدول حسابات واتساب (Embedded Signup Flow).
     كل صف = رقم واتساب واحد مرتبط بـ tenant (company).
@@ -338,30 +371,6 @@ class WhatsAppAccount(models.Model):
         blank=True,
         related_name='whatsapp_accounts',
         help_text="حساب التكامل المرتبط (من OAuth)",
-    )
-    calling_enabled = models.BooleanField(
-        default=False,
-        help_text="Whether WhatsApp Cloud Calling is enabled for this phone number",
-    )
-    call_hours_enabled = models.BooleanField(
-        default=False,
-        help_text="When true, enforce weekly call hours (synced to Meta call_hours when possible).",
-    )
-    call_hours_timezone = models.CharField(
-        max_length=64,
-        blank=True,
-        default="",
-        help_text="IANA timezone for call hours (e.g. Asia/Baghdad).",
-    )
-    call_hours_weekly = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text="Per-day schedule: {monday: {closed, open, close}, ...} times HH:MM.",
-    )
-    out_of_hours_message = models.TextField(
-        blank=True,
-        default="",
-        help_text="Text sent to the customer when an inbound call arrives outside call hours.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1487,6 +1496,22 @@ class WhatsAppCall(models.Model):
         WhatsAppAccount,
         on_delete=models.CASCADE,
         related_name="calls",
+        null=True,
+        blank=True,
+    )
+    wa_inbox_number = models.ForeignKey(
+        "WhatsAppInboxNumber",
+        on_delete=models.CASCADE,
+        related_name="calls",
+        null=True,
+        blank=True,
+    )
+    social_conversation = models.ForeignKey(
+        "SocialConversation",
+        on_delete=models.SET_NULL,
+        related_name="whatsapp_calls",
+        null=True,
+        blank=True,
     )
     meta_call_id = models.CharField(max_length=256, db_index=True)
     direction = models.CharField(
@@ -1549,11 +1574,26 @@ class WhatsAppCall(models.Model):
             models.Index(fields=["company", "-created_at"]),
             models.Index(fields=["company", "status"]),
             models.Index(fields=["whatsapp_account", "status"]),
+            models.Index(fields=["wa_inbox_number", "status"]),
+            models.Index(fields=["social_conversation", "-created_at"]),
         ]
         constraints = [
+            models.CheckConstraint(
+                check=(
+                    Q(whatsapp_account__isnull=False, wa_inbox_number__isnull=True)
+                    | Q(whatsapp_account__isnull=True, wa_inbox_number__isnull=False)
+                ),
+                name="wa_call_exactly_one_sender",
+            ),
             models.UniqueConstraint(
                 fields=["whatsapp_account", "meta_call_id"],
+                condition=Q(whatsapp_account__isnull=False),
                 name="uniq_wa_call_account_meta_id",
+            ),
+            models.UniqueConstraint(
+                fields=["wa_inbox_number", "meta_call_id"],
+                condition=Q(wa_inbox_number__isnull=False),
+                name="uniq_wa_call_inbox_meta_id",
             ),
         ]
 
@@ -1581,6 +1621,13 @@ class WhatsAppCallErrorLog(models.Model):
     )
     whatsapp_account = models.ForeignKey(
         WhatsAppAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="call_error_logs",
+    )
+    wa_inbox_number = models.ForeignKey(
+        "WhatsAppInboxNumber",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -1753,7 +1800,7 @@ class MetaInboxConnection(models.Model):
             self.page_access_token = None
 
 
-class WhatsAppInboxNumber(models.Model):
+class WhatsAppInboxNumber(WhatsAppCallingConfig):
     """
     WhatsApp Cloud API number used only for the Omni-Channel Inbox.
 

@@ -45,7 +45,9 @@ from .views import (
     social_unread_count,
     social_send_message,
     social_send_media,
+    social_send_location,
     social_send_template,
+    social_delete_conversation,
     social_send_window,
     social_message_attachment,
     social_convert_conversation,
@@ -215,6 +217,7 @@ urlpatterns = [
     path('inbox/unread-count/', social_unread_count, name='social_unread_count'),
     path('inbox/send/', social_send_message, name='social_send_message'),
     path('inbox/send-media/', social_send_media, name='social_send_media'),
+    path('inbox/send-location/', social_send_location, name='social_send_location'),
     path('inbox/send-template/', social_send_template, name='social_send_template'),
     path('inbox/window/', social_send_window, name='social_send_window'),
     path(
@@ -231,6 +234,11 @@ urlpatterns = [
         'inbox/conversations/<int:pk>/convert/',
         social_convert_conversation,
         name='social_convert_conversation',
+    ),
+    path(
+        'inbox/conversations/<int:pk>/',
+        social_delete_conversation,
+        name='social_delete_conversation',
     ),
     path(
         'inbox/messages/<int:pk>/attachment/',

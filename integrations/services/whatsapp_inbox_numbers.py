@@ -153,6 +153,7 @@ def serialize_inbox_number(row: WhatsAppInboxNumber) -> dict:
         'display_phone_number': row.display_phone_number,
         'waba_id': row.waba_id,
         'status': row.status,
+        'calling_enabled': bool(row.calling_enabled),
         'error_message': row.error_message,
         'last_webhook_at': row.last_webhook_at,
         'created_at': row.created_at,

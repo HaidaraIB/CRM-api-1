@@ -16,11 +16,13 @@ from .campaign_requests import (
 )
 from .social_inbox import (
     social_convert_conversation,
+    social_delete_conversation,
     social_conversation_messages,
     social_inbox_whatsapp_number_detail,
     social_inbox_whatsapp_numbers,
     social_lead_messages,
     social_message_attachment,
+    social_send_location,
     social_send_media,
     social_send_message,
     social_send_template,

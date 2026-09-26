@@ -15,7 +15,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.utils import timezone
 
-from integrations.models import WhatsAppAccount, WhatsAppCall, WhatsAppCallStatus
+from integrations.models import WhatsAppAccount, WhatsAppCall, WhatsAppCallStatus, WhatsAppInboxNumber
+
+CallingConfig = WhatsAppAccount | WhatsAppInboxNumber
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ def default_out_of_hours_message(language: str | None = None) -> str:
     return DEFAULT_OUT_OF_HOURS_MESSAGE_EN
 
 
-def out_of_hours_message_text(account: WhatsAppAccount, language: str | None = None) -> str:
+def out_of_hours_message_text(account: CallingConfig, language: str | None = None) -> str:
     text = (account.out_of_hours_message or "").strip()
     if text:
         return text
@@ -142,7 +144,7 @@ def _parse_hhmm(hhmm: str) -> tuple[int, int]:
     return int(parts[0]), int(parts[1])
 
 
-def resolve_call_hours_timezone(account: WhatsAppAccount) -> str:
+def resolve_call_hours_timezone(account: CallingConfig) -> str:
     tz = (account.call_hours_timezone or "").strip()
     if tz:
         return tz
@@ -150,7 +152,7 @@ def resolve_call_hours_timezone(account: WhatsAppAccount) -> str:
     return (company_tz or "UTC").strip() or "UTC"
 
 
-def is_within_call_hours(account: WhatsAppAccount, *, when: Optional[datetime] = None) -> bool:
+def is_within_call_hours(account: CallingConfig, *, when: Optional[datetime] = None) -> bool:
     """
     True if calls are allowed now.
     When call_hours_enabled is False → always True (24/7).
@@ -210,14 +212,19 @@ def build_meta_call_hours_payload(account: WhatsAppAccount) -> dict:
     return payload
 
 
-def sync_call_hours_to_meta(account: WhatsAppAccount) -> dict:
+def sync_call_hours_to_meta(account: CallingConfig) -> dict:
+    from integrations.models import WhatsAppInboxNumber
     from integrations.services.whatsapp_calling import (
         WhatsAppCallingError,
+        _as_sender,
         _graph_post,
-        is_seed_whatsapp_account,
     )
+    from integrations.services.whatsapp_sender import CrmSender, InboxSender, is_seed_sender
 
-    if is_seed_whatsapp_account(account):
+    sender = InboxSender(account) if isinstance(account, WhatsAppInboxNumber) else CrmSender(account)
+    resolved = _as_sender(sender)
+
+    if is_seed_sender(resolved):
         return {"success": True, "seed": True, "call_hours": build_meta_call_hours_payload(account)}
 
     body = {"calling": {"call_hours": build_meta_call_hours_payload(account)}}
@@ -227,20 +234,22 @@ def sync_call_hours_to_meta(account: WhatsAppAccount) -> dict:
         ch["status"] = "DISABLED"
         ch.pop("weekly_operating_hours", None)
     try:
-        return _graph_post(account, f"{account.phone_number_id}/settings", body)
+        return _graph_post(resolved, f"{resolved.phone_number_id}/settings", body)
     except WhatsAppCallingError:
-        logger.exception("Failed to sync call_hours to Meta account=%s", account.id)
+        logger.exception("Failed to sync call_hours to Meta sender=%s", account.id)
         raise
 
 
-def send_plain_whatsapp_text(account: WhatsAppAccount, *, to: str, body: str) -> dict:
-    from integrations.services.whatsapp_calling import _graph_post, is_seed_whatsapp_account
+def send_plain_whatsapp_text(account_or_sender, *, to: str, body: str) -> dict:
+    from integrations.services.whatsapp_calling import _as_sender, _graph_post
+    from integrations.services.whatsapp_sender import is_seed_sender
 
+    sender = _as_sender(account_or_sender)
     text = (body or "").strip()[:4096]
     to_digits = "".join(c for c in (to or "") if c.isdigit())
     if not text or not to_digits:
         return {}
-    if is_seed_whatsapp_account(account):
+    if is_seed_sender(sender):
         return {"success": True, "seed": True}
     payload = {
         "messaging_product": "whatsapp",
@@ -249,10 +258,10 @@ def send_plain_whatsapp_text(account: WhatsAppAccount, *, to: str, body: str) ->
         "type": "text",
         "text": {"preview_url": False, "body": text},
     }
-    return _graph_post(account, f"{account.phone_number_id}/messages", payload)
+    return _graph_post(sender, f"{sender.phone_number_id}/messages", payload)
 
 
-def reject_inbound_out_of_hours(call: WhatsAppCall) -> WhatsAppCall:
+def reject_inbound_out_of_hours(call: WhatsAppCall, *, sender=None) -> WhatsAppCall:
     """Reject ringing inbound call and notify customer with OOH message."""
     from integrations.services.whatsapp_calling import (
         WhatsAppCallingError,
@@ -260,18 +269,23 @@ def reject_inbound_out_of_hours(call: WhatsAppCall) -> WhatsAppCall:
         graph_call_action,
     )
 
-    account = call.whatsapp_account
+    from integrations.services.whatsapp_sender import sender_for_call
+
+    resolved = sender or sender_for_call(call)
+    if not resolved:
+        return call
+    config = resolved.calling_config
     if call.status not in (WhatsAppCallStatus.RINGING,):
         return call
 
     try:
-        graph_call_action(account, action="reject", call_id=call.meta_call_id)
+        graph_call_action(resolved, action="reject", call_id=call.meta_call_id)
     except WhatsAppCallingError:
         logger.warning("OOH Graph reject failed call=%s", call.id, exc_info=True)
 
     try:
         lang = "ar"
-        company = getattr(account, "company", None)
+        company = getattr(config, "company", None) or call.company
         if company is not None:
             from accounts.models import Role, User
 
@@ -283,9 +297,9 @@ def reject_inbound_out_of_hours(call: WhatsAppCall) -> WhatsAppCall:
             if owner and getattr(owner, "language", None):
                 lang = owner.language
         send_plain_whatsapp_text(
-            account,
+            resolved,
             to=call.peer_phone,
-            body=out_of_hours_message_text(account, lang),
+            body=out_of_hours_message_text(config, lang),
         )
     except Exception:
         logger.exception("OOH message send failed call=%s", call.id)
@@ -307,7 +321,8 @@ def reject_inbound_out_of_hours(call: WhatsAppCall) -> WhatsAppCall:
             agent=call.agent,
             client=call.client,
             peer_phone=call.peer_phone,
-            whatsapp_account=account,
+            whatsapp_account=call.whatsapp_account,
+            wa_inbox_number=call.wa_inbox_number,
             whatsapp_call=call,
         )
     except Exception:
@@ -316,13 +331,18 @@ def reject_inbound_out_of_hours(call: WhatsAppCall) -> WhatsAppCall:
     return call
 
 
-def serialize_call_hours(account: WhatsAppAccount) -> dict[str, Any]:
+def serialize_call_hours(account: CallingConfig) -> dict[str, Any]:
+    from integrations.models import WhatsAppInboxNumber
+
+    is_inbox = isinstance(account, WhatsAppInboxNumber)
     return {
-        "whatsapp_account_id": account.id,
+        "whatsapp_account_id": account.id if not is_inbox else None,
+        "wa_inbox_number_id": account.id if is_inbox else None,
         "enabled": bool(account.call_hours_enabled),
         "timezone": resolve_call_hours_timezone(account),
         "weekly": normalize_weekly_schedule(account.call_hours_weekly),
         "out_of_hours_message": account.out_of_hours_message or "",
         "default_out_of_hours_message": DEFAULT_OUT_OF_HOURS_MESSAGE,
         "within_hours_now": is_within_call_hours(account),
+        "calling_enabled": bool(account.calling_enabled),
     }

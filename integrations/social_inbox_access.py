@@ -115,5 +115,7 @@ def user_can_convert_social_conversation(user) -> bool:
 
 
 def user_can_delete_social_history(user) -> bool:
-    """Owner/admin only: message history is a record, staff may not erase it."""
-    return bool(_is_authenticated(user) and user.is_admin())
+    """Company owner only: inbox history is a record; staff may not erase it."""
+    from accounts.two_factor_policy import is_company_owner
+
+    return bool(_is_authenticated(user) and is_company_owner(user))
