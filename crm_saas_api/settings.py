@@ -236,6 +236,7 @@ INSTALLED_APPS = [
     "integrations",
     "notifications",
     "support",
+    "support_chat",
     "platform_content",
     "demo_bookings",
     "tenant_chat",
@@ -724,6 +725,13 @@ REALTIME_ENABLED = os.getenv("REALTIME_ENABLED", "").strip().lower() in (
     "true",
     "yes",
 )
+
+# Minutes a support-chat message must stay unread before the next cron pass
+# may email about it. Cron runs every 4 hours (see crontab_complete.txt #9c).
+SUPPORT_CHAT_EMAIL_DELAY_MINUTES = int(os.getenv("SUPPORT_CHAT_EMAIL_DELAY_MINUTES", "15") or "15")
+
+# Super-admin panel base URL (support chat inbox links in email).
+ADMIN_PANEL_URL = os.getenv("ADMIN_PANEL_URL", "http://localhost:3001")
 
 # ============================================================================
 # Django Q2 Settings (for scheduled tasks)

@@ -560,3 +560,75 @@ def send_demo_booking_admin_notifications(booking, settings_obj):
         ):
             sent += 1
     return sent
+
+
+def send_support_chat_unread_to_owner(conversation) -> int:
+    """Send one unread reminder to the company owner (called by cron after delay)."""
+    from django.conf import settings
+
+    company = conversation.company
+    owner = getattr(company, "owner", None)
+    if owner is None or not (owner.email or "").strip():
+        return 0
+    lang = (getattr(owner, "language", None) or "en").lower()
+    if lang not in EMAIL_LANGUAGES:
+        lang = "en"
+    base = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
+    domain_slug = (getattr(company, "domain", None) or "").strip().lower().replace(" ", "-")
+    chat_url = f"{base}/{domain_slug}/support-center" if domain_slug else f"{base}/support-center"
+    if lang == "ar":
+        subject = "رسالة جديدة من فريق الدعم - LOOP CRM"
+    else:
+        subject = "New message from LOOP Support"
+    context = {
+        "greeting_name": owner.first_name or owner.username or ("مرحباً" if lang == "ar" else "there"),
+        "preview": (conversation.last_message_preview or "").strip() or "—",
+        "chat_url": chat_url,
+        "support_email": SMTPSettings.get_settings().from_email,
+    }
+    return 1 if _send_event_email(owner, subject, "support_chat_unread_owner", context, lang) else 0
+
+
+def send_support_chat_unread_to_superadmins(conversation) -> int:
+    """Notify super admins about an unread owner message in support chat."""
+    from accounts.models import User
+    from django.conf import settings
+
+    smtp_settings = SMTPSettings.get_settings()
+    if not smtp_settings.is_active:
+        return 0
+    company = conversation.company
+    company_name = getattr(company, "name", "") or "—"
+    owner = getattr(company, "owner", None)
+    owner_line = "—"
+    if owner:
+        owner_line = f"{owner.get_full_name().strip() or owner.username} <{owner.email}>"
+    admin_base = getattr(settings, "ADMIN_PANEL_URL", "http://localhost:3001").rstrip("/")
+    inbox_url = f"{admin_base}/support-chat?conversation={conversation.id}"
+    admins = User.objects.filter(is_superuser=True, is_active=True).exclude(email="")
+    sent = 0
+    seen = set()
+    for admin in admins:
+        em = (admin.email or "").strip().lower()
+        if not em or em in seen or em in SUPPORT_TICKET_SUPERADMIN_NOTIFY_SKIP_EMAILS:
+            continue
+        seen.add(em)
+        lang = (getattr(admin, "language", None) or "en").lower()
+        if lang not in EMAIL_LANGUAGES:
+            lang = "en"
+        if lang == "ar":
+            subject = f"رسالة دعم من {company_name} - LOOP CRM"
+        else:
+            subject = f"Support chat message from {company_name}"
+        context = {
+            "greeting_name": admin.first_name or admin.username
+            or ("مرحباً" if lang == "ar" else "there"),
+            "company_name": company_name,
+            "owner_line": owner_line,
+            "preview": (conversation.last_message_preview or "").strip() or "—",
+            "inbox_url": inbox_url,
+            "support_email": smtp_settings.from_email,
+        }
+        if _send_event_email(admin, subject, "support_chat_unread_admin", context, lang):
+            sent += 1
+    return sent

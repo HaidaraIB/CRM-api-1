@@ -34,7 +34,7 @@ from .presence import (
     record_presence,
     user_may_join_conversation,
 )
-from .publish import COMPANY_GROUP, USER_GROUP
+from .publish import COMPANY_GROUP, SUPPORT_INBOX_GROUP, USER_GROUP
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,8 @@ class SyncConsumer(AsyncWebsocketConsumer):
         company_id = getattr(user, "company_id", None)
         if company_id:
             self.group_names.append(COMPANY_GROUP.format(company_id))
+        if await database_sync_to_async(lambda u: u.is_super_admin())(user):
+            self.group_names.append(SUPPORT_INBOX_GROUP)
 
         # Conversations this connection has been admitted to. Empty until the
         # client subscribes and the server verifies access — this set, not the

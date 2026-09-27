@@ -29,7 +29,12 @@ import logging
 from django.core.cache import cache
 from django.db import transaction
 
-from sync.version import company_slice_key, conversation_seq_key, user_seq_key
+from sync.version import (
+    SUPPORT_INBOX_SEQ_KEY,
+    company_slice_key,
+    conversation_seq_key,
+    user_seq_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,7 @@ logger = logging.getLogger(__name__)
 COMPANY_GROUP = "company.{}"
 USER_GROUP = "user.{}"
 CONVERSATION_GROUP = "conversation.{}"
+SUPPORT_INBOX_GROUP = "support.inbox"
 
 # Message type on the channel layer; maps to SyncConsumer.sync_event.
 EVENT_TYPE = "sync.event"
@@ -154,6 +160,18 @@ def publish_company_slice(slice_name: str, company_id) -> None:
     _on_commit(_publish)
 
 
+def publish_support_inbox() -> None:
+    """Announce that the super-admin support inbox moved."""
+    if not realtime_enabled():
+        return
+
+    def _publish():
+        version = cache.get(SUPPORT_INBOX_SEQ_KEY) or 0
+        _send(SUPPORT_INBOX_GROUP, "support_inbox", int(version))
+
+    _on_commit(_publish)
+
+
 def publish_user(user_id) -> None:
     """Announce that something changed for one user (notifications, read state)."""
     if not user_id or not realtime_enabled():
@@ -239,6 +257,8 @@ def on_counter_changed(kind: str, **details) -> None:
         publish_user(details.get("user_id"))
     elif kind == "conversation":
         publish_conversation(details.get("conversation_id"))
+    elif kind == "support_inbox":
+        publish_support_inbox()
 
 
 def _on_commit(fn) -> None:

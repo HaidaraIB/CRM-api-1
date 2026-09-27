@@ -33,9 +33,17 @@ from integrations.models import (
 )
 from notifications.models import Notification
 from platform_content.models import NewsPost, UserNewsReadState
+from support_chat.models import SupportConversation, SupportMessage
 from tenant_chat.models import ChatConversationReadState, ChatMessage
 
-from .version import bump_company_slice, bump_conversation, bump_global, bump_user
+from .version import (
+    bump_company_slice,
+    bump_conversation,
+    bump_global,
+    bump_support_conversation,
+    bump_support_inbox,
+    bump_user,
+)
 
 
 # --- user scope: notifications_unread, pbx_screen_pop, news_unread -------------
@@ -95,6 +103,25 @@ def lead_arrival_recipients_changed(sender, instance, action, **kwargs):
     """
     if action in ("post_add", "post_remove", "post_clear"):
         bump_company_slice("arrivals", getattr(instance, "company_id", None))
+
+
+@receiver(post_save, sender=SupportMessage)
+@receiver(post_delete, sender=SupportMessage)
+def support_chat_message_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    conversation = instance.conversation
+    bump_support_conversation(conversation.id)
+    bump_company_slice("support_chat", getattr(conversation, "company_id", None))
+
+
+@receiver(post_save, sender=SupportConversation)
+def support_conversation_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    bump_support_conversation(instance.id)
+    bump_support_inbox()
+    bump_company_slice("support_chat", instance.company_id)
 
 
 @receiver(post_save, sender=ChatMessage)

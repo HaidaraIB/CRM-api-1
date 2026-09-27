@@ -141,6 +141,15 @@ from subscriptions.views import (
 )
 from integrations import urls as integrations_urls
 from support.views import SupportTicketViewSet
+from support_chat.views import (
+    SupportChatAdminUnreadCountView,
+    SupportChatConversationView,
+    SupportChatMarkReadView,
+    SupportChatMessageAttachmentView,
+    SupportChatMessagesView,
+    SupportConversationAdminViewSet,
+)
+from support_chat.views.admin import SupportChatAdminMessageAttachmentView
 from demo_bookings.views import (
     DemoBookingAdminViewSet,
     DemoBookingBlockedDateViewSet,
@@ -271,6 +280,11 @@ router.register(
     basename="tenant_chat_conversation",
 )
 router.register(
+    r"support-chat-admin/conversations",
+    SupportConversationAdminViewSet,
+    basename="support_chat_admin_conversation",
+)
+router.register(
     r"company-library",
     CompanyLibraryFileViewSet,
     basename="company_library",
@@ -321,6 +335,36 @@ v1_patterns = [
         "tenant-chat/messages/<int:pk>/attachment/",
         TenantChatMessageAttachmentView.as_view(),
         name="tenant_chat_message_attachment",
+    ),
+    path(
+        "support-chat/conversation/",
+        SupportChatConversationView.as_view(),
+        name="support_chat_conversation",
+    ),
+    path(
+        "support-chat/messages/",
+        SupportChatMessagesView.as_view(),
+        name="support_chat_messages",
+    ),
+    path(
+        "support-chat/mark-read/",
+        SupportChatMarkReadView.as_view(),
+        name="support_chat_mark_read",
+    ),
+    path(
+        "support-chat/messages/<int:pk>/attachment/",
+        SupportChatMessageAttachmentView.as_view(),
+        name="support_chat_message_attachment",
+    ),
+    path(
+        "support-chat-admin/unread-count/",
+        SupportChatAdminUnreadCountView.as_view(),
+        name="support_chat_admin_unread_count",
+    ),
+    path(
+        "support-chat-admin/messages/<int:pk>/attachment/",
+        SupportChatAdminMessageAttachmentView.as_view(),
+        name="support_chat_admin_message_attachment",
     ),
     path(
         "company-library/<int:pk>/download/",

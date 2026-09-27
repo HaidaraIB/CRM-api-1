@@ -24,6 +24,8 @@ from notifications.models import Notification, NotificationType
 from notifications.views import exclude_inbox_noise_notifications
 from platform_content.models import NewsPost, UserNewsReadState
 from settings.models import SystemSettings
+from accounts.two_factor_policy import is_company_owner
+from support_chat.models import SupportConversation, SupportMessage
 from tenant_chat.authorization import chat_role_bucket
 from tenant_chat.models import ChatConversation, ChatConversationReadState, ChatMessage
 def whatsapp_unread_for_user(user):
@@ -120,6 +122,26 @@ def whatsapp_calls_pending_for_user(user):
     for call in mine:
         seen.add(call.id)
     return len(seen)
+
+
+def support_chat_unread_for_user(user) -> int:
+    if not user or not getattr(user, "is_authenticated", False):
+        return 0
+    if not is_company_owner(user):
+        return 0
+    company_id = getattr(user, "company_id", None)
+    if not company_id:
+        return 0
+    try:
+        conv = SupportConversation.objects.get(company_id=company_id)
+    except SupportConversation.DoesNotExist:
+        return 0
+    cursor = conv.tenant_last_read_message_id or 0
+    return SupportMessage.objects.filter(
+        conversation_id=conv.id,
+        side=SupportMessage.Side.SUPPORT,
+        id__gt=cursor,
+    ).count()
 
 
 def tenant_chat_unread_for_user(user) -> int:

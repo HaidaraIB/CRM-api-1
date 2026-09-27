@@ -63,7 +63,11 @@ COMPANY_SLICE_PREFIXES = {
     "arrivals": "sync_seq_company_arrivals_v1",  # LeadArrival + notified_users
     "tenant_chat": "sync_seq_company_tchat_v1",  # ChatMessage
     "inbox": "sync_seq_company_inbox_v1",  # SocialMessage + SocialConversation
+    "support_chat": "sync_seq_company_support_chat_v1",  # SupportMessage (owner)
 }
+
+SUPPORT_CONVERSATION_SEQ_PREFIX = "sync_seq_support_conversation_v1"
+SUPPORT_INBOX_SEQ_KEY = "sync_seq_support_inbox_v1"
 
 
 def company_seq_key(company_id: int) -> str:
@@ -80,6 +84,10 @@ def user_seq_key(user_id: int) -> str:
 
 def conversation_seq_key(conversation_id: int) -> str:
     return f"{CONVERSATION_SEQ_PREFIX}:{conversation_id}"
+
+
+def support_conversation_seq_key(conversation_id: int) -> str:
+    return f"{SUPPORT_CONVERSATION_SEQ_PREFIX}:{conversation_id}"
 
 
 def normalize_etag(raw: str) -> str:
@@ -176,6 +184,38 @@ def bump_conversation(conversation_id) -> None:
         # one ChatMessage bumps, which is why a "seen" tick used to wait for the
         # next message to arrive.
         _notify("conversation", conversation_id=conversation_id)
+
+
+def bump_support_conversation(conversation_id) -> None:
+    """Owner↔support thread contents or read cursors changed."""
+    if conversation_id:
+        _bump(support_conversation_seq_key(conversation_id))
+        bump_support_inbox()
+
+
+def bump_support_inbox() -> None:
+    """Super-admin shared inbox list changed."""
+    _bump(SUPPORT_INBOX_SEQ_KEY)
+    _notify("support_inbox")
+
+
+def support_conversation_token(conversation_id, viewer_key: str, variant: str = "") -> str:
+    """
+    ETag token for one support thread. ``viewer_key`` distinguishes tenant vs support
+    read-receipt asymmetry (e.g. ``tenant:{user_id}`` or ``support``).
+    """
+    seq = cache.get(support_conversation_seq_key(conversation_id)) or 0
+    bucket = int(time.time() // SAFETY_BUCKET_SECONDS)
+    digest = hashlib.md5(variant.encode("utf-8")).hexdigest()[:8] if variant else "0"
+    return f"sc.{conversation_id}.{viewer_key}.{seq}.{digest}.{bucket}"
+
+
+def support_inbox_token(variant: str = "") -> str:
+    """ETag token for the super-admin support inbox list."""
+    seq = cache.get(SUPPORT_INBOX_SEQ_KEY) or 0
+    bucket = int(time.time() // SAFETY_BUCKET_SECONDS)
+    digest = hashlib.md5(variant.encode("utf-8")).hexdigest()[:8] if variant else "0"
+    return f"scinbox.{seq}.{digest}.{bucket}"
 
 
 def conversation_token(conversation_id, user_id, variant: str = "") -> str:

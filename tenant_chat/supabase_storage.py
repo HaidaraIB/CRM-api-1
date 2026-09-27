@@ -80,13 +80,22 @@ def encode_object_path(object_key: str) -> str:
     return "/".join(quote(part, safe="") for part in key.split("/") if part)
 
 
-def build_object_key(company_id: int, message_id: int, filename_hint: str) -> str:
+def build_object_key(
+    company_id: int,
+    message_id: int,
+    filename_hint: str,
+    path_prefix: str | None = None,
+) -> str:
     base = os.path.basename(filename_hint) or "file"
     base = re.sub(r"[^a-zA-Z0-9._-]+", "_", base).strip("._") or "file"
     if len(base) > 120:
         root, ext = os.path.splitext(base)
         base = root[: 120 - len(ext)] + ext
-    return f"company_{company_id}/m{message_id}_{uuid.uuid4().hex[:10]}_{base}"
+    segment = f"company_{company_id}/m{message_id}_{uuid.uuid4().hex[:10]}_{base}"
+    if path_prefix:
+        prefix = path_prefix.strip().strip("/")
+        return f"{prefix}/{segment}" if prefix else segment
+    return segment
 
 
 def upload_bytes(object_key: str, data: bytes, content_type: str) -> None:

@@ -136,7 +136,7 @@ def validate_uploaded_file(uploaded: UploadedFile) -> tuple[str, str, int]:
     kind = infer_attachment_kind(raw_ct, name)
     if not kind:
         raise ValueError(
-            f"File type '{raw_ct or 'unknown'}' is not allowed for team chat attachments."
+            f"File type '{raw_ct or 'unknown'}' is not allowed for chat attachments."
         )
     max_b = _kind_max_bytes(kind)
     if size > max_b:
@@ -163,9 +163,9 @@ def validate_uploaded_file(uploaded: UploadedFile) -> tuple[str, str, int]:
             if not ct or ct not in allowed:
                 raise ValueError("Could not determine file type; try a different format.")
         else:
-            raise ValueError(f"File type '{raw_ct or 'unknown'}' is not allowed for team chat attachments.")
+            raise ValueError(f"File type '{raw_ct or 'unknown'}' is not allowed for chat attachments.")
     else:
-        raise ValueError(f"File type '{raw_ct}' is not allowed for team chat attachments.")
+        raise ValueError(f"File type '{raw_ct}' is not allowed for chat attachments.")
 
     return kind, ct, size
 
