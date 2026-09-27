@@ -1,6 +1,8 @@
 """
 Security tests: tenant isolation, rate limiting, subscription enforcement.
 """
+import logging
+
 import pytest
 from rest_framework import status
 
@@ -107,6 +109,29 @@ class TestRateLimiting:
             status.HTTP_401_UNAUTHORIZED,
             status.HTTP_400_BAD_REQUEST,
         )
+
+    def test_throttled_request_logs_user_identity(
+        self, authenticated_admin, admin_user, settings, caplog
+    ):
+        rates = dict(settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_RATES") or {})
+        settings.REST_FRAMEWORK = {
+            **settings.REST_FRAMEWORK,
+            "DEFAULT_THROTTLE_RATES": {**rates, "user": "1/minute"},
+        }
+
+        with caplog.at_level(logging.WARNING, logger="crm_saas_api.exception_handler"):
+            first = authenticated_admin.get("/api/v1/clients/")
+            assert first.status_code == status.HTTP_200_OK
+            second = authenticated_admin.get("/api/v1/clients/")
+            assert second.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+        throttled_lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "Throttled request" in record.getMessage()
+        ]
+        assert throttled_lines
+        assert any(f"user_id={admin_user.id}" in line for line in throttled_lines)
 
 
 @pytest.mark.django_db

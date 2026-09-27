@@ -63,6 +63,7 @@ def test_field_visit_without_lead_location_products_company(authenticated_admin,
             "visit_datetime": timezone.now().isoformat(),
             "employee_latitude": "33.315200",
             "employee_longitude": "44.366100",
+            "employee_location_accuracy": 12.5,
         },
         format="json",
     )

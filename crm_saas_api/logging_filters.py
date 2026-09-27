@@ -19,6 +19,8 @@ class ImportantOnlyFilter(logging.Filter):
             # Keep security/auth warnings
             if "unauthorized" in msg or "forbidden" in msg or "invalid" in msg and "key" in msg:
                 return True
+            if "throttled request" in msg:
+                return True
         return False
 
 
@@ -70,6 +72,7 @@ class SkipNoiseFilter(logging.Filter):
         '"PATCH ',
         '"DELETE ',
         '"OPTIONS ',
+        "Too Many Requests:",
         "Watching for file changes",
         "autoreload ",
         "Firebase Admin SDK initialized",

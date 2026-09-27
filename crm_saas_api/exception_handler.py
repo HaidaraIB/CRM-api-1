@@ -22,6 +22,7 @@ from django.core.exceptions import PermissionDenied
 
 from crm_saas_api.responses import error_response
 from accounts.exceptions import AccountLocked, LoginVerificationRequired
+from accounts.services import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,37 @@ def _looks_like_business_code(value: str) -> bool:
     return value.replace("_", "").isalnum()
 
 
+def _log_throttled_request(exc, context):
+    request = context.get("request")
+    if request is None:
+        return
+
+    path = getattr(request, "path", "") or ""
+    ip = get_client_ip(request) or "unknown"
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_authenticated", False):
+        user_id = user.pk
+        username = getattr(user, "username", "") or getattr(user, "email", "") or ""
+        company_id = getattr(user, "company_id", None)
+    else:
+        user_id = "anon"
+        username = ""
+        company_id = None
+
+    parts = [
+        f"path={path}",
+        f"user_id={user_id}",
+        f"username={username}",
+        f"company_id={company_id}",
+        f"ip={ip}",
+    ]
+    wait = getattr(exc, "wait", None)
+    if wait is not None:
+        parts.append(f"wait={wait}")
+
+    logger.warning("Throttled request: %s", " ".join(parts))
+
+
 def custom_exception_handler(exc, context):
     """
     Wrap DRF's default handler output in a unified envelope.
@@ -102,6 +134,9 @@ def custom_exception_handler(exc, context):
 
     if response is None:
         return None
+
+    if response.status_code == http_status.HTTP_429_TOO_MANY_REQUESTS:
+        _log_throttled_request(exc, context)
 
     code = STATUS_CODE_MAP.get(response.status_code, "error")
     details = None

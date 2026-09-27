@@ -1761,12 +1761,14 @@ class ClientFieldVisitSerializer(serializers.ModelSerializer):
                     except Client.DoesNotExist:
                         client = None
 
+            # Write-only; not stored on ClientFieldVisit — always strip before create.
+            accuracy_raw = data.pop("employee_location_accuracy", None)
+
             if (
                 client
                 and client.location_latitude is not None
                 and client.location_longitude is not None
             ):
-                accuracy_raw = data.pop("employee_location_accuracy", None)
                 try:
                     accuracy_m = (
                         float(accuracy_raw) if accuracy_raw is not None else None
