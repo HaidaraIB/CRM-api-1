@@ -113,6 +113,8 @@ class TestRateLimiting:
     def test_throttled_request_logs_user_identity(
         self, authenticated_admin, admin_user, settings, caplog
     ):
+        from django.core.cache import cache
+        cache.clear()
         rates = dict(settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_RATES") or {})
         settings.REST_FRAMEWORK = {
             **settings.REST_FRAMEWORK,
@@ -132,6 +134,43 @@ class TestRateLimiting:
         ]
         assert throttled_lines
         assert any(f"user_id={admin_user.id}" in line for line in throttled_lines)
+
+    def test_throttled_request_log_is_deduped_per_path(self, admin_user, caplog):
+        from django.core.cache import cache
+        from rest_framework.exceptions import Throttled
+        from rest_framework.test import APIRequestFactory
+        from crm_saas_api.exception_handler import _log_throttled_request
+
+        cache.clear()
+        factory = APIRequestFactory()
+
+        def throttle(path):
+            request = factory.get(path)
+            request.user = admin_user
+            _log_throttled_request(Throttled(wait=5), {"request": request})
+
+        def lines():
+            return [
+                r.getMessage()
+                for r in caplog.records
+                if "Throttled request" in r.getMessage()
+            ]
+
+        with caplog.at_level(logging.WARNING, logger="crm_saas_api.exception_handler"):
+            for _ in range(5):
+                throttle("/api/integrations/whatsapp/session-window/")
+            assert len(lines()) == 1
+
+            throttle("/api/v1/clients/")
+            assert len(lines()) == 2
+            assert "path=/api/v1/clients/" in lines()[-1]
+
+            cache.delete(
+                f"throttle_log:u{admin_user.pk}:/api/integrations/whatsapp/session-window/"
+            )
+            throttle("/api/integrations/whatsapp/session-window/")
+            assert len(lines()) == 3
+            assert "suppressed=4" in lines()[-1]
 
 
 @pytest.mark.django_db

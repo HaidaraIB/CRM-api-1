@@ -15,6 +15,7 @@ Normalises every error response to a consistent envelope format:
     }
 """
 import logging
+from django.core.cache import cache
 from rest_framework.views import exception_handler
 from rest_framework import status as http_status
 from django.http import Http404
@@ -25,6 +26,8 @@ from accounts.exceptions import AccountLocked, LoginVerificationRequired
 from accounts.services import get_client_ip
 
 logger = logging.getLogger(__name__)
+
+THROTTLE_LOG_WINDOW_SECONDS = 60
 
 STATUS_CODE_MAP = {
     400: "bad_request",
@@ -101,6 +104,24 @@ def _log_throttled_request(exc, context):
     wait = getattr(exc, "wait", None)
     if wait is not None:
         parts.append(f"wait={wait}")
+
+    # A looping client can hit 429 hundreds of times a second; log once per window.
+    ident = f"u{user_id}" if user_id != "anon" else f"ip{ip}"
+    dedupe_key = f"throttle_log:{ident}:{path}"
+    suppressed_key = f"{dedupe_key}:suppressed"
+    try:
+        if not cache.add(dedupe_key, 1, THROTTLE_LOG_WINDOW_SECONDS):
+            try:
+                cache.incr(suppressed_key)
+            except ValueError:
+                cache.set(suppressed_key, 1, THROTTLE_LOG_WINDOW_SECONDS * 10)
+            return
+        suppressed = cache.get(suppressed_key) or 0
+        if suppressed:
+            cache.delete(suppressed_key)
+            parts.append(f"suppressed={suppressed}")
+    except Exception:
+        pass
 
     logger.warning("Throttled request: %s", " ".join(parts))
 
