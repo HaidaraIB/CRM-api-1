@@ -161,6 +161,17 @@ def send_message(
     if owner and owner.id:
         invalidate_badges(owner.id)
 
+    # Immediate web/mobile push — email unread reminders remain on the cron path.
+    try:
+        from .notifications import push_new_message_to_agents, push_new_message_to_owner
+
+        if side == SupportMessage.Side.TENANT:
+            push_new_message_to_agents(conversation, msg)
+        elif side == SupportMessage.Side.SUPPORT:
+            push_new_message_to_owner(conversation, msg)
+    except Exception:
+        logger.warning("Support chat push dispatch failed", exc_info=True)
+
     return msg
 
 

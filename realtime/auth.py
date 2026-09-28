@@ -70,3 +70,28 @@ def authenticate_scope(scope):
     # company's events for the token's remaining lifetime.
     user = User.objects.filter(pk=user_id, is_active=True).first()
     return user
+
+
+def access_token_exp_unix(scope) -> int | None:
+    """JWT ``exp`` claim for the handshake token, or None if unreadable."""
+    token = _parse_token(scope)
+    if not token:
+        return None
+    try:
+        from rest_framework_simplejwt.exceptions import TokenError
+        from rest_framework_simplejwt.tokens import AccessToken
+    except Exception:  # pragma: no cover
+        return None
+    try:
+        access = AccessToken(token)
+    except TokenError:
+        return None
+    except Exception:
+        return None
+    exp = access.get("exp")
+    if exp is None:
+        return None
+    try:
+        return int(exp)
+    except (TypeError, ValueError):
+        return None

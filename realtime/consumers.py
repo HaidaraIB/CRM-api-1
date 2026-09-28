@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from .auth import authenticate_scope
+from .auth import access_token_exp_unix, authenticate_scope
 from .online import go_live, go_offline
 from .presence import (
     CONVERSATION_GROUP,
@@ -33,8 +34,9 @@ from .presence import (
     is_valid_state,
     record_presence,
     user_may_join_conversation,
+    user_may_join_support_conversation,
 )
-from .publish import COMPANY_GROUP, SUPPORT_INBOX_GROUP, USER_GROUP
+from .publish import COMPANY_GROUP, SUPPORT_CONVERSATION_GROUP, SUPPORT_INBOX_GROUP, USER_GROUP
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,8 @@ class SyncConsumer(AsyncWebsocketConsumer):
         # client subscribes and the server verifies access — this set, not the
         # client's claim, is what a presence frame is checked against.
         self.conversations: set[int] = set()
+        self.support_conversations: set[int] = set()
+        self.access_token_exp = access_token_exp_unix(self.scope)
         self.rate_limiter = RateLimiter()
 
         for group in self.group_names:
@@ -86,6 +90,13 @@ class SyncConsumer(AsyncWebsocketConsumer):
             try:
                 await self.channel_layer.group_discard(
                     CONVERSATION_GROUP.format(conversation_id), self.channel_name
+                )
+            except Exception:  # pragma: no cover
+                pass
+        for conversation_id in getattr(self, "support_conversations", set()):
+            try:
+                await self.channel_layer.group_discard(
+                    SUPPORT_CONVERSATION_GROUP.format(conversation_id), self.channel_name
                 )
             except Exception:  # pragma: no cover
                 pass
@@ -115,6 +126,10 @@ class SyncConsumer(AsyncWebsocketConsumer):
         # Handled before the conversation check below: a heartbeat is about the
         # user, not a thread, and carries no conversation id.
         if action == "heartbeat":
+            exp = getattr(self, "access_token_exp", None)
+            if exp is not None and time.time() >= exp:
+                await self.close(code=CLOSE_UNAUTHORIZED)
+                return
             await go_live(self.user_id)
             return
 
@@ -122,11 +137,23 @@ class SyncConsumer(AsyncWebsocketConsumer):
         if not isinstance(conversation_id, int) or conversation_id <= 0:
             return
 
+        kind = payload.get("kind")
+        if kind not in (None, "tenant", "support"):
+            return
+
         if action == "subscribe":
-            await self._subscribe(conversation_id)
+            if kind == "support":
+                await self._subscribe_support(conversation_id)
+            else:
+                await self._subscribe(conversation_id)
         elif action == "unsubscribe":
-            await self._unsubscribe(conversation_id)
+            if kind == "support":
+                await self._unsubscribe_support(conversation_id)
+            else:
+                await self._unsubscribe(conversation_id)
         elif action == "presence":
+            if kind == "support":
+                return
             await self._presence(conversation_id, payload.get("state"))
 
     async def _subscribe(self, conversation_id: int) -> None:
@@ -145,6 +172,24 @@ class SyncConsumer(AsyncWebsocketConsumer):
         self.conversations.discard(conversation_id)
         await self.channel_layer.group_discard(
             CONVERSATION_GROUP.format(conversation_id), self.channel_name
+        )
+
+    async def _subscribe_support(self, conversation_id: int) -> None:
+        if conversation_id in self.support_conversations:
+            return
+        if not await user_may_join_support_conversation(self.user_id, conversation_id):
+            return
+        self.support_conversations.add(conversation_id)
+        await self.channel_layer.group_add(
+            SUPPORT_CONVERSATION_GROUP.format(conversation_id), self.channel_name
+        )
+
+    async def _unsubscribe_support(self, conversation_id: int) -> None:
+        if conversation_id not in self.support_conversations:
+            return
+        self.support_conversations.discard(conversation_id)
+        await self.channel_layer.group_discard(
+            SUPPORT_CONVERSATION_GROUP.format(conversation_id), self.channel_name
         )
 
     async def _presence(self, conversation_id: int, state) -> None:
@@ -183,6 +228,17 @@ class SyncConsumer(AsyncWebsocketConsumer):
                     "conversation": event.get("conversation"),
                     "user_id": event.get("user_id"),
                     "state": event.get("state"),
+                }
+            )
+        )
+
+    async def support_conversation_event(self, event):
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "scope": "support_conversation",
+                    "conversation": event.get("conversation"),
+                    "version": event.get("version"),
                 }
             )
         )

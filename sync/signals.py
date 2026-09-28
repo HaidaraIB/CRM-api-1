@@ -21,10 +21,14 @@ showing stale lists.
 
 from __future__ import annotations
 
-from django.db.models.signals import m2m_changed, post_delete, post_save
+from django.contrib.auth import get_user_model
+from django.db.models.signals import m2m_changed, post_delete, post_save, pre_save
 from django.dispatch import receiver
 
+from accounts.models import SupervisorPermission
+from companies.models import Company
 from crm.models import LeadArrival
+from subscriptions.models import Subscription
 from integrations.models import (
     LeadWhatsAppMessage,
     SocialConversation,
@@ -43,6 +47,29 @@ from .version import (
     bump_support_conversation,
     bump_support_inbox,
     bump_user,
+    bump_user_access,
+)
+
+User = get_user_model()
+
+_USER_ACCESS_FIELDS = (
+    "role",
+    "is_active",
+    "company_id",
+    "whatsapp_chat_enabled",
+    "whatsapp_call_enabled",
+) + tuple(f.name for f in User._meta.fields if f.name.startswith("can_"))
+
+_USER_ACCESS_SKIP_UPDATE_FIELDS = frozenset(
+    {
+        "last_login",
+        "last_seen_at",
+        "last_seen_source",
+        "work_last_ping_at",
+        "failed_login_attempts",
+        "lockout_until",
+        "password",
+    }
 )
 
 
@@ -112,6 +139,7 @@ def support_chat_message_changed(sender, instance, **kwargs):
         return
     conversation = instance.conversation
     bump_support_conversation(conversation.id)
+    bump_support_inbox()
     bump_company_slice("support_chat", getattr(conversation, "company_id", None))
 
 
@@ -173,3 +201,56 @@ def news_post_changed(sender, instance, **kwargs):
     if kwargs.get("raw"):
         return
     bump_global()
+
+
+# --- access / account: permissions, subscription, company status ---------------
+
+
+@receiver(pre_save, sender=User)
+def user_access_pre_save(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    if not instance.pk:
+        instance._access_fields_changed = True
+        return
+    try:
+        previous = User.objects.get(pk=instance.pk)
+    except User.DoesNotExist:
+        instance._access_fields_changed = True
+        return
+    instance._access_fields_changed = any(
+        getattr(previous, name) != getattr(instance, name) for name in _USER_ACCESS_FIELDS
+    )
+
+
+@receiver(post_save, sender=User)
+def user_access_post_save(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    update_fields = kwargs.get("update_fields")
+    if update_fields is not None:
+        if set(update_fields).issubset(_USER_ACCESS_SKIP_UPDATE_FIELDS):
+            return
+    if getattr(instance, "_access_fields_changed", True):
+        bump_user_access(instance.id)
+
+
+@receiver(post_save, sender=SupervisorPermission)
+def supervisor_permission_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    bump_user_access(instance.user_id)
+
+
+@receiver(post_save, sender=Subscription)
+def subscription_account_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    bump_company_slice("account", instance.company_id)
+
+
+@receiver(post_save, sender=Company)
+def company_account_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    bump_company_slice("account", instance.id)

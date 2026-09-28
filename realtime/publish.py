@@ -1,10 +1,9 @@
 """
 Publishing side of the realtime channel.
 
-Called from ``sync/signals.py``, next to the counter bumps, so the same receiver
-that records "this changed" also announces it. Keeping both in one place is what
-stops the two mechanisms drifting: a new model gets a bump and a publish together
-or neither, rather than one silently without the other.
+Registered on counter bumps via ``sync.version.register_change_listener`` (see
+``realtime/apps.py``), so every path that moves a version counter also announces
+it — including bulk updates and ``invalidate_badges``, not only model signals.
 
 Two rules govern everything here.
 
@@ -44,12 +43,14 @@ logger = logging.getLogger(__name__)
 COMPANY_GROUP = "company.{}"
 USER_GROUP = "user.{}"
 CONVERSATION_GROUP = "conversation.{}"
+SUPPORT_CONVERSATION_GROUP = "support_conversation.{}"
 SUPPORT_INBOX_GROUP = "support.inbox"
 
 # Message type on the channel layer; maps to SyncConsumer.sync_event.
 EVENT_TYPE = "sync.event"
 # Maps to SyncConsumer.conversation_event — one open chat thread moved.
 CONVERSATION_EVENT_TYPE = "conversation.event"
+SUPPORT_CONVERSATION_EVENT_TYPE = "support_conversation.event"
 # Maps to SyncConsumer.presence_event — one peer's ephemeral activity.
 PRESENCE_EVENT_TYPE = "presence.event"
 
@@ -184,6 +185,33 @@ def publish_user(user_id) -> None:
     _on_commit(_publish)
 
 
+def publish_support_conversation(conversation_id) -> None:
+    """
+    Announce that one support thread moved — message, read cursor, or status.
+
+    Addressed to the support-conversation group so only subscribers on that
+    thread are nudged, not every super admin watching the inbox list.
+    """
+    if not conversation_id or not realtime_enabled():
+        return
+
+    def _publish():
+        from sync.version import support_conversation_seq_key
+
+        version = cache.get(support_conversation_seq_key(conversation_id)) or 0
+        _send_payload(
+            SUPPORT_CONVERSATION_GROUP.format(conversation_id),
+            {
+                "type": SUPPORT_CONVERSATION_EVENT_TYPE,
+                "scope": "support_conversation",
+                "conversation": int(conversation_id),
+                "version": int(version),
+            },
+        )
+
+    _on_commit(_publish)
+
+
 def publish_conversation(conversation_id) -> None:
     """
     Announce that one chat thread moved — a new message, or a read cursor.
@@ -257,6 +285,8 @@ def on_counter_changed(kind: str, **details) -> None:
         publish_user(details.get("user_id"))
     elif kind == "conversation":
         publish_conversation(details.get("conversation_id"))
+    elif kind == "support_conversation":
+        publish_support_conversation(details.get("conversation_id"))
     elif kind == "support_inbox":
         publish_support_inbox()
 

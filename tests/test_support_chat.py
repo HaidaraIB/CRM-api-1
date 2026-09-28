@@ -213,6 +213,28 @@ def test_email_command_idempotent():
 
 
 @pytest.mark.django_db
+def test_bump_support_conversation_publishes_realtime():
+    from unittest.mock import patch
+
+    from django.test import override_settings
+
+    from sync.version import bump_support_conversation
+
+    settings = dict(
+        REALTIME_ENABLED=True,
+        CHANNEL_LAYERS={"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}},
+    )
+    with override_settings(**settings):
+        with patch("realtime.publish._send_payload") as send:
+            bump_support_conversation(42)
+    send.assert_called_once()
+    payload = send.call_args.args[1]
+    assert payload["type"] == "support_conversation.event"
+    assert payload["scope"] == "support_conversation"
+    assert payload["conversation"] == 42
+
+
+@pytest.mark.django_db
 def test_bump_support_inbox_publishes_realtime():
     from unittest.mock import patch
 

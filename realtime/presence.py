@@ -81,6 +81,27 @@ def user_may_join_conversation(user_id: int, conversation_id: int) -> bool:
 
 
 @database_sync_to_async
+def user_may_join_support_conversation(user_id: int, conversation_id: int) -> bool:
+    from django.contrib.auth import get_user_model
+
+    from accounts.two_factor_policy import is_company_owner
+    from support_chat.models import SupportConversation
+
+    User = get_user_model()
+    user = User.objects.filter(pk=user_id, is_active=True).first()
+    if user is None:
+        return False
+    conversation = SupportConversation.objects.filter(pk=conversation_id).first()
+    if conversation is None:
+        return False
+    if user.is_super_admin():
+        return True
+    if not is_company_owner(user):
+        return False
+    return conversation.company_id == user.company_id
+
+
+@database_sync_to_async
 def record_presence(conversation_id: int, user_id: int, state: str) -> None:
     """
     Mirror socket presence into the cache the HTTP endpoint reads.

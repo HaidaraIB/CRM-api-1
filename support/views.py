@@ -53,6 +53,17 @@ def _send_support_ticket_emails_async(user_id, ticket_id, language):
                     "Failed to send super-admin support ticket notification: %s",
                     e,
                 )
+            try:
+                from support_chat.services.notifications import (
+                    push_support_ticket_to_admins,
+                )
+
+                push_support_ticket_to_admins(ticket, user)
+            except Exception as e:
+                logger.exception(
+                    "Failed to send super-admin support ticket push: %s",
+                    e,
+                )
         except Exception as e:
             logger.exception(
                 "Failed to send support ticket emails (async): %s", e

@@ -48,9 +48,13 @@ Three layers, each usable without the ones after it.
 
 ### 1. The digest as a change feed
 `sync/version.py` splits the old single company counter into named slices —
-`chat`, `calls`, `arrivals`, `tenant_chat` — reported in the digest body as
-`versions`. Clients watch the slice they care about instead of running a timer per
-view.
+`chat`, `calls`, `arrivals`, `tenant_chat`, `support_chat`, `inbox`, `account`,
+plus per-user `access` — reported in the digest body as `versions`. Clients watch
+the slice they care about instead of running a timer per view.
+
+Support threads also publish `support_conversation` frames to
+`support_conversation.{id}` when subscribed with `{ action: 'subscribe', kind:
+'support', conversation }`. Tenant team chat still uses `conversation.{id}`.
 
 `bump_company_slice()` moves **both** the slice and the coarse ETag counter. Never
 call `bump_company` directly; moving the ETag without the slice makes the digest

@@ -276,12 +276,15 @@ class TestSyncDigestSliceVersions:
     ALL_SLICES = {
         "global",
         "user",
+        "access",
         "company",
         "chat",
         "calls",
         "arrivals",
         "tenant_chat",
+        "support_chat",
         "inbox",
+        "account",
     }
 
     def _versions(self, client):
@@ -450,3 +453,42 @@ class TestSyncDigestSliceVersions:
             )
 
         assert second.status_code == status.HTTP_304_NOT_MODIFIED
+
+
+@pytest.mark.django_db
+class TestAccessAndAccountSlices:
+    def test_role_change_bumps_access_not_last_login(self, admin_user):
+        from django.core.cache import cache
+
+        from sync.version import bump_user_access, user_access_seq_key
+
+        key = user_access_seq_key(admin_user.id)
+        cache.delete(key)
+        bump_user_access(admin_user.id)
+        after_role = cache.get(key) or 0
+        assert after_role >= 1
+
+        admin_user.last_login = timezone.now()
+        admin_user.save(update_fields=["last_login"])
+        after_login = cache.get(key) or 0
+        assert after_login == after_role
+
+    def test_subscription_save_bumps_account_slice(self, authenticated_admin, company, plan):
+        from datetime import timedelta
+
+        from subscriptions.models import BillingCycle, Subscription
+
+        before = api_body(authenticated_admin.get("/api/v1/sync/digest/"))["versions"]
+        now = timezone.now()
+        sub = Subscription.objects.create(
+            company=company,
+            plan=plan,
+            is_active=True,
+            start_date=now,
+            end_date=now + timedelta(days=30),
+            current_period_start=now,
+            billing_cycle=BillingCycle.MONTHLY,
+        )
+        after = api_body(authenticated_admin.get("/api/v1/sync/digest/"))["versions"]
+        assert after["account"] > before["account"]
+        sub.delete()

@@ -64,7 +64,10 @@ COMPANY_SLICE_PREFIXES = {
     "tenant_chat": "sync_seq_company_tchat_v1",  # ChatMessage
     "inbox": "sync_seq_company_inbox_v1",  # SocialMessage + SocialConversation
     "support_chat": "sync_seq_company_support_chat_v1",  # SupportMessage (owner)
+    "account": "sync_seq_company_account_v1",  # Subscription / company status
 }
+
+USER_ACCESS_SEQ_PREFIX = "sync_seq_user_access_v1"
 
 SUPPORT_CONVERSATION_SEQ_PREFIX = "sync_seq_support_conversation_v1"
 SUPPORT_INBOX_SEQ_KEY = "sync_seq_support_inbox_v1"
@@ -80,6 +83,10 @@ def company_slice_key(slice_name: str, company_id: int) -> str:
 
 def user_seq_key(user_id: int) -> str:
     return f"{USER_SEQ_PREFIX}:{user_id}"
+
+
+def user_access_seq_key(user_id: int) -> str:
+    return f"{USER_ACCESS_SEQ_PREFIX}:{user_id}"
 
 
 def conversation_seq_key(conversation_id: int) -> str:
@@ -175,6 +182,13 @@ def bump_user(user_id) -> None:
         _notify("user", user_id=user_id)
 
 
+def bump_user_access(user_id) -> None:
+    """Permissions, role, or company membership for one user."""
+    if user_id:
+        _bump(user_access_seq_key(user_id))
+        bump_user(user_id)
+
+
 def bump_conversation(conversation_id) -> None:
     """A chat thread's contents or read receipts changed."""
     if conversation_id:
@@ -190,7 +204,7 @@ def bump_support_conversation(conversation_id) -> None:
     """Owner↔support thread contents or read cursors changed."""
     if conversation_id:
         _bump(support_conversation_seq_key(conversation_id))
-        bump_support_inbox()
+        _notify("support_conversation", conversation_id=conversation_id)
 
 
 def bump_support_inbox() -> None:
@@ -276,7 +290,11 @@ def slice_versions(user) -> dict:
     """
     company_id = getattr(user, "company_id", None)
 
-    keys = {"global": GLOBAL_SEQ_KEY, "user": user_seq_key(user.id)}
+    keys = {
+        "global": GLOBAL_SEQ_KEY,
+        "user": user_seq_key(user.id),
+        "access": user_access_seq_key(user.id),
+    }
     if company_id:
         keys["company"] = company_seq_key(company_id)
         for name in COMPANY_SLICE_PREFIXES:

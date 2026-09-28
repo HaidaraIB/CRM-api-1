@@ -40,6 +40,45 @@ class NotificationService:
     """Service for sending push notifications"""
     
     _initialized = False
+
+    @staticmethod
+    def _partition_fcm_tokens_by_platform(user, tokens: List[str]):
+        """
+        Web push must be data-only. If the FCM payload includes a ``notification``
+        block, Chrome displays it automatically *and* our service worker may show
+        again — two identical tray entries (one with icon, one without).
+        """
+        from accounts.models import UserDevice
+
+        web_set = set(
+            user.devices.filter(platform=UserDevice.Platform.WEB).values_list(
+                "token", flat=True
+            )
+        )
+        web = [t for t in tokens if t in web_set]
+        native = [t for t in tokens if t not in web_set]
+        return web, native
+
+    @classmethod
+    def _send_multicast(cls, user, tokens: List[str], multicast) -> tuple:
+        """Returns (success_count, stale_token_list)."""
+        if not tokens:
+            return 0, []
+        batch = messaging.send_each_for_multicast(multicast)
+        stale: List[str] = []
+        for token, resp in zip(tokens, batch.responses):
+            if resp.success:
+                continue
+            if isinstance(resp.exception, messaging.UnregisteredError):
+                stale.append(token)
+            else:
+                logger.warning(
+                    "FCM send failed for %s token=%s...: %s",
+                    user.username,
+                    token[:12],
+                    resp.exception,
+                )
+        return batch.success_count, stale
     
     @classmethod
     def initialize(cls):
@@ -299,140 +338,139 @@ class NotificationService:
             # recipient reacts. iOS keeps the APNs alert (time-sensitive + custom sound).
             arrival_ring = is_arrival_ring_notification_type(notification_type)
 
-            # The payload is identical for every one of this user's devices — only the
-            # token differed. So it is built once and sent as a single multicast.
-            # Building it per token and calling messaging.send() in a loop cost one
-            # blocking HTTPS round-trip per device, inside the request; a team-wide
-            # fan-out could hold a Gunicorn worker for seconds.
-            if tenant_chat_data_only:
-                conversation_id = (data or {}).get("conversation_id")
-                collapse_id = tenant_chat_apns_collapse_id(conversation_id)
-                apns_headers: Dict[str, str] = {
-                    "apns-push-type": "alert",
-                    "apns-priority": "10",
-                }
-                if collapse_id:
-                    apns_headers["apns-collapse-id"] = collapse_id
-                apns_aps_kwargs: Dict[str, Any] = {
-                    "alert": messaging.ApsAlert(title=title, body=body),
-                    "sound": tenant_chat_ios_sound_filename(),
-                }
-                thread_id = (
-                    str(conversation_id).strip()
-                    if conversation_id is not None
-                    and str(conversation_id).strip()
-                    else None
-                )
-                if thread_id:
-                    apns_aps_kwargs["thread_id"] = thread_id
-                multicast = messaging.MulticastMessage(
-                    tokens=user_tokens,
+            web_tokens, native_tokens = cls._partition_fcm_tokens_by_platform(
+                user, user_tokens
+            )
+            stale_tokens: List[str] = []
+            total_success = 0
+
+            # Web: data-only. Title/body live in ``data``; the service worker shows once.
+            if web_tokens:
+                web_multicast = messaging.MulticastMessage(
+                    tokens=web_tokens,
                     data=message_data,
-                    android=messaging.AndroidConfig(priority="high"),
-                    apns=messaging.APNSConfig(
-                        headers=apns_headers,
-                        payload=messaging.APNSPayload(
-                            aps=messaging.Aps(**apns_aps_kwargs),
-                        ),
-                    ),
                 )
+                ok, stale = cls._send_multicast(user, web_tokens, web_multicast)
+                total_success += ok
+                stale_tokens.extend(stale)
                 logger.info(
-                    "FCM tenant_chat android=data-only ios_sound=%s collapse=%s",
-                    tenant_chat_ios_sound_filename(),
-                    collapse_id or "(none)",
+                    "FCM web data-only to %s: %d/%d",
+                    user.username,
+                    ok,
+                    len(web_tokens),
                 )
-            elif arrival_ring:
-                ios_sound = ios_notification_sound_filename(notification_type)
-                multicast = messaging.MulticastMessage(
-                    tokens=user_tokens,
-                    data=message_data,
-                    android=messaging.AndroidConfig(priority="high"),
-                    apns=messaging.APNSConfig(
-                        headers={"apns-push-type": "alert", "apns-priority": "10"},
-                        payload=messaging.APNSPayload(
-                            aps=messaging.Aps(
-                                alert=messaging.ApsAlert(title=title, body=body),
-                                sound=ios_sound,
-                                custom_data={
-                                    "interruption-level": "time-sensitive",
-                                },
+
+            if native_tokens:
+                if tenant_chat_data_only:
+                    conversation_id = (data or {}).get("conversation_id")
+                    collapse_id = tenant_chat_apns_collapse_id(conversation_id)
+                    apns_headers: Dict[str, str] = {
+                        "apns-push-type": "alert",
+                        "apns-priority": "10",
+                    }
+                    if collapse_id:
+                        apns_headers["apns-collapse-id"] = collapse_id
+                    apns_aps_kwargs: Dict[str, Any] = {
+                        "alert": messaging.ApsAlert(title=title, body=body),
+                        "sound": tenant_chat_ios_sound_filename(),
+                    }
+                    thread_id = (
+                        str(conversation_id).strip()
+                        if conversation_id is not None
+                        and str(conversation_id).strip()
+                        else None
+                    )
+                    if thread_id:
+                        apns_aps_kwargs["thread_id"] = thread_id
+                    native_multicast = messaging.MulticastMessage(
+                        tokens=native_tokens,
+                        data=message_data,
+                        android=messaging.AndroidConfig(priority="high"),
+                        apns=messaging.APNSConfig(
+                            headers=apns_headers,
+                            payload=messaging.APNSPayload(
+                                aps=messaging.Aps(**apns_aps_kwargs),
                             ),
                         ),
-                    ),
-                )
-                logger.info(
-                    "FCM arrival ring android=data-only ios_sound=%s type=%s",
-                    ios_sound or "(default)",
-                    notification_type,
-                )
-            else:
-                # Android 8+: system-displayed FCM uses the *channel* sound, not the
-                # legacy per-notification sound, when posting to the default FCM channel.
-                # So we must send channel_id matching flutter_local_notifications channels
-                # (created on first app open). If those channels do not exist yet, Android
-                # may drop the notification — user must open the app once after install.
-                # team_activity reuses category channels/sounds based on data.action.
-                action = (data or {}).get("action")
-                action_str = str(action) if action is not None else None
-                channel_id = android_notification_channel_id(
-                    notification_type, action=action_str
-                )
-                sound_base = android_notification_raw_sound_basename(
-                    notification_type, action=action_str
-                )
-                ios_sound = ios_notification_sound_filename(
-                    notification_type, action=action_str
-                )
-                android_notif_kwargs: Dict[str, Any] = {
-                    "channel_id": channel_id,
-                }
-                if sound_base:
-                    android_notif_kwargs["sound"] = sound_base
-                apns_aps_kwargs: Dict[str, Any] = {}
-                if ios_sound:
-                    apns_aps_kwargs["sound"] = ios_sound
-                multicast = messaging.MulticastMessage(
-                    tokens=user_tokens,
-                    notification=notification_payload,
-                    data=message_data,
-                    android=messaging.AndroidConfig(
-                        priority="high",
-                        notification=messaging.AndroidNotification(
-                            **android_notif_kwargs,
-                        ),
-                    ),
-                    apns=messaging.APNSConfig(
-                        headers={"apns-push-type": "alert", "apns-priority": "10"},
-                        payload=messaging.APNSPayload(
-                            aps=messaging.Aps(**apns_aps_kwargs),
-                        ),
-                    ),
-                )
-                logger.info(
-                    "FCM android channel_id=%s android_sound=%s ios_sound=%s type=%s action=%s",
-                    channel_id,
-                    sound_base or "(default)",
-                    ios_sound or "(default)",
-                    notification_type,
-                    action_str or "(none)",
-                )
-
-            batch = messaging.send_each_for_multicast(multicast)
-
-            # Responses are positionally aligned with the tokens we passed in.
-            stale_tokens = []
-            for token, resp in zip(user_tokens, batch.responses):
-                if resp.success:
-                    continue
-                if isinstance(resp.exception, messaging.UnregisteredError):
-                    stale_tokens.append(token)
-                else:
-                    logger.warning(
-                        "FCM send failed for %s token=%s...: %s",
-                        user.username,
-                        token[:12],
-                        resp.exception,
                     )
+                    logger.info(
+                        "FCM tenant_chat android=data-only ios_sound=%s collapse=%s",
+                        tenant_chat_ios_sound_filename(),
+                        collapse_id or "(none)",
+                    )
+                elif arrival_ring:
+                    ios_sound = ios_notification_sound_filename(notification_type)
+                    native_multicast = messaging.MulticastMessage(
+                        tokens=native_tokens,
+                        data=message_data,
+                        android=messaging.AndroidConfig(priority="high"),
+                        apns=messaging.APNSConfig(
+                            headers={"apns-push-type": "alert", "apns-priority": "10"},
+                            payload=messaging.APNSPayload(
+                                aps=messaging.Aps(
+                                    alert=messaging.ApsAlert(title=title, body=body),
+                                    sound=ios_sound,
+                                    custom_data={
+                                        "interruption-level": "time-sensitive",
+                                    },
+                                ),
+                            ),
+                        ),
+                    )
+                    logger.info(
+                        "FCM arrival ring android=data-only ios_sound=%s type=%s",
+                        ios_sound or "(default)",
+                        notification_type,
+                    )
+                else:
+                    action = (data or {}).get("action")
+                    action_str = str(action) if action is not None else None
+                    channel_id = android_notification_channel_id(
+                        notification_type, action=action_str
+                    )
+                    sound_base = android_notification_raw_sound_basename(
+                        notification_type, action=action_str
+                    )
+                    ios_sound = ios_notification_sound_filename(
+                        notification_type, action=action_str
+                    )
+                    android_notif_kwargs: Dict[str, Any] = {
+                        "channel_id": channel_id,
+                    }
+                    if sound_base:
+                        android_notif_kwargs["sound"] = sound_base
+                    apns_aps_kwargs = {}
+                    if ios_sound:
+                        apns_aps_kwargs["sound"] = ios_sound
+                    native_multicast = messaging.MulticastMessage(
+                        tokens=native_tokens,
+                        notification=notification_payload,
+                        data=message_data,
+                        android=messaging.AndroidConfig(
+                            priority="high",
+                            notification=messaging.AndroidNotification(
+                                **android_notif_kwargs,
+                            ),
+                        ),
+                        apns=messaging.APNSConfig(
+                            headers={"apns-push-type": "alert", "apns-priority": "10"},
+                            payload=messaging.APNSPayload(
+                                aps=messaging.Aps(**apns_aps_kwargs),
+                            ),
+                        ),
+                    )
+                    logger.info(
+                        "FCM android channel_id=%s android_sound=%s ios_sound=%s type=%s action=%s",
+                        channel_id,
+                        sound_base or "(default)",
+                        ios_sound or "(default)",
+                        notification_type,
+                        action_str or "(none)",
+                    )
+
+                ok, stale = cls._send_multicast(user, native_tokens, native_multicast)
+                total_success += ok
+                stale_tokens.extend(stale)
 
             if stale_tokens:
                 for token in stale_tokens:
@@ -445,12 +483,14 @@ class NotificationService:
                 )
 
             logger.info(
-                "FCM multicast to %s: %d/%d delivered",
+                "FCM to %s: %d/%d delivered (web=%d native=%d)",
                 user.username,
-                batch.success_count,
+                total_success,
                 len(user_tokens),
+                len(web_tokens),
+                len(native_tokens),
             )
-            return batch.success_count > 0
+            return total_success > 0
 
         except Exception as e:
             logger.error(f"Error sending notification to {user.username}: {e}")

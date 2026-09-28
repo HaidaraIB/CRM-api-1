@@ -756,3 +756,17 @@ class TestOnlinePresenceOverSocket:
         live = await sync_to_async(live_user_ids)([admin_user.id])
         assert admin_user.id in live
         await communicator.disconnect()
+
+
+@pytest.mark.django_db
+def test_access_token_exp_unix_reads_jwt_exp(admin_user):
+    from urllib.parse import urlencode
+
+    from rest_framework_simplejwt.tokens import AccessToken
+
+    from realtime.auth import access_token_exp_unix
+
+    token = str(AccessToken.for_user(admin_user))
+    scope = {"query_string": urlencode({"token": token}).encode("utf-8")}
+    exp = access_token_exp_unix(scope)
+    assert exp == int(AccessToken(token)["exp"])
