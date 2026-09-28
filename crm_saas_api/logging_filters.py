@@ -31,7 +31,9 @@ class SkipExpectedForbiddenFilter(logging.Filter):
     A user whose WhatsApp access the owner switched off keeps polling unread-count /
     conversations every few seconds (including from app builds already installed on
     phones), so Django's django.request logger writes a WARNING several times a minute
-    forever. The 403 itself is correct and intentional — only the log line is noise.
+    forever. Lead timeline clients also hit inbox/lead-messages on every lead view;
+    roles without inbox access get 403 by design. The 403 itself is correct and
+    intentional — only the log line is noise.
 
     Scoped to this allowlist on purpose: every other Forbidden stays loud.
     """
@@ -40,6 +42,7 @@ class SkipExpectedForbiddenFilter(logging.Filter):
         "/integrations/whatsapp/unread-count/",
         "/integrations/whatsapp/conversations/",
         "/integrations/whatsapp/live-calls/",
+        "/integrations/inbox/lead-messages/",
     )
 
     def filter(self, record):

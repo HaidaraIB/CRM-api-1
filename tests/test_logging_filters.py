@@ -18,6 +18,12 @@ def test_polled_whatsapp_forbidden_is_dropped():
     assert not f.filter(_record("Forbidden: /api/v1/integrations/whatsapp/conversations/"))
 
 
+def test_lead_timeline_inbox_forbidden_is_dropped():
+    f = SkipExpectedForbiddenFilter()
+    assert not f.filter(_record("Forbidden: /api/integrations/inbox/lead-messages/"))
+    assert not f.filter(_record("Forbidden: /api/v1/integrations/inbox/lead-messages/"))
+
+
 def test_other_forbidden_paths_still_logged():
     f = SkipExpectedForbiddenFilter()
     assert f.filter(_record("Forbidden: /api/v1/integrations/templates/"))
