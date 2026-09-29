@@ -58,6 +58,66 @@ class TestInboundLeadAPI:
         assert client.external_lead_id == "sub-001"
         assert client.name == "Jane Doe"
 
+    def test_create_lead_company_and_profession(self, api_client, company, lead_api_key):
+        payload = {
+            "name": "علي حسن",
+            "lead_company_name": "عيادة الفرح",
+            "profession": "عيادة طبية",
+            "external_id": "basra-mapping-001",
+        }
+        response = api_client.post(
+            "/api/v1/integrations/leads/inbound/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        from crm.models import Client
+
+        client = Client.objects.get(id=api_body(response)["client_id"])
+        assert client.name == "علي حسن"
+        assert client.lead_company_name == "عيادة الفرح"
+        assert client.profession == "عيادة طبية"
+
+    def test_create_lead_storefront_image_on_timeline_event(self, api_client, company, lead_api_key):
+        payload = {
+            "name": "علي حسن",
+            "external_id": "basra-image-001",
+            "image_url": "https://directory.example.com/uploads/facade.jpg",
+        }
+        response = api_client.post(
+            "/api/v1/integrations/leads/inbound/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        from crm.models import ClientEvent
+
+        event = ClientEvent.objects.get(client_id=api_body(response)["client_id"], event_type="created")
+        assert "storefront_image_url: https://directory.example.com/uploads/facade.jpg" in (event.notes or "")
+
+    def test_create_lead_sets_map_location(self, api_client, company, lead_api_key):
+        payload = {
+            "name": "علي حسن",
+            "external_id": "basra-location-001",
+            "location_latitude": "30.508000",
+            "location_longitude": "47.830000",
+        }
+        response = api_client.post(
+            "/api/v1/integrations/leads/inbound/",
+            data=json.dumps(payload),
+            content_type="application/json",
+            **_auth_headers(lead_api_key),
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        from crm.models import Client, ClientEvent
+
+        client = Client.objects.get(id=api_body(response)["client_id"])
+        assert float(client.location_latitude) == 30.508
+        assert float(client.location_longitude) == 47.83
+        assert ClientEvent.objects.filter(client=client, event_type="location_update").exists()
+
     def test_create_lead_assigns_default_status(self, api_client, company, lead_api_key):
         from settings.models import LeadStatus
 

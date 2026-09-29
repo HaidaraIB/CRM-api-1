@@ -34,7 +34,9 @@ For chat/AI flows on Mujeb, use the dedicated endpoint and branded source instea
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Lead full name |
+| `name` | Yes | Lead full name (client / contact person) |
+| `lead_company_name` | No | Lead’s company or business name |
+| `profession` | No | Profession or activity type (e.g. category label) |
 | `phone` | Recommended | Phone number |
 | `external_id` | Recommended | Your unique submission id (idempotency) |
 | `email` | No | Stored in notes |
@@ -44,13 +46,18 @@ For chat/AI flows on Mujeb, use the dedicated endpoint and branded source instea
 | `status_id` | No | Lead status id for your company |
 | `priority` | No | `low`, `medium` (default), `high` |
 | `type` | No | `fresh` (default), `hot`, `cold` |
-| `custom_fields` | No | JSON object; appended to notes |
+| `custom_fields` | No | JSON object; each value is appended to notes as its own line |
+| `image_url` | No | HTTPS URL of a storefront or listing photo. Shown on the lead timeline when the lead is created. |
+| `location_latitude` | No | Lead map pin latitude. Send together with `location_longitude`. |
+| `location_longitude` | No | Lead map pin longitude. Send together with `location_latitude`. |
 
 ### Example
 
 ```json
 {
   "name": "Jane Doe",
+  "lead_company_name": "Sunrise Clinic",
+  "profession": "Medical clinic",
   "phone": "+9647700000001",
   "external_id": "form-submission-uuid-123",
   "email": "jane@example.com",

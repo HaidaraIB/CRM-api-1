@@ -146,10 +146,20 @@ def _build_notes(*, notes: str | None, email: str | None, custom_fields: dict | 
     if email and str(email).strip():
         parts.append(f"Email: {email.strip()}")
     if custom_fields:
-        try:
-            parts.append("Custom fields: " + json.dumps(custom_fields, ensure_ascii=False, sort_keys=True))
-        except (TypeError, ValueError):
-            parts.append(f"Custom fields: {custom_fields}")
+        for key in sorted(custom_fields.keys(), key=lambda item: str(item)):
+            value = custom_fields.get(key)
+            if value is None or value == "" or value is False:
+                continue
+            label = str(key).replace("_", " ").strip()
+            if isinstance(value, (dict, list)):
+                try:
+                    rendered = json.dumps(value, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    rendered = str(value)
+            else:
+                rendered = str(value).strip()
+            if rendered:
+                parts.append(f"{label}: {rendered}")
     return "\n".join(parts) if parts else None
 
 
@@ -157,6 +167,39 @@ def _default_lead_status_id(company) -> int | None:
     from crm.lead_defaults import get_default_lead_status_id
 
     return get_default_lead_status_id(company)
+
+
+def _coords_from_payload(payload: dict[str, Any]):
+    lat = payload.get("location_latitude")
+    lng = payload.get("location_longitude")
+    if lat in (None, "") or lng in (None, ""):
+        return None
+    return lat, lng
+
+
+def apply_inbound_lead_location(client, payload: dict[str, Any]) -> None:
+    """Set the lead map pin from inbound coordinates and log a timeline event when it changes."""
+    pair = _coords_from_payload(payload)
+    if pair is None:
+        return
+    from crm.models import ClientEvent
+    from crm.serializers import _format_client_location_pair
+
+    lat, lng = pair
+    old_loc = _format_client_location_pair(client.location_latitude, client.location_longitude)
+    new_loc = _format_client_location_pair(lat, lng)
+    if old_loc == new_loc:
+        return
+    client.location_latitude = lat
+    client.location_longitude = lng
+    client.save(update_fields=["location_latitude", "location_longitude"])
+    ClientEvent.objects.create(
+        client=client,
+        event_type="location_update",
+        old_value=old_loc or "",
+        new_value=new_loc or "",
+        notes="lead_location_set" if not old_loc else "lead_location_updated",
+    )
 
 
 def notify_owner_new_lead(company, client) -> None:
@@ -225,6 +268,16 @@ def create_inbound_lead(
         existing = Client.objects.filter(
             company=company, id=existing_check["client_id"]
         ).first()
+        if existing and existing_check.get("matched_by") == "external_id":
+            refreshed = _build_notes(
+                notes=payload.get("notes"),
+                email=payload.get("email"),
+                custom_fields=payload.get("custom_fields"),
+            )
+            if refreshed and existing.notes != refreshed:
+                existing.notes = refreshed
+                existing.save(update_fields=["notes"])
+            apply_inbound_lead_location(existing, payload)
         return (
             {
                 "client_id": existing_check["client_id"],
@@ -263,6 +316,8 @@ def create_inbound_lead(
         raise
 
     name = (payload.get("name") or "").strip() or default_name
+    lead_company_name = (payload.get("lead_company_name") or "").strip() or None
+    profession = (payload.get("profession") or "").strip() or None
     phone = (payload.get("phone") or "").strip() or None
     priority = payload.get("priority") or "medium"
     lead_type = payload.get("type") or "fresh"
@@ -282,6 +337,8 @@ def create_inbound_lead(
         with transaction.atomic():
             client = Client.objects.create(
                 name=name,
+                lead_company_name=lead_company_name,
+                profession=profession,
                 priority=priority,
                 type=lead_type,
                 company=company,
@@ -294,6 +351,8 @@ def create_inbound_lead(
                 status_id=status_id,
                 campaign_id=payload.get("campaign_id"),
                 created_by=None,
+                location_latitude=payload.get("location_latitude"),
+                location_longitude=payload.get("location_longitude"),
             )
             if phone:
                 ClientPhoneNumber.objects.create(
@@ -338,12 +397,26 @@ def create_inbound_lead(
     event_notes = f"Lead from {source_label}"
     if payload.get("email"):
         event_notes += f". Email: {payload['email']}"
+    image_url = (payload.get("image_url") or "").strip()
+    if image_url:
+        event_notes += f"\nstorefront_image_url: {image_url}"
     ClientEvent.objects.create(
         client=client,
         event_type="created",
         new_value=source_label,
         notes=event_notes,
     )
+    coords = _coords_from_payload(payload)
+    if coords:
+        from crm.serializers import _format_client_location_pair
+
+        ClientEvent.objects.create(
+            client=client,
+            event_type="location_update",
+            old_value="",
+            new_value=_format_client_location_pair(*coords) or "",
+            notes="lead_location_set",
+        )
 
     IntegrationLog.objects.create(
         account=account,

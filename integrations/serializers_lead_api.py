@@ -9,6 +9,10 @@ from settings.models import Channel, LeadStatus
 
 class InboundLeadSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
+    lead_company_name = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    profession = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
     phone = serializers.CharField(max_length=50, required=False, allow_blank=True, default="")
     external_id = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
     email = serializers.EmailField(required=False, allow_blank=True, default="")
@@ -30,6 +34,15 @@ class InboundLeadSerializer(serializers.Serializer):
         child=serializers.JSONField(),
         required=False,
         allow_null=True,
+    )
+    image_url = serializers.URLField(
+        required=False, allow_blank=True, default="", max_length=2000
+    )
+    location_latitude = serializers.DecimalField(
+        max_digits=9, decimal_places=6, required=False, allow_null=True
+    )
+    location_longitude = serializers.DecimalField(
+        max_digits=9, decimal_places=6, required=False, allow_null=True
     )
 
     def __init__(self, *args, company=None, **kwargs):
@@ -56,6 +69,19 @@ class InboundLeadSerializer(serializers.Serializer):
         if not LeadStatus.objects.filter(id=value, company=self.company).exists():
             raise serializers.ValidationError("Lead status not found for this company.")
         return value
+
+    def validate(self, attrs):
+        lat = attrs.get("location_latitude")
+        lng = attrs.get("location_longitude")
+        if (lat is None) != (lng is None):
+            raise serializers.ValidationError(
+                "location_latitude and location_longitude must be sent together."
+            )
+        if lat is not None and (lat < -90 or lat > 90):
+            raise serializers.ValidationError("location_latitude must be between -90 and 90.")
+        if lng is not None and (lng < -180 or lng > 180):
+            raise serializers.ValidationError("location_longitude must be between -180 and 180.")
+        return attrs
 
 
 class MujebCheckLeadSerializer(serializers.Serializer):
