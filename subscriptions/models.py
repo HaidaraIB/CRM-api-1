@@ -40,6 +40,7 @@ class PaymentStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELED = "canceled"
+    REFUNDED = "refunded"
 
     @classmethod
     def choices(cls):

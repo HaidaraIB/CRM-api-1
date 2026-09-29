@@ -82,5 +82,17 @@ class QicardAdapter(BaseGatewayAdapter):
             terminal_id, username, password, config.get("environment", "test")
         )
 
+    def refund(self, tran_ref: str, amount, message: str = "") -> dict:
+        from subscriptions.qicard_utils import refund_qicard_payment
+
+        return refund_qicard_payment(tran_ref, float(amount), message=message)
+
+    def cancel(self, tran_ref: str, amount=None) -> dict:
+        from subscriptions.qicard_utils import cancel_qicard_payment
+
+        if amount is None:
+            return cancel_qicard_payment(tran_ref)
+        return cancel_qicard_payment(tran_ref, float(amount))
+
 
 register(QicardAdapter())
