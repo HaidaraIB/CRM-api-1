@@ -38,6 +38,7 @@ class AttachmentFieldsMixin(models.Model):
 
 class SupportConversation(models.Model):
     class Status(models.TextChoices):
+        PENDING = "pending", "Pending approval"
         OPEN = "open", "Open"
         RESOLVED = "resolved", "Resolved"
 
@@ -53,7 +54,7 @@ class SupportConversation(models.Model):
     status = models.CharField(
         max_length=16,
         choices=Status.choices,
-        default=Status.OPEN,
+        default=Status.RESOLVED,
         db_index=True,
     )
     resolved_at = models.DateTimeField(null=True, blank=True)
@@ -102,6 +103,8 @@ class SupportConversation(models.Model):
 
     @property
     def awaiting_reply(self) -> bool:
+        if self.status == self.Status.PENDING:
+            return True
         return (
             self.status == self.Status.OPEN
             and self.last_message_side == self.LastMessageSide.TENANT
@@ -112,6 +115,7 @@ class SupportMessage(AttachmentFieldsMixin, models.Model):
     class Side(models.TextChoices):
         TENANT = "tenant", "Tenant"
         SUPPORT = "support", "Support"
+        SYSTEM = "system", "System"
 
     conversation = models.ForeignKey(
         SupportConversation,

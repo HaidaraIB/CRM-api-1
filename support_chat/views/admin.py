@@ -207,10 +207,22 @@ class SupportConversationAdminViewSet(viewsets.ReadOnlyModelViewSet):
             return error_response(str(e), code="invalid_mark_read")
         return success_response({"message_id": msg.id})
 
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        conversation = self.get_object()
+        try:
+            chat_services.approve(conversation, request.user)
+        except ValueError as e:
+            return error_response(str(e), code="invalid_approve")
+        return success_response({"status": SupportConversation.Status.OPEN})
+
     @action(detail=True, methods=["post"], url_path="resolve")
     def resolve(self, request, pk=None):
         conversation = self.get_object()
-        chat_services.resolve(conversation, request.user)
+        try:
+            chat_services.resolve(conversation, request.user)
+        except ValueError as e:
+            return error_response(str(e), code="invalid_resolve")
         return success_response({"status": SupportConversation.Status.RESOLVED})
 
     @action(detail=True, methods=["post"], url_path="reopen")

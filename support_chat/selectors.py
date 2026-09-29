@@ -7,7 +7,7 @@ from .models import SupportConversation, SupportMessage
 
 def admin_inbox_queryset(search: str | None = None, status_filter: str | None = None):
     """
-    status_filter: open (not waiting on support) | awaiting | resolved | all | None (same as all)
+    status_filter: open | awaiting | pending | resolved | all | None (same as all)
     """
     qs = SupportConversation.objects.select_related(
         "company",
@@ -32,10 +32,15 @@ def admin_inbox_queryset(search: str | None = None, status_filter: str | None = 
         )
     elif sf == "resolved":
         qs = qs.filter(status=SupportConversation.Status.RESOLVED)
+    elif sf == "pending":
+        qs = qs.filter(status=SupportConversation.Status.PENDING)
     elif sf == "awaiting":
         qs = qs.filter(
-            status=SupportConversation.Status.OPEN,
-            last_message_side=SupportConversation.LastMessageSide.TENANT,
+            Q(status=SupportConversation.Status.PENDING)
+            | Q(
+                status=SupportConversation.Status.OPEN,
+                last_message_side=SupportConversation.LastMessageSide.TENANT,
+            )
         )
 
     qs = qs.annotate(

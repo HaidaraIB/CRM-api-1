@@ -244,7 +244,77 @@ class Command(BaseCommand):
 
         # Conversations covering Arabic names, phone-only titles, company names,
         # open/closed 24h session, delivery statuses, and placeholder bodies.
+        # Media threads are the newest so the list shows Photo / Video /
+        # Voice message / Document without a real WhatsApp send.
         thread_specs = [
+            {
+                "key": "media_video",
+                "name": "فيديو الموقع",
+                "phone": "+9647701001001",
+                "lead_company_name": "",
+                "session": "open",
+                "messages": [
+                    ("inbound", "شوف الفيديو", -30, None),
+                    {"direction": "inbound", "body": "", "minutes_ago": -1, "kind": "video", "filename": "site-tour.mp4"},
+                ],
+            },
+            {
+                "key": "media_document",
+                "name": "مستندات العقد",
+                "phone": "+9647701001002",
+                "lead_company_name": "",
+                "session": "open",
+                "messages": [
+                    ("inbound", "أرسلت العرض", -25, None),
+                    {
+                        "direction": "outbound",
+                        "body": "",
+                        "minutes_ago": -2,
+                        "delivery": "read",
+                        "kind": "document",
+                        "filename": "عرض-السعر.pdf",
+                    },
+                ],
+            },
+            {
+                "key": "media_voice",
+                "name": "رسالة صوتية",
+                "phone": "+9647701001003",
+                "lead_company_name": "",
+                "session": "open",
+                "messages": [
+                    ("outbound", "تقدر تسجل ملاحظة؟", -20, "read"),
+                    {"direction": "inbound", "body": "", "minutes_ago": -3, "kind": "audio", "filename": "voice-note.wav"},
+                ],
+            },
+            {
+                "key": "media_photo",
+                "name": "صور العقار",
+                "phone": "+9647701001004",
+                "lead_company_name": "",
+                "session": "open",
+                "messages": [
+                    ("inbound", "هاي صورة الواجهة", -18, None),
+                    ("inbound", "[image message]", -4, None),
+                ],
+            },
+            {
+                "key": "media_doc_caption",
+                "name": "عرض السعر",
+                "phone": "+9647701001005",
+                "lead_company_name": "Oil and Gas",
+                "session": "open",
+                "messages": [
+                    {
+                        "direction": "outbound",
+                        "body": "العقد المرفق",
+                        "minutes_ago": -5,
+                        "delivery": "delivered",
+                        "kind": "document",
+                        "filename": "contract.pdf",
+                    },
+                ],
+            },
             {
                 "key": "hassan",
                 "name": "حسن السعدي",
@@ -484,14 +554,15 @@ class Command(BaseCommand):
             b"\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
         )
 
-        for idx, (direction, body, minutes_ago, delivery_status) in enumerate(message_specs):
+        for idx, spec in enumerate(message_specs):
+            direction, body, minutes_ago, delivery_status, kind, filename = self._parse_message_spec(spec)
             created_at = now + timedelta(minutes=minutes_ago)
             is_out = direction == "outbound"
-            is_seed_image = (body or "").strip() == "[image message]"
+            payload, mime = self._seed_media_bytes(kind, tiny_png) if kind else (None, "")
             msg = LeadWhatsAppMessage(
                 client=client,
                 phone_number=phone,
-                body="" if is_seed_image else body,
+                body=body,
                 direction=(
                     LeadWhatsAppMessage.DIRECTION_OUTBOUND
                     if is_out
@@ -509,17 +580,20 @@ class Command(BaseCommand):
                 send_source=MessageSendSource.MANUAL,
                 # Outbound N/A; older inbound read; leave last inbound unread for badge demo.
                 is_read=True if is_out else False,
+                is_voice_note=kind == "audio",
             )
-            if is_seed_image:
-                msg.attachment_kind = LeadWhatsAppMessage.AttachmentKind.IMAGE
-                msg.attachment_mime = "image/png"
-                msg.attachment_size = len(tiny_png)
-                msg.original_filename = "seed-image.png"
-                msg.attachment_width = 1
-                msg.attachment_height = 1
+            if kind and payload is not None:
+                msg.attachment_kind = kind
+                msg.attachment_mime = mime
+                msg.attachment_size = len(payload)
+                msg.original_filename = filename or f"seed.{kind}"
+                ext = {"image": "png", "document": "pdf", "audio": "wav", "video": "mp4"}.get(kind, "bin")
+                if kind == "image":
+                    msg.attachment_width = 1
+                    msg.attachment_height = 1
                 msg.attachment.save(
-                    f"seed_{client.id}_{idx}.png",
-                    ContentFile(tiny_png),
+                    f"seed_{client.id}_{idx}.{ext}",
+                    ContentFile(payload),
                     save=False,
                 )
             msg.save()
@@ -536,3 +610,67 @@ class Command(BaseCommand):
         )
         if len(inbound_ids) > 1:
             LeadWhatsAppMessage.objects.filter(id__in=inbound_ids[1:]).update(is_read=True)
+
+    def _parse_message_spec(self, spec):
+        """4-tuples stay text. `[image message]` and dicts with kind become attachments."""
+        sentinels = {
+            "[image message]": ("image", "seed-photo.png"),
+            "[video message]": ("video", "site-tour.mp4"),
+            "[audio message]": ("audio", "voice-note.wav"),
+            "[document message]": ("document", "عرض-السعر.pdf"),
+        }
+        if isinstance(spec, dict):
+            return (
+                spec["direction"],
+                spec.get("body") or "",
+                spec["minutes_ago"],
+                spec.get("delivery"),
+                spec.get("kind"),
+                spec.get("filename"),
+            )
+        direction, body, minutes_ago, delivery = spec
+        kind, filename = sentinels.get((body or "").strip(), (None, None))
+        if kind:
+            body = ""
+        return direction, body, minutes_ago, delivery, kind, filename
+
+    def _seed_media_bytes(self, kind: str, tiny_png: bytes) -> tuple[bytes, str]:
+        if kind == "image":
+            return tiny_png, "image/png"
+        if kind == "document":
+            pdf = (
+                b"%PDF-1.1\n"
+                b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+                b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n"
+                b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\n"
+                b"trailer<</Root 1 0 R>>\n%%EOF"
+            )
+            return pdf, "application/pdf"
+        if kind == "audio":
+            return self._silence_wav(), "audio/wav"
+        # Not a decodable movie — enough for the list label and the video shell.
+        return b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 32, "video/mp4"
+
+    def _silence_wav(self) -> bytes:
+        import struct
+
+        sample_rate = 8000
+        samples = b"\x00\x00" * 800  # 0.1s of silence
+        header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + len(samples),
+            b"WAVE",
+            b"fmt ",
+            16,
+            1,
+            1,
+            sample_rate,
+            sample_rate * 2,
+            2,
+            16,
+            b"data",
+            len(samples),
+        )
+        return header + samples
+

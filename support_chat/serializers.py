@@ -100,12 +100,16 @@ class SupportMessageSerializer(serializers.ModelSerializer):
         return self.context.get("admin_attachments", False)
 
     def get_is_mine(self, obj):
+        if obj.side == SupportMessage.Side.SYSTEM:
+            return False
         side = self._viewer_side()
         if side == SupportMessage.Side.TENANT:
             return obj.side == SupportMessage.Side.TENANT
         return obj.side == SupportMessage.Side.SUPPORT
 
     def get_display_name(self, obj):
+        if obj.side == SupportMessage.Side.SYSTEM:
+            return None
         if obj.side == SupportMessage.Side.SUPPORT:
             return LOOP_SUPPORT_DISPLAY
         if self._for_tenant():
@@ -116,6 +120,8 @@ class SupportMessageSerializer(serializers.ModelSerializer):
         return "Owner"
 
     def get_sender(self, obj):
+        if obj.side == SupportMessage.Side.SYSTEM:
+            return None
         if self._for_tenant():
             return None
         if obj.side == SupportMessage.Side.SUPPORT:
@@ -127,6 +133,8 @@ class SupportMessageSerializer(serializers.ModelSerializer):
         }
 
     def get_read_by_peer(self, obj):
+        if obj.side == SupportMessage.Side.SYSTEM:
+            return False
         peer_lr = self.context.get("peer_last_read_message_id")
         side = self._viewer_side()
         if side == SupportMessage.Side.TENANT:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from accounts.event_emails import (
+    send_support_chat_new_request_to_superadmins,
     send_support_chat_unread_to_owner,
     send_support_chat_unread_to_superadmins,
 )
@@ -26,6 +27,10 @@ class SupportChatNotifier:
     @staticmethod
     def notify_agents_unread(conversation: SupportConversation) -> int:
         return send_support_chat_unread_to_superadmins(conversation)
+
+
+def notify_superadmins_new_support_request(conversation: SupportConversation) -> int:
+    return send_support_chat_new_request_to_superadmins(conversation)
 
 
 def _message_preview(message: SupportMessage) -> str:

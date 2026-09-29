@@ -171,7 +171,9 @@ class SupportChatMessagesView(APIView):
         except ValueError as e:
             err_text = str(e)
             code = "invalid_message"
-            if "exceeds" in err_text.lower() or "file" in err_text.lower():
+            if "awaiting approval" in err_text.lower():
+                code = "pending_awaiting_approval"
+            elif "exceeds" in err_text.lower() or "file" in err_text.lower():
                 code = "invalid_file_type"
             return error_response(err_text, code=code, status_code=status.HTTP_400_BAD_REQUEST)
 

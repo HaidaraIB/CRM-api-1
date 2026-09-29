@@ -26,6 +26,18 @@ from .attachments import (
 
 logger = logging.getLogger(__name__)
 
+RESOLVED_NOTICE_EN = (
+    "This request was marked resolved. Send a message if you need help again."
+)
+RESOLVED_NOTICE_AR = "تم وضع علامة على هذا الطلب كمحلول. أرسل رسالة إذا احتجت مساعدة مرة أخرى."
+
+
+def _resolved_notice_body(owner) -> str:
+    lang = (getattr(owner, "language", None) or "en").lower()
+    if lang == "ar":
+        return RESOLVED_NOTICE_AR
+    return RESOLVED_NOTICE_EN
+
 
 def _preview_for_message(msg: SupportMessage) -> str:
     if getattr(msg, "attachment_kind", None):
@@ -88,13 +100,23 @@ def send_message(
 
     company_id = conversation.company_id
 
+    became_pending = False
+
     with transaction.atomic():
         conversation = SupportConversation.objects.select_for_update().get(pk=conversation.pk)
 
-        if conversation.status == SupportConversation.Status.RESOLVED:
-            conversation.status = SupportConversation.Status.OPEN
-            conversation.resolved_at = None
-            conversation.resolved_by_id = None
+        if side == SupportMessage.Side.TENANT:
+            if conversation.status == SupportConversation.Status.PENDING:
+                raise ValueError("Your support request is awaiting approval.")
+            if conversation.status == SupportConversation.Status.RESOLVED:
+                pass
+            elif conversation.status != SupportConversation.Status.OPEN:
+                raise ValueError("Cannot send a message in this state.")
+        elif side == SupportMessage.Side.SUPPORT:
+            if conversation.status != SupportConversation.Status.OPEN:
+                raise ValueError("Approve the support request before replying.")
+        else:
+            raise ValueError("Invalid message side.")
 
         if uploaded_file:
             msg = SupportMessage.objects.create(
@@ -139,20 +161,26 @@ def send_message(
                 reply_to=reply_to,
             )
 
+        update_fields = [
+            "last_message_at",
+            "last_message_side",
+            "last_message_preview",
+            "updated_at",
+        ]
+        if (
+            side == SupportMessage.Side.TENANT
+            and conversation.status == SupportConversation.Status.RESOLVED
+        ):
+            conversation.status = SupportConversation.Status.PENDING
+            conversation.resolved_at = None
+            conversation.resolved_by_id = None
+            became_pending = True
+            update_fields.extend(["status", "resolved_at", "resolved_by"])
+
         conversation.last_message_at = msg.created_at
         conversation.last_message_side = side
         conversation.last_message_preview = _preview_for_message(msg)
-        conversation.save(
-            update_fields=[
-                "status",
-                "resolved_at",
-                "resolved_by",
-                "last_message_at",
-                "last_message_side",
-                "last_message_preview",
-                "updated_at",
-            ]
-        )
+        conversation.save(update_fields=update_fields)
 
     bump_company_slice("support_chat", company_id)
     bump_support_conversation(conversation.id)
@@ -161,7 +189,14 @@ def send_message(
     if owner and owner.id:
         invalidate_badges(owner.id)
 
-    # Immediate web/mobile push — email unread reminders remain on the cron path.
+    if became_pending:
+        try:
+            from .notifications import notify_superadmins_new_support_request
+
+            notify_superadmins_new_support_request(conversation)
+        except Exception:
+            logger.warning("Support chat new-request email failed", exc_info=True)
+
     try:
         from .notifications import push_new_message_to_agents, push_new_message_to_owner
 
@@ -205,14 +240,61 @@ def mark_read(conversation: SupportConversation, side: str, message: SupportMess
         invalidate_badges(owner.id)
 
 
-def resolve(conversation: SupportConversation, by) -> SupportConversation:
+def approve(conversation: SupportConversation, by) -> SupportConversation:
     with transaction.atomic():
         conversation = SupportConversation.objects.select_for_update().get(pk=conversation.pk)
+        if conversation.status != SupportConversation.Status.PENDING:
+            raise ValueError("Only pending support requests can be approved.")
+        conversation.status = SupportConversation.Status.OPEN
+        conversation.save(update_fields=["status", "updated_at"])
+    bump_company_slice("support_chat", conversation.company_id)
+    bump_support_conversation(conversation.id)
+    return conversation
+
+
+def resolve(conversation: SupportConversation, by) -> SupportConversation:
+    owner = getattr(conversation.company, "owner", None)
+    notice_body = _resolved_notice_body(owner)
+    system_msg = None
+
+    with transaction.atomic():
+        conversation = SupportConversation.objects.select_for_update().get(pk=conversation.pk)
+        if conversation.status != SupportConversation.Status.OPEN:
+            raise ValueError("Only open conversations can be resolved.")
         conversation.status = SupportConversation.Status.RESOLVED
         conversation.resolved_at = timezone.now()
         conversation.resolved_by = by
-        conversation.save(update_fields=["status", "resolved_at", "resolved_by", "updated_at"])
+        system_msg = SupportMessage.objects.create(
+            conversation=conversation,
+            sender=by,
+            side=SupportMessage.Side.SYSTEM,
+            body=notice_body,
+        )
+        conversation.last_message_at = system_msg.created_at
+        conversation.last_message_preview = _preview_for_message(system_msg)
+        conversation.save(
+            update_fields=[
+                "status",
+                "resolved_at",
+                "resolved_by",
+                "last_message_at",
+                "last_message_preview",
+                "updated_at",
+            ]
+        )
+
+    bump_company_slice("support_chat", conversation.company_id)
     bump_support_conversation(conversation.id)
+
+    if owner and owner.id and system_msg:
+        invalidate_badges(owner.id)
+        try:
+            from .notifications import push_new_message_to_owner
+
+            push_new_message_to_owner(conversation, system_msg)
+        except Exception:
+            logger.warning("Support chat resolve push failed", exc_info=True)
+
     return conversation
 
 

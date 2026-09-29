@@ -11,11 +11,27 @@ from rest_framework.test import APIClient
 
 from accounts.models import Role
 from companies.models import Company
-from subscriptions.models import BillingCycle, Plan, Subscription
+from settings.models import SMTPSettings
 from support_chat.models import SupportConversation, SupportMessage
 from support_chat.services import conversations as chat_services
 
 User = get_user_model()
+
+
+@pytest.fixture
+def smtp_settings_active(db):
+    s = SMTPSettings.get_settings()
+    s.is_active = True
+    s.from_email = "noreply@example.com"
+    s.from_name = "CRM"
+    s.host = "unused"
+    s.port = 587
+    s.username = "unused"
+    s.password = "unused"
+    s.use_tls = True
+    s.use_ssl = False
+    s.save()
+    return s
 
 
 def _unwrap_data(resp):
@@ -68,17 +84,26 @@ def _super_admin():
     )
 
 
+def _start_open_chat(conv, owner, admin, body="need help"):
+    chat_services.send_message(conv, owner, SupportMessage.Side.TENANT, body=body)
+    conv.refresh_from_db()
+    assert conv.status == SupportConversation.Status.PENDING
+    chat_services.approve(conv, admin)
+    conv.refresh_from_db()
+    assert conv.status == SupportConversation.Status.OPEN
+
+
 @pytest.mark.django_db
 def test_open_inbox_excludes_awaiting_reply():
     from support_chat.selectors import admin_inbox_queryset
 
     waiting_company, waiting_owner = _company_with_owner("awaiting")
     replied_company, replied_owner = _company_with_owner("replied")
+    admin = _super_admin()
     waiting, _ = chat_services.get_or_create_for_company(waiting_company)
     replied, _ = chat_services.get_or_create_for_company(replied_company)
     chat_services.send_message(waiting, waiting_owner, SupportMessage.Side.TENANT, body="need help")
-    chat_services.send_message(replied, replied_owner, SupportMessage.Side.TENANT, body="q")
-    admin = _super_admin()
+    _start_open_chat(replied, replied_owner, admin, body="q")
     chat_services.send_message(replied, admin, SupportMessage.Side.SUPPORT, body="on it")
 
     open_ids = set(admin_inbox_queryset(status_filter="open").values_list("id", flat=True))
@@ -119,6 +144,11 @@ def test_owner_can_send_and_super_admin_replies():
     assert data.get("sender") is None
 
     conv = SupportConversation.objects.get(company=company)
+    assert conv.status == SupportConversation.Status.PENDING
+
+    approve_r = admin_client.post(f"/api/v1/support-chat-admin/conversations/{conv.id}/approve/")
+    assert approve_r.status_code == status.HTTP_200_OK
+
     list_r = admin_client.get("/api/v1/support-chat-admin/conversations/")
     assert list_r.status_code == status.HTTP_200_OK
 
@@ -140,33 +170,59 @@ def test_owner_can_send_and_super_admin_replies():
 
 
 @pytest.mark.django_db
-def test_resolved_reopens_on_owner_message():
-    company, owner = _company_with_owner("reopen")
+def test_request_cycle_pending_email_approve_resolve(smtp_settings_active):
+    company, owner = _company_with_owner("cycle")
     admin = _super_admin()
     conv, _ = chat_services.get_or_create_for_company(company)
-    chat_services.send_message(conv, owner, SupportMessage.Side.TENANT, body="q")
+    assert conv.status == SupportConversation.Status.RESOLVED
+
+    with patch("accounts.event_emails._send_event_email", return_value=True) as send_mock:
+        chat_services.send_message(conv, owner, SupportMessage.Side.TENANT, body="first request")
+        assert send_mock.call_count >= 1
+        template = send_mock.call_args[0][2]
+        assert template == "support_chat_new_request_admin"
+
+    conv.refresh_from_db()
+    assert conv.status == SupportConversation.Status.PENDING
+
+    with pytest.raises(ValueError, match="awaiting approval"):
+        chat_services.send_message(conv, owner, SupportMessage.Side.TENANT, body="second")
+
+    with pytest.raises(ValueError, match="Approve"):
+        chat_services.send_message(conv, admin, SupportMessage.Side.SUPPORT, body="hi")
+
+    chat_services.approve(conv, admin)
+    conv.refresh_from_db()
+    assert conv.status == SupportConversation.Status.OPEN
+
     chat_services.resolve(conv, admin)
     conv.refresh_from_db()
     assert conv.status == SupportConversation.Status.RESOLVED
+    system_msgs = conv.messages.filter(side=SupportMessage.Side.SYSTEM)
+    assert system_msgs.count() == 1
 
-    chat_services.send_message(conv, owner, SupportMessage.Side.TENANT, body="again")
+    with patch("accounts.event_emails._send_event_email", return_value=True) as send_mock2:
+        chat_services.send_message(conv, owner, SupportMessage.Side.TENANT, body="again")
+        new_request_calls = [
+            c for c in send_mock2.call_args_list if c[0][2] == "support_chat_new_request_admin"
+        ]
+        assert len(new_request_calls) >= 1
     conv.refresh_from_db()
-    assert conv.status == SupportConversation.Status.OPEN
+    assert conv.status == SupportConversation.Status.PENDING
 
 
 @pytest.mark.django_db
-def test_resolved_reopens_on_support_reply():
+def test_admin_cannot_reply_on_resolved_without_new_request():
     company, owner = _company_with_owner("reopen-admin")
     admin = _super_admin()
     conv, _ = chat_services.get_or_create_for_company(company)
-    chat_services.send_message(conv, owner, SupportMessage.Side.TENANT, body="q")
+    _start_open_chat(conv, owner, admin, body="q")
     chat_services.resolve(conv, admin)
     conv.refresh_from_db()
     assert conv.status == SupportConversation.Status.RESOLVED
 
-    chat_services.send_message(conv, admin, SupportMessage.Side.SUPPORT, body="still here")
-    conv.refresh_from_db()
-    assert conv.status == SupportConversation.Status.OPEN
+    with pytest.raises(ValueError, match="Approve"):
+        chat_services.send_message(conv, admin, SupportMessage.Side.SUPPORT, body="still here")
 
 
 @pytest.mark.django_db
@@ -174,6 +230,7 @@ def test_mark_read_and_unread_digest():
     company, owner = _company_with_owner("unread")
     admin = _super_admin()
     conv, _ = chat_services.get_or_create_for_company(company)
+    _start_open_chat(conv, owner, admin, body="q")
     msg = chat_services.send_message(conv, admin, SupportMessage.Side.SUPPORT, body="hi")
 
     from sync.counts import support_chat_unread_for_user
@@ -188,6 +245,7 @@ def test_email_command_idempotent():
     company, owner = _company_with_owner("email")
     admin = _super_admin()
     conv, _ = chat_services.get_or_create_for_company(company)
+    _start_open_chat(conv, owner, admin, body="q")
     old = timezone.now() - timedelta(minutes=30)
     msg = SupportMessage.objects.create(
         conversation=conv,
