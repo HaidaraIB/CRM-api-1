@@ -200,43 +200,11 @@ class PaymentSerializer(serializers.ModelSerializer):
         source="subscription.plan.name", read_only=True
     )
     target_plan_name = serializers.CharField(source="target_plan.name", read_only=True)
-
-    class Meta:
-        model = Payment
-        fields = [
-            "id",
-            "subscription",
-            "subscription_company_name",
-            "subscription_plan_name",
-            "target_plan",
-            "target_plan_name",
-            "billing_cycle",
-            "amount",
-            "currency",
-            "exchange_rate",
-            "amount_usd",
-            "payment_method",
-            "payment_status",
-            "tran_ref",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = ["id", "created_at", "updated_at"]
-
-
-class PaymentListSerializer(serializers.ModelSerializer):
-    """Simplified serializer for list views. Use amount_usd for display in USD."""
-
-    subscription_company_name = serializers.CharField(
-        source="subscription.company.name", read_only=True
-    )
-    subscription_plan_name = serializers.CharField(
-        source="subscription.plan.name", read_only=True
-    )
-    target_plan_name = serializers.CharField(source="target_plan.name", read_only=True)
     payment_method_name = serializers.CharField(
         source="payment_method.name", read_only=True
     )
+    gateway_request_id = serializers.SerializerMethodField()
+    gateway_refund_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Payment
@@ -256,8 +224,71 @@ class PaymentListSerializer(serializers.ModelSerializer):
             "payment_method_name",
             "payment_status",
             "tran_ref",
+            "gateway_request_id",
+            "gateway_refund_id",
+            "session_meta",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_gateway_request_id(self, obj):
+        meta = obj.session_meta or {}
+        return meta.get("request_id") or ""
+
+    def get_gateway_refund_id(self, obj):
+        meta = obj.session_meta or {}
+        refund = meta.get("qicard_refund") or {}
+        return refund.get("refundId") or ""
+
+
+class PaymentListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for list views. Use amount_usd for display in USD."""
+
+    subscription_company_name = serializers.CharField(
+        source="subscription.company.name", read_only=True
+    )
+    subscription_plan_name = serializers.CharField(
+        source="subscription.plan.name", read_only=True
+    )
+    target_plan_name = serializers.CharField(source="target_plan.name", read_only=True)
+    payment_method_name = serializers.CharField(
+        source="payment_method.name", read_only=True
+    )
+    gateway_request_id = serializers.SerializerMethodField()
+    gateway_refund_id = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Payment
+        fields = [
+            "id",
+            "subscription",
+            "subscription_company_name",
+            "subscription_plan_name",
+            "target_plan",
+            "target_plan_name",
+            "billing_cycle",
+            "amount",
+            "currency",
+            "exchange_rate",
+            "amount_usd",
+            "payment_method",
+            "payment_method_name",
+            "payment_status",
+            "tran_ref",
+            "gateway_request_id",
+            "gateway_refund_id",
             "created_at",
         ]
+
+    def get_gateway_request_id(self, obj):
+        meta = obj.session_meta or {}
+        return meta.get("request_id") or ""
+
+    def get_gateway_refund_id(self, obj):
+        meta = obj.session_meta or {}
+        refund = meta.get("qicard_refund") or {}
+        return refund.get("refundId") or ""
 
 
 class InvoiceSerializer(serializers.ModelSerializer):

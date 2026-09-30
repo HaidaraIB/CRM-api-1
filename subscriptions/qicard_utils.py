@@ -209,6 +209,109 @@ def create_qicard_payment_session(
         raise Exception(f"QiCard API error: {str(e)}") from e
 
 
+def qicard_refund_confirmed(payload: dict | None) -> bool:
+    if not payload:
+        return False
+    if (payload.get("status") or "").upper() == "SUCCESS":
+        return True
+    details = payload.get("details") or {}
+    if isinstance(details, dict):
+        code = str(details.get("resultCode", ""))
+        if code in ("00", "0"):
+            return True
+    return False
+
+
+def apply_qicard_refund_terminal_status(
+    payment,
+    error_message: str,
+    gateway_payload: dict | None = None,
+) -> str:
+    """
+    After QiCard refuses a refund, move the local row off COMPLETED so admin
+    cannot retry indefinitely (e.g. never-paid on gateway vs already refunded).
+    """
+    from .models import PaymentStatus
+
+    msg = (error_message or "").lower()
+    raw: dict = {}
+    if gateway_payload:
+        raw = dict(gateway_payload)
+    elif getattr(payment, "tran_ref", None):
+        try:
+            raw = verify_qicard_payment(payment.tran_ref) or {}
+        except Exception:
+            raw = {}
+
+    refunds = raw.get("refunds") or []
+    has_successful_refund = any(
+        isinstance(entry, dict) and entry.get("successfully") for entry in refunds
+    )
+    gw_status = (raw.get("status") or "").upper()
+
+    if has_successful_refund:
+        new_status = PaymentStatus.REFUNDED.value
+    elif "unsuccessful" in msg:
+        new_status = PaymentStatus.FAILED.value
+    elif "exceed" in msg:
+        new_status = PaymentStatus.REFUNDED.value
+    elif gw_status and gw_status != "SUCCESS":
+        new_status = PaymentStatus.FAILED.value
+    else:
+        new_status = PaymentStatus.FAILED.value
+
+    meta = dict(payment.session_meta or {})
+    meta["qicard_refund_blocked"] = {
+        "message": error_message,
+        "gateway_status": gw_status or None,
+        "gateway": raw,
+    }
+    payment.payment_status = new_status
+    payment.session_meta = meta
+    payment.save(update_fields=["payment_status", "session_meta", "updated_at"])
+    return new_status
+
+
+def qicard_refund_amount_iqd(payment) -> float:
+    """
+    Refund must use the same IQD amount QiCard captured, not Payment.amount (USD).
+    """
+    meta = payment.session_meta or {}
+    stored = meta.get("qicard_amount_iqd")
+    if stored is not None:
+        return _round_amount(stored)
+
+    tran_ref = getattr(payment, "tran_ref", None)
+    if tran_ref:
+        try:
+            status = verify_qicard_payment(tran_ref) or {}
+        except Exception:
+            status = {}
+        else:
+            if status.get("confirmedAmount") is not None:
+                return _round_amount(status["confirmedAmount"])
+            if (status.get("status") or "").upper() == "SUCCESS" and status.get("amount") is not None:
+                return _round_amount(status["amount"])
+
+    base = payment.amount_usd if payment.amount_usd is not None else payment.amount
+    return _usd_to_iqd_amount(float(base))
+
+
+def qicard_cancel_confirmed(payload: dict | None) -> bool:
+    """
+    QiCard cancel API often returns the payment object with status FORM_SHOWED
+    (not SUCCESS) while ``canceled`` is true and ``cancels[].successfully`` is set.
+    """
+    if not payload:
+        return False
+    if payload.get("canceled") is True:
+        return True
+    for entry in payload.get("cancels") or []:
+        if isinstance(entry, dict) and entry.get("successfully"):
+            return True
+    return False
+
+
 def verify_qicard_payment(payment_id: str):
     """Verify a QiCard payment transaction by checking payment status"""
     client = _qicard_client()

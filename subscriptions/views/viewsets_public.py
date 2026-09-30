@@ -15,6 +15,7 @@ from ..services import (
     payment_gateway_test_response,
     deactivate_other_subscriptions_for_company,
 )
+from ..services.payment_completion import query_gateway_state
 from ..gateway_config import merge_config_for_write
 from companies.models import Company
 from ..services.billing import is_plan_free, preview_plan_change
@@ -452,7 +453,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
             return PaymentListSerializer
         return PaymentSerializer
 
-    def _qicard_completed_payment(self, pk):
+    def _qicard_payment_for_action(self, pk, required_status: str, status_error: str):
         adapter = get_adapter("qicard")
         with transaction.atomic():
             payment = Payment.objects.select_for_update().get(pk=pk)
@@ -461,11 +462,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     "Only QiCard payments support this action",
                     code="bad_request",
                 )
-            if payment.payment_status != PaymentStatus.COMPLETED.value:
-                return None, error_response(
-                    "Only completed payments can be refunded or canceled",
-                    code="bad_request",
-                )
+            if payment.payment_status != required_status:
+                return None, error_response(status_error, code="bad_request")
             if not payment.tran_ref:
                 return None, error_response(
                     "Payment has no gateway reference",
@@ -475,7 +473,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def refund(self, request, pk=None):
-        payment, err = self._qicard_completed_payment(pk)
+        payment, err = self._qicard_payment_for_action(
+            pk,
+            PaymentStatus.COMPLETED.value,
+            "Only completed payments can be refunded",
+        )
         if err is not None:
             return err
 
@@ -487,20 +489,49 @@ class PaymentViewSet(viewsets.ModelViewSet):
             except (InvalidOperation, TypeError):
                 return error_response("Invalid refund amount", code="bad_request")
         else:
-            refund_amount = payment.amount
+            from ..qicard_utils import qicard_refund_amount_iqd
+
+            refund_amount = Decimal(str(qicard_refund_amount_iqd(payment)))
+
+        from ..qicard_utils import qicard_refund_confirmed
 
         adapter = get_adapter("qicard")
         try:
             result = adapter.refund(payment.tran_ref, refund_amount, message=message)
         except Exception as exc:
             logger.warning("QiCard refund failed payment_id=%s: %s", payment.id, exc)
-            return error_response(str(exc), code="gateway_error")
+            from ..qicard_utils import apply_qicard_refund_terminal_status
 
-        if (result.get("status") or "").upper() != "SUCCESS":
+            with transaction.atomic():
+                payment = Payment.objects.select_for_update().get(pk=payment.pk)
+                terminal = apply_qicard_refund_terminal_status(payment, str(exc))
+            return error_response(
+                str(exc),
+                code="gateway_error",
+                details={
+                    "payment_status": terminal,
+                    "payment_id": payment.id,
+                },
+            )
+
+        if not qicard_refund_confirmed(result):
+            from ..qicard_utils import apply_qicard_refund_terminal_status
+
+            with transaction.atomic():
+                payment = Payment.objects.select_for_update().get(pk=payment.pk)
+                terminal = apply_qicard_refund_terminal_status(
+                    payment,
+                    "QiCard did not confirm the refund",
+                    gateway_payload=result,
+                )
             return error_response(
                 "QiCard did not confirm the refund",
                 code="gateway_error",
-                details={"gateway": result},
+                details={
+                    "gateway": result,
+                    "payment_status": terminal,
+                    "payment_id": payment.id,
+                },
             )
 
         meta = dict(payment.session_meta or {})
@@ -520,7 +551,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
-        payment, err = self._qicard_completed_payment(pk)
+        payment, err = self._qicard_payment_for_action(
+            pk,
+            PaymentStatus.PENDING.value,
+            "Only pending checkout sessions can be canceled (before the customer pays)",
+        )
         if err is not None:
             return err
 
@@ -532,14 +567,46 @@ class PaymentViewSet(viewsets.ModelViewSet):
             except (InvalidOperation, TypeError):
                 return error_response("Invalid cancel amount", code="bad_request")
 
+        from ..qicard_utils import qicard_cancel_confirmed
+
+        gateway_state = query_gateway_state(payment)
+        if gateway_state.is_paid:
+            return error_response(
+                "Payment already completed on QiCard; use Refund instead of Cancel",
+                code="bad_request",
+            )
+        if gateway_state.is_failed:
+            raw = gateway_state.raw or {}
+            if qicard_cancel_confirmed(raw):
+                payment.payment_status = PaymentStatus.CANCELED.value
+                payment.save(update_fields=["payment_status", "updated_at"])
+                return success_response(
+                    data=PaymentSerializer(payment).data,
+                    message="Payment already canceled",
+                )
+            payment.payment_status = PaymentStatus.FAILED.value
+            payment.save(update_fields=["payment_status", "updated_at"])
+            return error_response(
+                "This checkout session is no longer open on QiCard. Start a new payment.",
+                code="bad_request",
+            )
+
         adapter = get_adapter("qicard")
         try:
             result = adapter.cancel(payment.tran_ref, cancel_amount)
         except Exception as exc:
+            refreshed = query_gateway_state(payment)
+            if refreshed.is_failed:
+                raw = refreshed.raw or {}
+                if qicard_cancel_confirmed(raw):
+                    payment.payment_status = PaymentStatus.CANCELED.value
+                else:
+                    payment.payment_status = PaymentStatus.FAILED.value
+                payment.save(update_fields=["payment_status", "updated_at"])
             logger.warning("QiCard cancel failed payment_id=%s: %s", payment.id, exc)
             return error_response(str(exc), code="gateway_error")
 
-        if (result.get("status") or "").upper() != "SUCCESS":
+        if not qicard_cancel_confirmed(result):
             return error_response(
                 "QiCard did not confirm the cancellation",
                 code="gateway_error",

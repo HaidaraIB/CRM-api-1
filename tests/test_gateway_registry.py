@@ -150,6 +150,10 @@ class TestStateMapping:
              {"status": "AUTHENTICATION_FAILED"}, "failed"),
             ("qicard", "subscriptions.qicard_utils.verify_qicard_payment",
              {"status": "CREATED"}, "pending"),
+            ("qicard", "subscriptions.qicard_utils.verify_qicard_payment",
+             {"status": "ERROR"}, "failed"),
+            ("qicard", "subscriptions.qicard_utils.verify_qicard_payment",
+             {"status": "CREATED", "canceled": True}, "failed"),
             # FIB
             ("fib", "subscriptions.fib_utils.check_fib_payment_status",
              {"status": "PAID"}, "paid"),

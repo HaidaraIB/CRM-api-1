@@ -87,16 +87,25 @@ def qicard_return(request):
     logger.info(
         "QiCard return payment=%s applied=%s reason=%s", payment.id, applied, reason
     )
+    tran_ref = payment.tran_ref
     if applied:
-        return payment_redirect(status="success", subscription_id=subscription_id)
+        return payment_redirect(
+            status="success",
+            subscription_id=subscription_id,
+            tranRef=tran_ref,
+        )
     if reason == "marked_failed":
         return payment_redirect(
-            status="failed", subscription_id=subscription_id, message="Payment failed"
+            status="failed",
+            subscription_id=subscription_id,
+            message="Payment failed",
+            tranRef=tran_ref,
         )
     return payment_redirect(
         status="pending",
         subscription_id=subscription_id,
         message="Payment is still pending",
+        tranRef=tran_ref,
     )
 
 

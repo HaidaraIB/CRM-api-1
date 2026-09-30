@@ -15,7 +15,13 @@ from subscriptions.gateways.registry import register
 logger = logging.getLogger(__name__)
 
 _PAID = {"SUCCESS"}
-_FAILED = {"FAILED", "AUTHENTICATION_FAILED", "CANCELLED", "EXPIRED"}
+_FAILED = {
+    "FAILED",
+    "AUTHENTICATION_FAILED",
+    "CANCELLED",
+    "EXPIRED",
+    "ERROR",
+}
 
 
 class QicardAdapter(BaseGatewayAdapter):
@@ -24,8 +30,12 @@ class QicardAdapter(BaseGatewayAdapter):
     tran_ref_params = ("paymentId", "payment_id")
 
     def create_session(self, ctx: CheckoutContext) -> CheckoutSession:
-        from subscriptions.qicard_utils import create_qicard_payment_session
+        from subscriptions.qicard_utils import (
+            _usd_to_iqd_amount,
+            create_qicard_payment_session,
+        )
 
+        amount_iqd = _usd_to_iqd_amount(float(ctx.amount_usd))
         try:
             result = create_qicard_payment_session(
                 amount=float(ctx.amount_usd),
@@ -46,13 +56,18 @@ class QicardAdapter(BaseGatewayAdapter):
         return CheckoutSession(
             tran_ref=str(payment_id),
             checkout_url=form_url,
-            meta={"request_id": result.get("request_id")},
+            meta={
+                "request_id": result.get("request_id"),
+                "qicard_amount_iqd": amount_iqd,
+            },
         )
 
     def verify(self, tran_ref: str) -> GatewayResult:
         from subscriptions.qicard_utils import verify_qicard_payment
 
         result = verify_qicard_payment(tran_ref) or {}
+        if result.get("canceled") is True:
+            return GatewayResult("failed", result)
         status_value = (result.get("status") or "").upper()
         if status_value in _PAID:
             return GatewayResult("paid", result)

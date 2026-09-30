@@ -58,8 +58,23 @@ def find_reusable_pending_payment(
             continue
         if abs(Decimal(str(stored)) - amount) > AMOUNT_MATCH_TOLERANCE:
             continue
-        if payment.checkout_url or payment.session_meta:
-            return payment
+        if not (payment.checkout_url or payment.session_meta):
+            continue
+        if payment.tran_ref:
+            result = query_gateway_state(payment)
+            if result.is_paid:
+                payment.payment_status = PaymentStatus.COMPLETED.value
+                payment.save(update_fields=["payment_status", "updated_at"])
+                continue
+            if result.is_failed:
+                raw = result.raw or {}
+                if raw.get("canceled") is True:
+                    payment.payment_status = PaymentStatus.CANCELED.value
+                else:
+                    payment.payment_status = PaymentStatus.FAILED.value
+                payment.save(update_fields=["payment_status", "updated_at"])
+                continue
+        return payment
     return None
 
 

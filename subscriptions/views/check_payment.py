@@ -58,13 +58,7 @@ def check_payment_status(request, subscription_id):
         paytabs_status = None
         gateway_status = None
 
-        # If subscription is already active, treat payment as completed for UI,
-        # but still reconcile any unapplied completed payment below.
-        if subscription.is_active:
-            payment_status_value = PaymentStatus.COMPLETED.value
-            paytabs_status = "A"
-            gateway_status = "success"
-        elif payment and payment.tran_ref:
+        if payment and payment.tran_ref:
             # One re-query for every gateway: the adapter normalizes its own
             # status vocabulary, so this endpoint no longer needs a branch per
             # gateway (and can no longer silently omit one, as it did QiCard).
@@ -77,10 +71,17 @@ def check_payment_status(request, subscription_id):
                 _mark_completed_and_finalize(subscription, payment)
             elif result.is_failed:
                 gateway_status = "failed"
-                payment_status_value = PaymentStatus.FAILED.value
-                if payment.payment_status != PaymentStatus.FAILED.value:
-                    payment.payment_status = PaymentStatus.FAILED.value
-                    payment.save(update_fields=["payment_status", "updated_at"])
+                raw = result.raw or {}
+                if raw.get("canceled") is True:
+                    payment_status_value = PaymentStatus.CANCELED.value
+                    if payment.payment_status != PaymentStatus.CANCELED.value:
+                        payment.payment_status = PaymentStatus.CANCELED.value
+                        payment.save(update_fields=["payment_status", "updated_at"])
+                else:
+                    payment_status_value = PaymentStatus.FAILED.value
+                    if payment.payment_status != PaymentStatus.FAILED.value:
+                        payment.payment_status = PaymentStatus.FAILED.value
+                        payment.save(update_fields=["payment_status", "updated_at"])
             elif result.state == "pending":
                 gateway_status = "pending"
             elif payment.payment_status == PaymentStatus.COMPLETED.value:

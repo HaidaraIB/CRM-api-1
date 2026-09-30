@@ -598,3 +598,32 @@ class TestCheckPaymentStatusGatewayCoverage:
         assert res.status_code == 200
         payment.refresh_from_db()
         assert payment.applied_at is not None
+
+    def test_active_subscription_does_not_mask_failed_latest_payment(
+        self, api_client, company, paid_plan, owner_user, qicard_gateway
+    ):
+        from conftest import api_body
+
+        now = timezone.now()
+        active_sub = Subscription.objects.create(
+            company=company,
+            plan=paid_plan,
+            is_active=True,
+            start_date=now - timedelta(days=10),
+            end_date=now + timedelta(days=20),
+            current_period_start=now - timedelta(days=10),
+            billing_cycle=BillingCycle.MONTHLY,
+        )
+        _pending_payment(active_sub, qicard_gateway, paid_plan, "qi_failed_checkout")
+        payment = Payment.objects.filter(subscription=active_sub).latest("created_at")
+        payment.payment_status = PaymentStatus.FAILED.value
+        payment.save(update_fields=["payment_status", "updated_at"])
+
+        api_client.force_authenticate(user=owner_user)
+        with qicard_reports({"status": "FAILED"}):
+            res = api_client.get(f"/api/payment-status/{active_sub.id}/")
+
+        assert res.status_code == 200
+        body = api_body(res)
+        assert body["payment_status"] == PaymentStatus.FAILED.value
+        assert body["gateway_status"] == "failed"
