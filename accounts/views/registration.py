@@ -35,6 +35,7 @@ from ..permissions import CanAccessUser, CanManageLimitedAdmins, CanManageSuperv
 from ..phone_otp_policy import (
     VALID_CHANNELS,
     channel_is_configured,
+    channel_not_configured_error_code,
     effective_phone_otp_channel,
     effective_phone_otp_required,
 )
@@ -259,12 +260,12 @@ def phone_otp_requirement_settings(request):
         return validation_error_response(
             {
                 "phone_otp_channel": [
-                    "Select whatsapp or twilio_sms when phone OTP is required."
+                    "Select whatsapp, twilio_sms, or otpiq when phone OTP is required."
                 ]
             }
         )
     if not channel_is_configured(ch):
-        code = "whatsapp_otp_not_configured" if ch == "whatsapp" else "twilio_otp_not_configured"
+        code = channel_not_configured_error_code(ch)
         return error_response(
             "Selected channel is not configured.",
             code=code,

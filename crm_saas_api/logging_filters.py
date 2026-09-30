@@ -15,9 +15,20 @@ class ImportantOnlyFilter(logging.Filter):
         if record.levelno >= logging.ERROR:
             return True
         if record.levelno == logging.WARNING:
-            msg = (record.getMessage() or "").lower()
+            msg = record.getMessage() or ""
+            msg_lower = msg.lower()
+            # Expired JWT 401s flood django_important.log; keep login/auth failures only.
+            if msg_lower.startswith("unauthorized:"):
+                path = msg.split(":", 1)[-1].strip()
+                if path and "/auth/" not in path.lower():
+                    return False
+            status_code = getattr(record, "status_code", None)
+            if status_code == 401:
+                path = getattr(record, "path", "") or ""
+                if "/auth/" not in path.lower():
+                    return False
             # Keep security/auth warnings
-            if "unauthorized" in msg or "forbidden" in msg or "invalid" in msg and "key" in msg:
+            if "unauthorized" in msg_lower or "forbidden" in msg_lower or "invalid" in msg_lower and "key" in msg_lower:
                 return True
             if "throttled request" in msg:
                 return True

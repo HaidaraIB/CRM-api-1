@@ -13,13 +13,16 @@ from crm_saas_api.throttles import AuthRateThrottle
 
 from ..models import PhoneRegistrationChallenge, User
 from ..phone_otp_policy import (
+    CHANNEL_OTPIQ,
     CHANNEL_TWILIO_SMS,
     CHANNEL_WHATSAPP,
     effective_phone_otp_channel,
     effective_phone_otp_required,
+    platform_otpiq_ready_for_registration_otp,
     platform_twilio_ready_for_registration_otp,
 )
 from ..phone_otp_utils import hash_otp_code, sign_phone_registration_token
+from ..platform_registration_otpiq import send_registration_otp_otpiq
 from ..platform_registration_sms import send_registration_otp_sms
 from ..platform_whatsapp import normalize_phone_digits, platform_whatsapp_configured, send_otp_template
 from integrations.services.twilio_phone import normalize_phone_to_e164
@@ -103,6 +106,13 @@ def register_phone_send_otp(request):
                 code="twilio_otp_not_configured",
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+    elif channel == CHANNEL_OTPIQ:
+        if not platform_otpiq_ready_for_registration_otp():
+            return error_response(
+                "OTPIQ verification is not configured.",
+                code="otpiq_otp_not_configured",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
     else:
         return error_response(
             "Unknown phone OTP channel.",
@@ -134,22 +144,44 @@ def register_phone_send_otp(request):
     if channel == CHANNEL_WHATSAPP:
         ok, details = send_otp_template(phone, code)
         if not ok:
-            logger.warning("OTP WhatsApp send failed: phone=%s details=%s", phone[-4:], details)
+            logger.error(
+                "OTP WhatsApp send failed: phone=%s details=%s",
+                phone[-4:],
+                details,
+            )
             return error_response(
                 "Could not send verification code via WhatsApp.",
                 code="whatsapp_send_failed",
-                status_code=status.HTTP_502_BAD_GATEWAY,
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
                 details=details if isinstance(details, dict) else {"error": str(details)},
             )
-    else:
+    elif channel == CHANNEL_TWILIO_SMS:
         to_e164 = _phone_to_e164(phone_raw, phone)
         ok, details = send_registration_otp_sms(to_e164, code, OTP_EXPIRE_MINUTES)
         if not ok:
-            logger.warning("OTP Twilio SMS send failed: phone=%s details=%s", phone[-4:], details)
+            logger.error(
+                "OTP Twilio SMS send failed: phone=%s details=%s",
+                phone[-4:],
+                details,
+            )
             return error_response(
                 "Could not send verification code via SMS.",
                 code="twilio_send_failed",
-                status_code=status.HTTP_502_BAD_GATEWAY,
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
+                details=details if isinstance(details, dict) else {"error": str(details)},
+            )
+    else:
+        ok, details = send_registration_otp_otpiq(phone_raw, code)
+        if not ok:
+            logger.error(
+                "OTP OTPIQ send failed: phone=%s details=%s",
+                phone[-4:],
+                details,
+            )
+            return error_response(
+                "Could not send verification code.",
+                code="otpiq_send_failed",
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
                 details=details if isinstance(details, dict) else {"error": str(details)},
             )
 

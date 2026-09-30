@@ -18,6 +18,7 @@ import logging
 from django.core.cache import cache
 from rest_framework.views import exception_handler
 from rest_framework import status as http_status
+from rest_framework.exceptions import PermissionDenied as DRFPermissionDenied
 from django.http import Http404
 from django.core.exceptions import PermissionDenied
 
@@ -126,6 +127,40 @@ def _log_throttled_request(exc, context):
     logger.warning("Throttled request: %s", " ".join(parts))
 
 
+def _log_permission_denied(exc, context):
+    request = context.get("request")
+    if request is None:
+        return
+
+    path = getattr(request, "path", "") or ""
+    ip = get_client_ip(request) or "unknown"
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_authenticated", False):
+        user_id = user.pk
+        role = getattr(user, "role", "") or ""
+        company_id = getattr(user, "company_id", None)
+    else:
+        user_id = "anon"
+        role = ""
+        company_id = None
+
+    detail = ""
+    if hasattr(exc, "detail"):
+        detail = _unwrap_str(exc.detail)
+    else:
+        detail = str(exc)
+
+    logger.warning(
+        "Permission denied: path=%s user_id=%s role=%s company_id=%s ip=%s detail=%s",
+        path,
+        user_id,
+        role,
+        company_id,
+        ip,
+        detail[:200],
+    )
+
+
 def custom_exception_handler(exc, context):
     """
     Wrap DRF's default handler output in a unified envelope.
@@ -158,6 +193,11 @@ def custom_exception_handler(exc, context):
 
     if response.status_code == http_status.HTTP_429_TOO_MANY_REQUESTS:
         _log_throttled_request(exc, context)
+
+    if response.status_code == http_status.HTTP_403_FORBIDDEN and isinstance(
+        exc, (PermissionDenied, DRFPermissionDenied)
+    ):
+        _log_permission_denied(exc, context)
 
     code = STATUS_CODE_MAP.get(response.status_code, "error")
     details = None

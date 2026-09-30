@@ -300,6 +300,7 @@ def check_zaincash_payment_status(transaction_id: str, msisdn: str = ""):
         status_value = (result.get("status") or "").lower()
         return {"status": status_value, "raw": result}
     except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code if e.response is not None else None
         error_detail = str(e)
         try:
             error_data = e.response.json()
@@ -311,9 +312,13 @@ def check_zaincash_payment_status(transaction_id: str, msisdn: str = ""):
             )
         except (ValueError, AttributeError, TypeError):
             logger.debug("Zain Cash error body was not JSON", exc_info=True)
-        raise Exception(f"Zain Cash status check error: {error_detail}")
+        if status_code is not None:
+            raise Exception(
+                f"Zain Cash status check error (HTTP {status_code}): {error_detail}"
+            ) from e
+        raise Exception(f"Zain Cash status check error: {error_detail}") from e
     except requests.exceptions.RequestException as e:
-        raise Exception(f"Zain Cash status check error: {str(e)}")
+        raise Exception(f"Zain Cash status check error: {str(e)}") from e
 
 
 def test_zaincash_credentials(client_id: str, client_secret: str, environment: str = "test", base_url: str = ""):

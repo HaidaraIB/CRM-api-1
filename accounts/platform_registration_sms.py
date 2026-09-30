@@ -18,8 +18,7 @@ def send_registration_otp_sms(to_e164: str, code: str, expire_minutes: int = 10)
     account_sid = (tw.account_sid or "").strip()
     auth_token = tw.get_auth_token()
     twilio_number = (tw.twilio_number or "").strip()
-    sender_id = (tw.sender_id or "").strip()
-    from_value = sender_id if sender_id else (twilio_number or "")
+    from_value = twilio_number
     if not account_sid or not auth_token or not from_value:
         return False, {"error": "twilio_otp_not_configured"}
 

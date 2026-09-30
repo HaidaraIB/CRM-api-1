@@ -7,10 +7,12 @@ Never trust webhook/callback payload alone — always confirm with the gateway A
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Optional
 
+import requests
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -24,6 +26,7 @@ from subscriptions.services.subscription_helpers import _payment_amount_usd
 logger = logging.getLogger(__name__)
 
 DEFAULT_SESSION_TTL = timedelta(minutes=30)
+PAYMENT_STATUS_REQUERY_GRACE = timedelta(hours=24)
 AMOUNT_MATCH_TOLERANCE = Decimal("0.05")
 
 
@@ -123,6 +126,41 @@ def _gateway_name(payment: Payment) -> str:
     return (gw.name or "").lower() if gw else ""
 
 
+def payment_eligible_for_status_poll_requery(payment: Payment) -> bool:
+    """
+    Payment-status polling may re-query the gateway only for fresh, unapplied PENDING
+    checkouts (within a grace window after session expiry). Otherwise use stored state.
+    """
+    if not payment.tran_ref:
+        return False
+    if payment.payment_status != PaymentStatus.PENDING.value:
+        return False
+    if payment.applied_at is not None:
+        return False
+    now = timezone.now()
+    expires = payment.session_expires_at
+    if expires is None:
+        return True
+    return now <= expires + PAYMENT_STATUS_REQUERY_GRACE
+
+
+def _gateway_requery_failure_is_transport(exc: BaseException) -> bool:
+    if isinstance(exc, requests.RequestException):
+        return True
+    cause = exc
+    while cause is not None:
+        if isinstance(cause, requests.RequestException):
+            return True
+        cause = cause.__cause__ or cause.__context__
+    msg = str(exc)
+    if re.search(r"HTTP \d{3}", msg, re.IGNORECASE):
+        return True
+    lowered = msg.lower()
+    if "status check error" in lowered or "gateway unreachable" in lowered:
+        return True
+    return False
+
+
 def query_gateway_state(payment: Payment) -> GatewayResult:
     """
     Re-query the payment gateway and return its normalized state.
@@ -144,7 +182,15 @@ def query_gateway_state(payment: Payment) -> GatewayResult:
 
     try:
         return adapter.verify(payment.tran_ref)
-    except Exception:
+    except Exception as exc:
+        if _gateway_requery_failure_is_transport(exc):
+            logger.warning(
+                "Gateway unreachable payment_id=%s gateway=%s: %s",
+                payment.id,
+                adapter.slug,
+                exc,
+            )
+            return GatewayResult("unknown")
         logger.exception(
             "Gateway re-query failed payment_id=%s gateway=%s",
             payment.id,

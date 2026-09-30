@@ -82,7 +82,7 @@ def register_email_send_otp(request):
         return error_response(
             "Could not send email verification code.",
             code="email_otp_send_failed",
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_424_FAILED_DEPENDENCY,
         )
 
     return success_response(

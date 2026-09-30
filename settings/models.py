@@ -427,6 +427,7 @@ class SystemSettings(models.Model):
         ("", "None"),
         ("whatsapp", "WhatsApp"),
         ("twilio_sms", "Twilio SMS"),
+        ("otpiq", "OTPIQ"),
     ]
     registration_phone_otp_required = models.BooleanField(
         default=False,
@@ -564,6 +565,56 @@ class PlatformTwilioSettings(models.Model):
     @classmethod
     def get_settings(cls):
         """Get the singleton instance."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class PlatformOTPIQSettings(models.Model):
+    """
+    Platform-level OTPIQ settings for registration phone OTP.
+    Singleton (pk=1).
+    """
+
+    api_key = models.TextField(
+        blank=True,
+        null=True,
+        help_text="OTPIQ API key (stored encrypted)",
+    )
+    sender_id = models.CharField(
+        max_length=11,
+        blank=True,
+        null=True,
+        help_text="Optional sender ID (must be accepted in OTPIQ)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_platform_otpiq_settings"
+        verbose_name = "Platform OTPIQ Settings"
+        verbose_name_plural = "Platform OTPIQ Settings"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return "Platform OTPIQ (registration OTP)"
+
+    def get_api_key(self):
+        if not self.api_key:
+            return None
+        from integrations.encryption import decrypt_token
+
+        return decrypt_token(self.api_key)
+
+    def set_api_key(self, key):
+        if key:
+            from integrations.encryption import encrypt_token
+
+            self.api_key = encrypt_token(key)
+        else:
+            self.api_key = None
+
+    @classmethod
+    def get_settings(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 

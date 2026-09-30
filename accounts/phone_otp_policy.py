@@ -7,7 +7,8 @@ from .platform_whatsapp import platform_whatsapp_configured
 
 CHANNEL_WHATSAPP = "whatsapp"
 CHANNEL_TWILIO_SMS = "twilio_sms"
-VALID_CHANNELS = frozenset({CHANNEL_WHATSAPP, CHANNEL_TWILIO_SMS})
+CHANNEL_OTPIQ = "otpiq"
+VALID_CHANNELS = frozenset({CHANNEL_WHATSAPP, CHANNEL_TWILIO_SMS, CHANNEL_OTPIQ})
 
 
 def effective_phone_otp_required() -> bool:
@@ -32,9 +33,14 @@ def platform_twilio_ready_for_registration_otp() -> bool:
     account_sid = (tw.account_sid or "").strip()
     auth_token = tw.get_auth_token()
     twilio_number = (tw.twilio_number or "").strip()
-    sender_id = (tw.sender_id or "").strip()
-    from_value = sender_id if sender_id else twilio_number
-    return bool(account_sid and auth_token and from_value)
+    return bool(account_sid and auth_token and twilio_number)
+
+
+def platform_otpiq_ready_for_registration_otp() -> bool:
+    from settings.models import PlatformOTPIQSettings
+
+    row = PlatformOTPIQSettings.get_settings()
+    return bool((row.get_api_key() or "").strip())
 
 
 def channel_is_configured(channel: str) -> bool:
@@ -42,4 +48,16 @@ def channel_is_configured(channel: str) -> bool:
         return platform_whatsapp_configured()
     if channel == CHANNEL_TWILIO_SMS:
         return platform_twilio_ready_for_registration_otp()
+    if channel == CHANNEL_OTPIQ:
+        return platform_otpiq_ready_for_registration_otp()
     return False
+
+
+def channel_not_configured_error_code(channel: str) -> str:
+    if channel == CHANNEL_WHATSAPP:
+        return "whatsapp_otp_not_configured"
+    if channel == CHANNEL_TWILIO_SMS:
+        return "twilio_otp_not_configured"
+    if channel == CHANNEL_OTPIQ:
+        return "otpiq_otp_not_configured"
+    return "phone_otp_misconfigured"

@@ -13,6 +13,7 @@ from .models import (
     SystemAuditLog,
     SystemSettings,
     PlatformTwilioSettings,
+    PlatformOTPIQSettings,
     PlatformWhatsAppSettings,
     BillingSettings,
 )
@@ -322,6 +323,17 @@ class SMTPSettingsSerializer(serializers.ModelSerializer):
         """Validate stored settings (legacy TLS/SSL mutual exclusion)."""
         if data.get("use_tls") and data.get("use_ssl"):
             raise serializers.ValidationError("Cannot use both TLS and SSL. Choose one.")
+        inst = self.instance
+        is_active = data.get("is_active", inst.is_active if inst else False)
+        from_email = data.get("from_email", inst.from_email if inst else "")
+        from settings.credential_validation import validate_resend_outbound_email
+
+        email_errors = validate_resend_outbound_email(
+            is_active=bool(is_active),
+            from_email=from_email,
+        )
+        if email_errors:
+            raise serializers.ValidationError(email_errors)
         return data
 
 
@@ -350,12 +362,82 @@ class PlatformTwilioSettingsSerializer(serializers.ModelSerializer):
             return "********"
         return None
 
+    def validate(self, attrs):
+        from accounts.phone_otp_policy import CHANNEL_TWILIO_SMS, effective_phone_otp_channel
+        from settings.credential_validation import validate_twilio_credentials
+
+        inst = self.instance
+        account_sid = attrs.get("account_sid", getattr(inst, "account_sid", None) if inst else "")
+        twilio_number = attrs.get("twilio_number", getattr(inst, "twilio_number", None) if inst else "")
+        sender_id = attrs.get("sender_id", getattr(inst, "sender_id", None) if inst else "")
+        auth_token = attrs.get("auth_token")
+        if auth_token is None and inst:
+            auth_token = inst.get_auth_token()
+
+        errors = validate_twilio_credentials(
+            account_sid=account_sid,
+            auth_token=auth_token,
+            twilio_number=twilio_number,
+            sender_id=sender_id,
+            require_number_for_registration=effective_phone_otp_channel() == CHANNEL_TWILIO_SMS,
+        )
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
     def update(self, instance, validated_data):
         auth = validated_data.pop("auth_token", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         if auth is not None:
             instance.set_auth_token(auth)
+        instance.save()
+        return instance
+
+
+class PlatformOTPIQSettingsSerializer(serializers.ModelSerializer):
+    """Platform OTPIQ for registration OTP. API key is write-only and stored encrypted."""
+
+    api_key_masked = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = PlatformOTPIQSettings
+        fields = [
+            "id",
+            "api_key",
+            "api_key_masked",
+            "sender_id",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+        extra_kwargs = {"api_key": {"write_only": True, "required": False}}
+
+    def get_api_key_masked(self, obj):
+        if obj.api_key:
+            return "********"
+        return None
+
+    def validate(self, attrs):
+        from settings.credential_validation import validate_otpiq_credentials
+
+        inst = self.instance
+        sender_id = attrs.get("sender_id", getattr(inst, "sender_id", None) if inst else "")
+        api_key = attrs.get("api_key")
+        if api_key is None and inst:
+            api_key = inst.get_api_key()
+
+        errors = validate_otpiq_credentials(api_key=api_key, sender_id=sender_id)
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
+    def update(self, instance, validated_data):
+        api_key = validated_data.pop("api_key", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if api_key is not None:
+            instance.set_api_key(api_key)
         instance.save()
         return instance
 
@@ -387,6 +469,33 @@ class PlatformWhatsAppSettingsSerializer(serializers.ModelSerializer):
         if obj.access_token:
             return "********"
         return None
+
+    def validate(self, attrs):
+        from settings.credential_validation import validate_whatsapp_platform_credentials
+
+        inst = self.instance
+        phone_number_id = attrs.get(
+            "phone_number_id", getattr(inst, "phone_number_id", None) if inst else ""
+        )
+        graph_api_version = attrs.get(
+            "graph_api_version", getattr(inst, "graph_api_version", None) if inst else ""
+        )
+        otp_template_name = attrs.get(
+            "otp_template_name", getattr(inst, "otp_template_name", None) if inst else ""
+        )
+        access_token = attrs.get("access_token")
+        if access_token is None and inst:
+            access_token = inst.get_access_token()
+
+        errors = validate_whatsapp_platform_credentials(
+            phone_number_id=phone_number_id,
+            access_token=access_token,
+            graph_api_version=graph_api_version,
+            otp_template_name=otp_template_name,
+        )
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
 
     def update(self, instance, validated_data):
         token = validated_data.pop("access_token", None)

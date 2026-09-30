@@ -19,13 +19,16 @@ from crm_saas_api.throttles import AuthRateThrottle
 
 from ..models import EmailVerification, User
 from ..phone_otp_policy import (
+    CHANNEL_OTPIQ,
     CHANNEL_TWILIO_SMS,
     CHANNEL_WHATSAPP,
     effective_phone_otp_channel,
     effective_phone_otp_required,
+    platform_otpiq_ready_for_registration_otp,
     platform_twilio_ready_for_registration_otp,
 )
 from ..phone_otp_utils import hash_otp_code
+from ..platform_registration_otpiq import send_registration_otp_otpiq
 from ..platform_registration_sms import send_registration_otp_sms
 from ..platform_whatsapp import normalize_phone_digits, platform_whatsapp_configured, send_otp_template
 from ..two_factor_policy import is_company_owner
@@ -200,6 +203,12 @@ def pre_login_phone_send_otp(request):
             code="twilio_otp_not_configured",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
+    if channel == CHANNEL_OTPIQ and not platform_otpiq_ready_for_registration_otp():
+        return error_response(
+            "OTPIQ verification is not configured.",
+            code="otpiq_otp_not_configured",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     code = f"{secrets.randbelow(900000) + 100000}"
     code_hash = hash_otp_code(phone, code)
@@ -213,22 +222,32 @@ def pre_login_phone_send_otp(request):
         ok, details = send_otp_template(phone, code)
         if not ok:
             cache.delete(_owner_prelogin_cache_key(user.id))
-            logger.warning("pre_login phone WhatsApp send failed: %s", details)
+            logger.error("pre_login phone WhatsApp send failed: %s", details)
             return error_response(
                 "Could not send verification code via WhatsApp.",
                 code="whatsapp_send_failed",
-                status_code=status.HTTP_502_BAD_GATEWAY,
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
             )
-    else:
+    elif channel == CHANNEL_TWILIO_SMS:
         to_e164 = _phone_to_e164(phone_raw, phone)
         ok, details = send_registration_otp_sms(to_e164, code, OTP_EXPIRE_MINUTES)
         if not ok:
             cache.delete(_owner_prelogin_cache_key(user.id))
-            logger.warning("pre_login phone SMS send failed: %s", details)
+            logger.error("pre_login phone SMS send failed: %s", details)
             return error_response(
                 "Could not send verification code via SMS.",
                 code="twilio_send_failed",
-                status_code=status.HTTP_502_BAD_GATEWAY,
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
+            )
+    else:
+        ok, details = send_registration_otp_otpiq(phone_raw, code)
+        if not ok:
+            cache.delete(_owner_prelogin_cache_key(user.id))
+            logger.error("pre_login phone OTPIQ send failed: %s", details)
+            return error_response(
+                "Could not send verification code.",
+                code="otpiq_send_failed",
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
             )
 
     return success_response(

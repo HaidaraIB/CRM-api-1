@@ -339,6 +339,45 @@ class TwilioSettingsSerializer(serializers.ModelSerializer):
                         ]
                     }
                 )
+
+        effective_token = auth_token
+        if effective_token is None and instance:
+            effective_token = instance.get_auth_token()
+        effective_otpiq = otpiq_key
+        if effective_otpiq is None and instance:
+            effective_otpiq = instance.get_otpiq_api_key()
+
+        from settings.credential_validation import (
+            merge_validation_errors,
+            validate_otpiq_credentials,
+            validate_twilio_credentials,
+        )
+
+        live_errors: dict[str, list[str]] = {}
+        if provider == SmsProvider.TWILIO and account_sid and effective_token:
+            live_errors = merge_validation_errors(
+                live_errors,
+                validate_twilio_credentials(
+                    account_sid=account_sid,
+                    auth_token=effective_token,
+                    twilio_number=twilio_number,
+                    sender_id=sender_id,
+                ),
+            )
+        elif provider == SmsProvider.OTPIQ and effective_otpiq:
+            otpiq_field_errors = validate_otpiq_credentials(
+                api_key=effective_otpiq,
+                sender_id=sender_id,
+            )
+            if otpiq_field_errors:
+                remapped = {}
+                for key, msgs in otpiq_field_errors.items():
+                    remapped['otpiq_api_key' if key == 'api_key' else key] = msgs
+                live_errors = merge_validation_errors(live_errors, remapped)
+
+        if live_errors:
+            raise serializers.ValidationError(live_errors)
+
         return attrs
 
     def create(self, validated_data):

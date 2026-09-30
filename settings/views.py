@@ -28,6 +28,7 @@ from .models import (
     SystemAuditLog,
     SystemSettings,
     PlatformTwilioSettings,
+    PlatformOTPIQSettings,
     PlatformWhatsAppSettings,
     BillingSettings,
 )
@@ -46,6 +47,7 @@ from .serializers import (
     TagListSerializer,
     SMTPSettingsSerializer,
     PlatformTwilioSettingsSerializer,
+    PlatformOTPIQSettingsSerializer,
     PlatformWhatsAppSettingsSerializer,
     SystemBackupSerializer,
     SystemAuditLogSerializer,
@@ -306,6 +308,30 @@ class PlatformTwilioSettingsViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         """Return the singleton data."""
         instance = PlatformTwilioSettings.get_settings()
+        serializer = self.get_serializer(instance)
+        return success_response(data=serializer.data)
+
+
+class PlatformOTPIQSettingsViewSet(viewsets.ModelViewSet):
+    """
+    Platform OTPIQ settings (registration phone OTP).
+    Singleton (pk=1). GET and partial PATCH/PUT.
+    """
+
+    permission_classes = [IsAuthenticated, CanManageSettings]
+    serializer_class = PlatformOTPIQSettingsSerializer
+    http_method_names = ["get", "put", "patch", "head", "options"]
+
+    def get_queryset(self):
+        return PlatformOTPIQSettings.objects.filter(pk=1)
+
+    def get_object(self):
+        if self.kwargs.get("pk") == "1" or self.kwargs.get("pk") == 1:
+            return PlatformOTPIQSettings.get_settings()
+        return super().get_object()
+
+    def list(self, request, *args, **kwargs):
+        instance = PlatformOTPIQSettings.get_settings()
         serializer = self.get_serializer(instance)
         return success_response(data=serializer.data)
 

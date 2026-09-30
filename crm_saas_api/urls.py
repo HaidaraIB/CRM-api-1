@@ -93,6 +93,7 @@ from settings.views import (
     SystemAuditLogViewSet,
     SystemSettingsViewSet,
     PlatformTwilioSettingsViewSet,
+    PlatformOTPIQSettingsViewSet,
     PlatformWhatsAppSettingsViewSet,
     BillingSettingsViewSet,
 )
@@ -206,6 +207,9 @@ router.register(
 )
 router.register(
     r"settings/platform-twilio", PlatformTwilioSettingsViewSet, basename="platformtwiliosettings"
+)
+router.register(
+    r"settings/platform-otpiq", PlatformOTPIQSettingsViewSet, basename="platformotpiqsettings"
 )
 router.register(
     r"settings/platform-whatsapp",

@@ -8,7 +8,10 @@ from crm_saas_api.responses import error_response, success_response
 from ..models import Subscription, Payment, PaymentStatus
 from ..services.billing import finalize_completed_payment
 from ..services.checkout_auth import require_subscription_company_member
-from ..services.payment_completion import query_gateway_state
+from ..services.payment_completion import (
+    payment_eligible_for_status_poll_requery,
+    query_gateway_state,
+)
 from ..services.subscription_helpers import (
     _payment_amount_usd,
     reconcile_unapplied_completed_payment,
@@ -59,35 +62,46 @@ def check_payment_status(request, subscription_id):
         gateway_status = None
 
         if payment and payment.tran_ref:
-            # One re-query for every gateway: the adapter normalizes its own
-            # status vocabulary, so this endpoint no longer needs a branch per
-            # gateway (and can no longer silently omit one, as it did QiCard).
-            result = query_gateway_state(payment)
+            if payment_eligible_for_status_poll_requery(payment):
+                result = query_gateway_state(payment)
 
-            if result.is_paid:
-                gateway_status = "success"
-                paytabs_status = "A"
-                payment_status_value = PaymentStatus.COMPLETED.value
-                _mark_completed_and_finalize(subscription, payment)
-            elif result.is_failed:
-                gateway_status = "failed"
-                raw = result.raw or {}
-                if raw.get("canceled") is True:
-                    payment_status_value = PaymentStatus.CANCELED.value
-                    if payment.payment_status != PaymentStatus.CANCELED.value:
-                        payment.payment_status = PaymentStatus.CANCELED.value
-                        payment.save(update_fields=["payment_status", "updated_at"])
-                else:
-                    payment_status_value = PaymentStatus.FAILED.value
-                    if payment.payment_status != PaymentStatus.FAILED.value:
-                        payment.payment_status = PaymentStatus.FAILED.value
-                        payment.save(update_fields=["payment_status", "updated_at"])
-            elif result.state == "pending":
-                gateway_status = "pending"
-            elif payment.payment_status == PaymentStatus.COMPLETED.value:
-                # Gateway unreachable, but we already recorded this as paid.
-                gateway_status = "success"
-                paytabs_status = "A"
+                if result.is_paid:
+                    gateway_status = "success"
+                    paytabs_status = "A"
+                    payment_status_value = PaymentStatus.COMPLETED.value
+                    _mark_completed_and_finalize(subscription, payment)
+                elif result.is_failed:
+                    gateway_status = "failed"
+                    raw = result.raw or {}
+                    if raw.get("canceled") is True:
+                        payment_status_value = PaymentStatus.CANCELED.value
+                        if payment.payment_status != PaymentStatus.CANCELED.value:
+                            payment.payment_status = PaymentStatus.CANCELED.value
+                            payment.save(update_fields=["payment_status", "updated_at"])
+                    else:
+                        payment_status_value = PaymentStatus.FAILED.value
+                        if payment.payment_status != PaymentStatus.FAILED.value:
+                            payment.payment_status = PaymentStatus.FAILED.value
+                            payment.save(update_fields=["payment_status", "updated_at"])
+                elif result.state == "pending":
+                    gateway_status = "pending"
+                elif payment.payment_status == PaymentStatus.COMPLETED.value:
+                    gateway_status = "success"
+                    paytabs_status = "A"
+            else:
+                stored = payment.payment_status
+                payment_status_value = stored
+                if stored == PaymentStatus.COMPLETED.value:
+                    gateway_status = "success"
+                    paytabs_status = "A"
+                    if payment.applied_at is None:
+                        _mark_completed_and_finalize(subscription, payment)
+                elif stored == PaymentStatus.CANCELED.value:
+                    gateway_status = "failed"
+                elif stored == PaymentStatus.FAILED.value:
+                    gateway_status = "failed"
+                elif stored == PaymentStatus.PENDING.value:
+                    gateway_status = "pending"
 
             if (
                 payment.payment_status == PaymentStatus.COMPLETED.value

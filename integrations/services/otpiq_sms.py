@@ -248,3 +248,86 @@ def send_custom_message(
         mask_phone_for_log(phone_digits),
     )
     return False, None, error_key, error_msg
+
+
+def send_verification_code(
+    *,
+    api_key: str,
+    phone: str,
+    code: str,
+    sender_id: str | None = None,
+    route_provider: str = "auto",
+) -> tuple[bool, str | None, str | None, str | None]:
+    """
+    Send a verification code via OTPIQ (smsType=verification).
+
+    Returns (success, sms_id, error_key, error_message).
+    """
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return False, None, "sms_error_credentials_incomplete", "OTPIQ API key is required."
+
+    phone_digits = normalize_phone_for_otpiq(phone)
+    if not phone_digits.isdigit() or len(phone_digits) < 10:
+        return False, None, "sms_error_invalid_to_number", "Invalid phone number."
+
+    route = (route_provider or "auto").strip() or "auto"
+    if route not in OTPIQ_ROUTE_PROVIDERS:
+        route = "auto"
+
+    payload: dict[str, Any] = {
+        "phoneNumber": phone_digits,
+        "smsType": "verification",
+        "verificationCode": str(code)[:32],
+        "provider": route,
+    }
+    sender = (sender_id or "").strip()
+    if sender:
+        payload["senderId"] = sender[:11]
+
+    logger.info(
+        "OTPIQ verification outbound to=%s route=%s sender_id=%s",
+        mask_phone_for_log(phone_digits),
+        route,
+        sender or "(none)",
+    )
+
+    url = f"{otpiq_api_base_url()}/sms"
+    try:
+        resp = requests.post(
+            url,
+            json=payload,
+            headers=_otpiq_auth_headers(api_key),
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        logger.warning("OTPIQ verification request failed: %s", e)
+        return False, None, "sms_error_send_failed", str(e) or "Failed to send verification code."
+
+    try:
+        data = resp.json() if resp.content else {}
+    except ValueError:
+        data = {}
+
+    if resp.status_code == 200:
+        sms_id = data.get("smsId") if isinstance(data, dict) else None
+        logger.info(
+            "OTPIQ verification accepted sms_id=%s to=%s",
+            sms_id,
+            mask_phone_for_log(phone_digits),
+        )
+        return True, sms_id, None, None
+
+    error_msg = ""
+    if isinstance(data, dict):
+        error_msg = data.get("error") or data.get("message") or ""
+    if not error_msg:
+        error_msg = resp.text[:400] if resp.text else "Verification request was rejected."
+    error_key = otpiq_error_to_key(resp.status_code, data if isinstance(data, dict) else None)
+    logger.warning(
+        "OTPIQ verification rejected status=%s key=%s to=%s",
+        resp.status_code,
+        error_key,
+        mask_phone_for_log(phone_digits),
+    )
+    return False, None, error_key, error_msg
