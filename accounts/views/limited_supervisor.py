@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes as throttle_decorator
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -97,6 +98,21 @@ class LimitedAdminViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(limited_admin)
         return success_response(data=serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        limited_admin = self.get_object()
+        user = limited_admin.user
+        if user.id == request.user.id:
+            return error_response(
+                "You cannot delete your own limited admin profile.",
+                code="permission_denied",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        with transaction.atomic():
+            user.is_active = False
+            user.save(update_fields=["is_active"])
+            limited_admin.delete()
+        return success_response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 class SupervisorViewSet(viewsets.ModelViewSet):

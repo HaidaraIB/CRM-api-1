@@ -305,5 +305,14 @@ class DemoBookingAdminViewSet(
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        if instance.status not in (
+            DemoBookingStatus.PENDING,
+            DemoBookingStatus.CANCELLED,
+        ):
+            return error_response(
+                "Only pending or cancelled demo bookings can be deleted.",
+                code="invalid_status",
+                status_code=status.HTTP_409_CONFLICT,
+            )
         instance.delete()
         return success_response(status_code=status.HTTP_204_NO_CONTENT)

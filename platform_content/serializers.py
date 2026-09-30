@@ -35,6 +35,8 @@ class YouTubeUrlMixin:
 
 
 class GuideCategorySerializer(serializers.ModelSerializer):
+    article_count = serializers.IntegerField(read_only=True, default=0)
+
     class Meta:
         model = GuideCategory
         fields = [
@@ -45,8 +47,9 @@ class GuideCategorySerializer(serializers.ModelSerializer):
             "sort_order",
             "created_at",
             "updated_at",
+            "article_count",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at", "article_count"]
         extra_kwargs = {
             "slug": {"required": False, "allow_blank": True},
         }

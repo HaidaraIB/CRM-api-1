@@ -114,6 +114,11 @@ class PlanSerializer(serializers.ModelSerializer):
 class PlanListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
 
+    subscription_count = serializers.IntegerField(read_only=True, default=0)
+    pending_subscription_count = serializers.IntegerField(read_only=True, default=0)
+    trial_code_count = serializers.IntegerField(read_only=True, default=0)
+    target_payment_count = serializers.IntegerField(read_only=True, default=0)
+
     class Meta:
         model = Plan
         fields = [
@@ -132,6 +137,10 @@ class PlanListSerializer(serializers.ModelSerializer):
             "usage_limits_monthly",
             "visible",
             "tier",
+            "subscription_count",
+            "pending_subscription_count",
+            "trial_code_count",
+            "target_payment_count",
         ]
 
 

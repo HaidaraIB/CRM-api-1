@@ -29,6 +29,24 @@ class GuideCategoryAdminViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, CanManageContent]
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
 
+    def get_queryset(self):
+        from django.db.models import Count
+
+        qs = GuideCategory.objects.all()
+        if self.action in ("list", "retrieve"):
+            qs = qs.annotate(article_count=Count("articles", distinct=True))
+        return qs
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.articles.exists():
+            return error_response(
+                "Cannot delete a category that still has guide articles. Move or remove the articles first.",
+                code="category_in_use",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
 
 class GuideArticleAdminViewSet(viewsets.ModelViewSet):
     """Super admin / limited admin CRUD for guide articles (including drafts)."""

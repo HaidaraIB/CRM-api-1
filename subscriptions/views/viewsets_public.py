@@ -3,6 +3,7 @@ from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
+from django.db.models import Count
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import viewsets, filters, generics, status
@@ -76,10 +77,49 @@ class PlanViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "price_monthly", "price_yearly"]
     ordering = ["-created_at"]
 
+    def get_queryset(self):
+        qs = Plan.objects.all()
+        if self.action in ("list", "retrieve"):
+            qs = qs.annotate(
+                subscription_count=Count("subscriptions", distinct=True),
+                pending_subscription_count=Count("pending_subscriptions", distinct=True),
+                trial_code_count=Count("trial_codes", distinct=True),
+                target_payment_count=Count("targeted_payments", distinct=True),
+            )
+        return qs
+
     def get_serializer_class(self):
         if self.action == "list":
             return PlanListSerializer
         return PlanSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        plan = self.get_object()
+        if plan.subscriptions.exists():
+            return error_response(
+                "Cannot delete a plan that has subscriptions. Hide the plan instead.",
+                code="plan_in_use",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if Subscription.objects.filter(pending_plan=plan).exists():
+            return error_response(
+                "Cannot delete a plan that is scheduled as a pending plan change.",
+                code="plan_in_use",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if plan.trial_codes.exists():
+            return error_response(
+                "Cannot delete a plan linked to trial codes. Hide the plan instead.",
+                code="plan_in_use",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if Payment.objects.filter(target_plan=plan).exists():
+            return error_response(
+                "Cannot delete a plan referenced by payments.",
+                code="plan_in_use",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class PublicPlanListView(generics.ListAPIView):
@@ -433,6 +473,13 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
             deactivate_other_subscriptions_for_company(company_id, exclude_subscription_id=instance.id)
         serializer.save()
 
+    def destroy(self, request, *args, **kwargs):
+        return error_response(
+            "Subscriptions cannot be deleted. Deactivate the subscription instead.",
+            code="deactivate_instead",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
 
 class PaymentViewSet(viewsets.ModelViewSet):
     """
@@ -452,6 +499,13 @@ class PaymentViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return PaymentListSerializer
         return PaymentSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        return error_response(
+            "Payments cannot be deleted.",
+            code="deactivate_instead",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     def _qicard_payment_for_action(self, pk, required_status: str, status_error: str):
         adapter = get_adapter("qicard")
@@ -925,6 +979,13 @@ class PaymentGatewayViewSet(viewsets.ModelViewSet):
         if self.action == "list":
             return PaymentGatewayListSerializer
         return PaymentGatewaySerializer
+
+    def destroy(self, request, *args, **kwargs):
+        return error_response(
+            "Payment gateways cannot be deleted. Disable the gateway instead.",
+            code="disable_instead",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     @action(detail=True, methods=["post"])
     def toggle_enabled(self, request, pk=None):
