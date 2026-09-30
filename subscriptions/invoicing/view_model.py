@@ -34,12 +34,14 @@ def format_payment_status_label(code: str, lang: str) -> str:
         "completed": "Paid",
         "failed": "Failed",
         "canceled": "Canceled",
+        "refunded": "Refunded",
     }
     ar = {
         "pending": "قيد الانتظار",
         "completed": "مدفوع",
         "failed": "فشلت",
         "canceled": "ملغاة",
+        "refunded": "مسترد",
     }
     labels = en if lang == "en" else ar
     return labels.get(c, code.replace("_", " ").title() if lang == "en" else code)
@@ -53,6 +55,7 @@ def _status_style(code: str) -> tuple[str, str]:
         "pending": ("#ede9fe", "#5b21b6"),
         "failed": ("#fef2f2", "#b91c1c"),
         "canceled": ("#f9fafb", "#4b5563"),
+        "refunded": ("#f3e8ff", "#6b21a8"),
     }
     return styles.get(c, styles["pending"])
 
