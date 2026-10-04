@@ -11,15 +11,18 @@ from django.db import transaction
 
 from ..models import IntegrationAccount, WhatsAppAccount, WhatsAppInboxNumber
 from .whatsapp_coexistence import subscribe_waba_webhooks
+from .whatsapp_number_ownership import (
+    OWNER_CRM,
+    OWNER_INBOX,
+    WhatsAppNumberConflictError,
+    assert_number_available,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class InboxNumberConflictError(Exception):
-    def __init__(self, error_key: str, message: str):
-        super().__init__(message)
-        self.error_key = error_key
-        self.message = message
+# Kept under the old name for existing imports; one exception type for all number conflicts.
+InboxNumberConflictError = WhatsAppNumberConflictError
 
 
 def inbox_number_ids_for_company(company_id: int) -> set[str]:
@@ -41,31 +44,13 @@ def crm_phone_number_ids_for_company(company_id: int) -> set[str]:
 
 
 def assert_inbox_phone_not_used_by_crm(company_id: int, phone_number_id: str) -> None:
-    pid = str(phone_number_id or '').strip()
-    if not pid:
-        return
-    if WhatsAppAccount.objects.filter(
-        company_id=company_id, phone_number_id=pid, status='connected'
-    ).exists():
-        raise InboxNumberConflictError(
-            'whatsapp_inbox_number_in_use_by_crm',
-            'This number is already connected as your CRM WhatsApp number. '
-            'Choose a different number for the inbox.',
-        )
+    """Raise unless this company may connect the number as its inbox number."""
+    assert_number_available(company_id, phone_number_id, OWNER_INBOX)
 
 
 def assert_crm_phone_not_used_by_inbox(company_id: int, phone_number_id: str) -> None:
-    pid = str(phone_number_id or '').strip()
-    if not pid:
-        return
-    if WhatsAppInboxNumber.objects.filter(
-        company_id=company_id, phone_number_id=pid, status='connected'
-    ).exists():
-        raise InboxNumberConflictError(
-            'whatsapp_number_in_use_by_inbox',
-            'This number is reserved for the WhatsApp inbox. '
-            'Connect a different number for CRM WhatsApp.',
-        )
+    """Raise unless this company may connect the number as its CRM number."""
+    assert_number_available(company_id, phone_number_id, OWNER_CRM)
 
 
 def disconnect_whatsapp_inbox_for_integration(account: IntegrationAccount) -> int:

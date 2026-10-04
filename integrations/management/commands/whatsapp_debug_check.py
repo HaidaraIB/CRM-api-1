@@ -89,6 +89,21 @@ class Command(BaseCommand):
         self.stdout.write("  On failure, API JSON details include graph_http_status when Graph returns an HTTP error.")
         self.stdout.write("")
 
+        from integrations.services.whatsapp_number_ownership import find_number_conflicts
+
+        conflicts = find_number_conflicts()
+        if conflicts:
+            self.stdout.write(self.style.ERROR(f"Shared WhatsApp numbers ({len(conflicts)}) - each number should have ONE owner:"))
+            for pid, owners in conflicts:
+                desc = ", ".join(o.describe() for o in owners)
+                self.stdout.write(self.style.ERROR(f"  phone_number_id={pid}: {desc}"))
+            self.stdout.write(
+                "  Fix: python manage.py resolve_whatsapp_number_conflicts  (dry run, then --apply)"
+            )
+        else:
+            self.stdout.write(self.style.SUCCESS("Shared WhatsApp numbers: none (every number has one owner)."))
+        self.stdout.write("")
+
         qs = WhatsAppAccount.objects.select_related("company", "integration_account").order_by("-id")[:100]
         count = WhatsAppAccount.objects.count()
         self.stdout.write(f"WhatsAppAccount rows (showing up to 100 of {count}):")

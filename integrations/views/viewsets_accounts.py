@@ -33,6 +33,7 @@ from ..whatsapp_account_sync import (
     sync_whatsapp_accounts_from_integration,
     upsert_whatsapp_account_from_embedded_signup,
 )
+from ..services.whatsapp_number_ownership import WhatsAppNumberConflictError
 from ..services.whatsapp_coexistence import (
     fetch_phone_registration_fields,
     initiate_smb_app_data_sync,
@@ -126,6 +127,25 @@ def _build_tiktok_company_sig(company_id: int) -> str:
     ).hexdigest()
 
 
+def _reject_whatsapp_number_conflict(account, exc):
+    """
+    Discard an OAuth attempt whose chosen WhatsApp number belongs to someone else.
+    An account that was already connected keeps working (old token/number untouched);
+    a new one is marked as errored with the client-facing message.
+    """
+    logger.warning(
+        "WhatsApp connect rejected account_id=%s company_id=%s key=%s",
+        account.id,
+        account.company_id,
+        exc.error_key,
+    )
+    account.refresh_from_db()
+    if account.status != 'connected':
+        account.status = 'error'
+        account.error_message = exc.message
+        account.save(update_fields=['status', 'error_message', 'updated_at'])
+
+
 def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup_session=None):
     """
     Persist OAuth access token, IntegrationAccount metadata, Meta pages, and WhatsAppAccount rows.
@@ -192,6 +212,10 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                     phone_number_id=phone_number_id,
                     business_id=business_id,
                 )
+            except WhatsAppNumberConflictError:
+                # Chosen number belongs elsewhere: fail the connect (caller shows the
+                # localized error) instead of falling back to another number.
+                raise
             except Exception as e:
                 logger.warning("WhatsApp embedded signup session upsert failed: %s", e)
         try:
@@ -394,10 +418,8 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
         waba_id = str(session.get('waba_id') or '').strip()
         phone_number_id = str(session.get('phone_number_id') or '').strip()
         business_id = str(session.get('business_id') or '').strip() or None
-        from ..services.whatsapp_inbox_numbers import (
-            InboxNumberConflictError,
-            upsert_inbox_number_from_embedded_signup,
-        )
+        from ..services.whatsapp_inbox_numbers import upsert_inbox_number_from_embedded_signup
+
         if waba_id and phone_number_id:
             try:
                 upsert_inbox_number_from_embedded_signup(
@@ -407,9 +429,8 @@ def apply_oauth_token_to_account(account, token_data, user_info, embedded_signup
                     phone_number_id=phone_number_id,
                     business_id=business_id,
                 )
-            except InboxNumberConflictError as exc:
-                account.status = 'error'
-                account.error_message = exc.message
+            except WhatsAppNumberConflictError:
+                raise
             except Exception as e:
                 logger.warning("WhatsApp inbox embedded signup failed: %s", e)
                 account.status = 'error'
@@ -788,6 +809,16 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 user_info,
                 embedded_signup_session=embedded_session or None,
             )
+        except WhatsAppNumberConflictError as exc:
+            _reject_whatsapp_number_conflict(account, exc)
+            IntegrationLog.objects.create(
+                account=account,
+                action='oauth_connect',
+                status='error',
+                message='WhatsApp number conflict (embedded signup)',
+                error_details=exc.error_key,
+            )
+            return error_response(exc.message, code=exc.error_key)
         except Exception as e:
             account.status = 'error'
             account.error_message = str(e)
@@ -979,6 +1010,12 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             callback_url = _build_oauth_callback_frontend_url()
             return redirect(f"{callback_url}?connected=true&account_id={account.id}")
             
+        except WhatsAppNumberConflictError as exc:
+            from urllib.parse import quote
+            _reject_whatsapp_number_conflict(account, exc)
+            # Frontend localizes snake_case keys passed as the error message.
+            callback_url = _build_oauth_callback_frontend_url()
+            return redirect(f"{callback_url}?connected=false&error={quote(exc.error_key, safe='')}")
         except Exception as e:
             from urllib.parse import quote
             account.status = 'error'

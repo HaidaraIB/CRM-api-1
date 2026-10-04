@@ -487,6 +487,28 @@ class PlatformWhatsAppSettingsSerializer(serializers.ModelSerializer):
         if access_token is None and inst:
             access_token = inst.get_access_token()
 
+        # One number = one owner: the platform can't take a number a company is using.
+        new_pid = str(attrs.get("phone_number_id") or "").strip()
+        old_pid = str(getattr(inst, "phone_number_id", None) or "").strip() if inst else ""
+        if new_pid and new_pid != old_pid:
+            from integrations.services.whatsapp_number_ownership import (
+                OWNER_PLATFORM,
+                owners_for_phone_number_id,
+            )
+
+            taken_by = [o for o in owners_for_phone_number_id(new_pid) if o.kind != OWNER_PLATFORM]
+            if taken_by:
+                raise serializers.ValidationError(
+                    {
+                        "phone_number_id": [
+                            "This number is connected by a company ("
+                            + ", ".join(o.describe() for o in taken_by)
+                            + "). Each WhatsApp number can only have one owner — "
+                            "use a different number for the platform."
+                        ]
+                    }
+                )
+
         errors = validate_whatsapp_platform_credentials(
             phone_number_id=phone_number_id,
             access_token=access_token,

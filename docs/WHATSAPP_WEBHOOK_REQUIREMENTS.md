@@ -509,6 +509,6 @@ curl -X POST \
 
 Admin **Company WhatsApp** uses the same webhook URL. Subscribe `messages` on the WABA that owns `PLATFORM_WHATSAPP_PHONE_NUMBER_ID`.
 
-If `metadata.phone_number_id` equals the platform PID, inbound messages go to the admin↔owner thread (`AdminTenantWhatsAppMessage`), not tenant CRM chat.
+If `metadata.phone_number_id` equals the platform PID, inbound messages go to the admin↔owner thread (`AdminTenantWhatsAppMessage`), not tenant CRM chat. Routing for every `phone_number_id` (platform / CRM / inbox, one owner per number) is defined in `integrations/services/whatsapp_number_ownership.py` — see `docs/WHATSAPP_NUMBER_OWNERSHIP.md`.
 
 Do not connect the platform phone as a tenant WhatsApp account. See [COMPANY_WHATSAPP.md](./COMPANY_WHATSAPP.md).

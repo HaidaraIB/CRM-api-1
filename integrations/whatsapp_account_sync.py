@@ -196,9 +196,9 @@ def upsert_whatsapp_account_from_embedded_signup(
     Disconnects any other connected phones on this integration.
     """
     phone_number_id = str(phone_number_id).strip()
-    from .services.whatsapp_inbox_numbers import assert_crm_phone_not_used_by_inbox
+    from .services.whatsapp_number_ownership import OWNER_CRM, assert_number_available
 
-    assert_crm_phone_not_used_by_inbox(account.company_id, phone_number_id)
+    assert_number_available(account.company_id, phone_number_id, OWNER_CRM)
     profile = _fetch_phone_profile(access_token, phone_number_id)
     display = profile['display']
     verified_name = profile['verified_name']
@@ -295,6 +295,24 @@ def sync_whatsapp_accounts_from_integration(
     if not preferred_pid or not ph:
         return 0
 
+    from .services.whatsapp_number_ownership import (
+        OWNER_CRM,
+        WhatsAppNumberConflictError,
+        assert_number_available,
+    )
+
+    try:
+        assert_number_available(account.company_id, preferred_pid, OWNER_CRM)
+    except WhatsAppNumberConflictError as exc:
+        # Never silently move a number another owner is using onto this company.
+        logger.warning(
+            "Skipping WhatsApp sync for integration %s: phone_number_id=%s conflict=%s",
+            account.id,
+            preferred_pid,
+            exc.error_key,
+        )
+        return 0
+
     display = (ph.get('display_phone_number') or '').strip() or None
     name_status = (ph.get('name_status') or '').strip() or None
     verified_name = (ph.get('verified_name') or '').strip() or None
@@ -344,6 +362,16 @@ def _whatsapp_account_from_integration_metadata(
     pid = meta.get('phone_number_id')
     waba_id = meta.get('waba_id')
     if not pid or not waba_id:
+        return None
+    from .services.whatsapp_number_ownership import (
+        OWNER_CRM,
+        WhatsAppNumberConflictError,
+        assert_number_available,
+    )
+
+    try:
+        assert_number_available(account.company_id, str(pid), OWNER_CRM)
+    except WhatsAppNumberConflictError:
         return None
     token = account.get_access_token()
     wa_account, _ = WhatsAppAccount.objects.update_or_create(

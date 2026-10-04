@@ -68,6 +68,8 @@ Requires:
 
 Inbound routing: if `phone_number_id` equals the platform PID → Company WhatsApp thread (`AdminTenantWhatsAppMessage`). Do **not** connect the platform number as a tenant WhatsApp account.
 
+Every WhatsApp number has exactly one owner (platform, a company's CRM, or a company's inbox). Connecting the platform number as a company number is rejected (`whatsapp_number_is_platform_number`). See `docs/WHATSAPP_NUMBER_OWNERSHIP.md` for the full rules and the one-time cleanup of numbers shared before the rule (`manage.py resolve_whatsapp_number_conflicts`).
+
 ---
 
 ## 5. Verify

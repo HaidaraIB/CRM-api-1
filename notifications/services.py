@@ -35,6 +35,10 @@ except ImportError:
     FIREBASE_AVAILABLE = False
     logger.warning("Firebase Admin SDK not installed. Install it with: pip install firebase-admin")
 
+# The SDK default HTTP timeout is 120s, longer than Q_CLUSTER["timeout"] (60s): a stalled
+# FCM connection would get the qcluster worker killed instead of raising a catchable error.
+_FIREBASE_APP_OPTIONS = {"httpTimeout": 15}
+
 
 class NotificationService:
     """Service for sending push notifications"""
@@ -100,12 +104,12 @@ class NotificationService:
 
                 if firebase_credentials_path and os.path.exists(firebase_credentials_path):
                     cred = credentials.Certificate(firebase_credentials_path)
-                    firebase_admin.initialize_app(cred)
+                    firebase_admin.initialize_app(cred, _FIREBASE_APP_OPTIONS)
                     logger.info("Firebase Admin SDK initialized from credentials file")
                 else:
                     # Try to use default credentials (for production with GOOGLE_APPLICATION_CREDENTIALS)
                     try:
-                        firebase_admin.initialize_app()
+                        firebase_admin.initialize_app(options=_FIREBASE_APP_OPTIONS)
                         logger.info("Firebase Admin SDK initialized with default credentials")
                     except Exception as e:
                         logger.warning(f"Could not initialize Firebase: {e}")

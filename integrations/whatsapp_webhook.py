@@ -210,9 +210,11 @@ def process_platform_admin_inbound(message):
     """
     Inbound to the platform WhatsApp number: map sender to a company owner for admin-panel thread.
     """
-    from accounts.models import User, Role
     from companies.models import AdminTenantWhatsAppMessage
-    from accounts.platform_whatsapp import normalize_phone_digits
+    from integrations.services.whatsapp_number_ownership import (
+        normalize_digits,
+        owner_company_for_phone,
+    )
 
     from_number = message.get("from")
     message_id = message.get("id")
@@ -222,42 +224,68 @@ def process_platform_admin_inbound(message):
     else:
         text_body = f"[{message_type} message]"
 
-    digits = normalize_phone_digits(from_number or "")
+    digits = normalize_digits(from_number)
     if not digits:
         return
 
-    qs = User.objects.filter(role=Role.ADMIN.value, company__isnull=False).select_related("company")
-    for user in qs.iterator(chunk_size=500):
-        if normalize_phone_digits(user.phone or "") != digits:
-            continue
-        company = user.company
-        if company.owner_id != user.id:
-            continue
-        AdminTenantWhatsAppMessage.objects.create(
-            company=company,
-            direction=AdminTenantWhatsAppMessage.DIRECTION_INBOUND,
-            body=(text_body or "")[:65535],
-            whatsapp_message_id=message_id,
-        )
+    company = owner_company_for_phone(digits)
+    if company is None:
         logger.info(
-            "Platform WhatsApp inbound matched company_id=%s",
-            company.id,
+            "Platform WhatsApp inbound: no tenant owner matched for ...%s",
+            digits[-4:] if len(digits) >= 4 else "****",
         )
         return
+    AdminTenantWhatsAppMessage.objects.create(
+        company=company,
+        direction=AdminTenantWhatsAppMessage.DIRECTION_INBOUND,
+        body=(text_body or "")[:65535],
+        whatsapp_message_id=message_id,
+    )
     logger.info(
-        "Platform WhatsApp inbound: no tenant owner matched for ...%s",
-        digits[-4:] if len(digits) >= 4 else "****",
+        "Platform WhatsApp inbound matched company_id=%s",
+        company.id,
     )
 
 
 def process_whatsapp_message(message, phone_number_id):
     """
     معالجة رسالة WhatsApp واردة.
-    Multi-tenant: نستخرج phone_number_id → نبحث في WhatsAppAccount → نحصل على tenant (company).
-    Platform Company WhatsApp number always routes to admin↔owner thread (never tenant CRM),
-    even if a WhatsAppAccount row incorrectly reuses the same phone_number_id.
+    Multi-tenant: phone_number_id → its owner (platform / company CRM / company inbox).
+    One owner per number — see services/whatsapp_number_ownership.py.
     """
-    from accounts.platform_whatsapp import effective_platform_phone_number_id
+    from integrations.services.whatsapp_inbox_ingest import process_whatsapp_inbox_message
+    from integrations.services.whatsapp_number_ownership import (
+        OWNER_INBOX,
+        OWNER_PLATFORM,
+        resolve_inbound_owner,
+    )
+
+    if not message.get('from'):
+        logger.warning("No 'from' number in WhatsApp message")
+        return
+
+    owner = resolve_inbound_owner(phone_number_id)
+    if owner is None:
+        logger.warning(
+            "No WhatsAppAccount found for phone_number_id=%s. "
+            "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "
+            "Meta dashboard 'Test' events often use a sample ID (e.g. 123456123) — send a real message to your business "
+            "number instead, or compare with phone_number_id in your successful outbound send logs / "
+            "python manage.py whatsapp_debug_check",
+            phone_number_id,
+        )
+        return
+    if owner.kind == OWNER_PLATFORM:
+        process_platform_admin_inbound(message)
+        return
+    if owner.kind == OWNER_INBOX:
+        process_whatsapp_inbox_message(owner.inbox_number, message)
+        return
+    _process_tenant_inbound(owner.wa_account, message, phone_number_id)
+
+
+def _process_tenant_inbound(wa_account, message, phone_number_id):
+    """Store an inbound WhatsApp message on the tenant CRM client thread."""
     from integrations.services.whatsapp_media import (
         apply_meta_media_to_message,
         extract_meta_media_info,
@@ -272,42 +300,6 @@ def process_whatsapp_message(message, phone_number_id):
         text_body = message.get('text', {}).get('body', '')
     else:
         text_body = media_body_from_meta_message(message) or f"[{message_type} message]"
-
-    if not from_number:
-        logger.warning("No 'from' number in WhatsApp message")
-        return
-
-    platform_pid = effective_platform_phone_number_id()
-    if platform_pid and str(phone_number_id) == str(platform_pid):
-        process_platform_admin_inbound(message)
-        return
-
-    from integrations.models import WhatsAppInboxNumber
-    from integrations.services.whatsapp_inbox_ingest import process_whatsapp_inbox_message
-
-    inbox_number = WhatsAppInboxNumber.objects.filter(
-        phone_number_id=phone_number_id,
-        status='connected',
-    ).select_related('company').first()
-    if inbox_number:
-        process_whatsapp_inbox_message(inbox_number, message)
-        return
-
-    wa_account = WhatsAppAccount.objects.filter(
-        phone_number_id=phone_number_id,
-        status='connected',
-    ).select_related('company', 'integration_account').first()
-
-    if not wa_account:
-        logger.warning(
-            "No WhatsAppAccount found for phone_number_id=%s. "
-            "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "
-            "Meta dashboard 'Test' events often use a sample ID (e.g. 123456123) — send a real message to your business "
-            "number instead, or compare with phone_number_id in your successful outbound send logs / "
-            "python manage.py whatsapp_debug_check",
-            phone_number_id,
-        )
-        return
 
     try:
         logger.info(
@@ -446,15 +438,15 @@ def process_whatsapp_status_update(status_obj, phone_number_id=None):
         return
 
     if phone_number_id:
-        from integrations.models import WhatsAppInboxNumber
         from integrations.services.whatsapp_inbox_ingest import process_whatsapp_inbox_status
+        from integrations.services.whatsapp_number_ownership import (
+            OWNER_INBOX,
+            resolve_inbound_owner,
+        )
 
-        inbox_number = WhatsAppInboxNumber.objects.filter(
-            phone_number_id=phone_number_id,
-            status='connected',
-        ).first()
-        if inbox_number:
-            process_whatsapp_inbox_status(inbox_number, status_obj)
+        owner = resolve_inbound_owner(phone_number_id)
+        if owner is not None and owner.kind == OWNER_INBOX:
+            process_whatsapp_inbox_status(owner.inbox_number, status_obj)
             return
 
     error_text = ''
