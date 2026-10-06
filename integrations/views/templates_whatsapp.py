@@ -224,19 +224,8 @@ def whatsapp_conversations_list(request):
     status_filter = (request.query_params.get('status') or 'all').strip().lower()
     ordering = (request.query_params.get('ordering') or '-last_message_at').strip()
 
-    if assignment == 'mine':
-        qs = qs.filter(assigned_to_id=request.user.id)
-    elif assignment == 'unassigned':
-        qs = qs.filter(assigned_to__isnull=True)
-
-    if agent_id:
-        if not user_sees_all_company_leads(request.user):
-            return error_response('Not allowed to filter by agent', status_code=403)
-        try:
-            qs = qs.filter(assigned_to_id=int(agent_id))
-        except (TypeError, ValueError):
-            return validation_error_response({'agent': ['Invalid agent id']})
-
+    # Shared filters (neither assignment nor status). Used as the base for
+    # disjunctive facet counts — each rail dimension ignores its own selection.
     if starred:
         qs = qs.filter(whatsapp_state__is_starred=True)
 
@@ -257,52 +246,77 @@ def whatsapp_conversations_list(request):
             | phone_match
         ).distinct()
 
-    # Counts after non-status filters, before status filter (sidebar matches filtered set).
-    base_for_counts = qs
+    qs_shared = qs
+
+    if assignment == 'mine':
+        qs = qs.filter(assigned_to_id=request.user.id)
+    elif assignment == 'unassigned':
+        qs = qs.filter(assigned_to__isnull=True)
+
+    if agent_id:
+        if not user_sees_all_company_leads(request.user):
+            return error_response('Not allowed to filter by agent', status_code=403)
+        try:
+            qs = qs.filter(assigned_to_id=int(agent_id))
+        except (TypeError, ValueError):
+            return validation_error_response({'agent': ['Invalid agent id']})
+
+    # Status rail: respect assignment/agent, ignore status selection.
     status_agg = {
         row['whatsapp_state__status']: row['n']
-        for row in base_for_counts.values('whatsapp_state__status').annotate(n=Count('id'))
+        for row in qs.values('whatsapp_state__status').annotate(n=Count('id'))
     }
     open_count = status_agg.get(None, 0) + status_agg.get(WhatsAppConversationStatus.OPEN, 0)
     status_counts = {
-        'all': base_for_counts.count(),
+        'all': qs.count(),
         'open': open_count,
         'pending': status_agg.get(WhatsAppConversationStatus.PENDING, 0),
         'spam': status_agg.get(WhatsAppConversationStatus.SPAM, 0),
         'invalid': status_agg.get(WhatsAppConversationStatus.INVALID, 0),
         'done': status_agg.get(WhatsAppConversationStatus.DONE, 0),
         'snoozed': status_agg.get(WhatsAppConversationStatus.SNOOZED, 0),
-        'unread': base_for_counts.filter(unread_count__gt=0).count(),
-        'unsubscribed': base_for_counts.filter(whatsapp_state__is_unsubscribed=True).count(),
+        'unread': qs.filter(unread_count__gt=0).count(),
+        'unsubscribed': qs.filter(whatsapp_state__is_unsubscribed=True).count(),
     }
+
+    def _apply_status(q):
+        if status_filter == 'open':
+            return q.filter(
+                Q(whatsapp_state__isnull=True)
+                | Q(whatsapp_state__status=WhatsAppConversationStatus.OPEN)
+            )
+        if status_filter == 'unread':
+            return q.filter(unread_count__gt=0)
+        if status_filter == 'unsubscribed':
+            return q.filter(whatsapp_state__is_unsubscribed=True)
+        if status_filter in (
+            WhatsAppConversationStatus.PENDING,
+            WhatsAppConversationStatus.SPAM,
+            WhatsAppConversationStatus.INVALID,
+            WhatsAppConversationStatus.DONE,
+            WhatsAppConversationStatus.SNOOZED,
+        ):
+            return q.filter(whatsapp_state__status=status_filter)
+        if status_filter not in ('', 'all'):
+            return None
+        return q
+
+    # Assignment rail: respect status, ignore assignment/agent selection.
+    qs_assignment_counts = _apply_status(qs_shared)
+    if qs_assignment_counts is None:
+        return validation_error_response({'status': ['Invalid status']})
     assignment_counts = {
-        'all': status_counts['all'],
-        'mine': base_for_counts.filter(assigned_to_id=request.user.id).count(),
-        'unassigned': base_for_counts.filter(assigned_to__isnull=True).count(),
-        'starred': base_for_counts.filter(whatsapp_state__is_starred=True).count(),
-        'unreplied': base_for_counts.filter(
+        'all': qs_assignment_counts.count(),
+        'mine': qs_assignment_counts.filter(assigned_to_id=request.user.id).count(),
+        'unassigned': qs_assignment_counts.filter(assigned_to__isnull=True).count(),
+        'starred': qs_assignment_counts.filter(whatsapp_state__is_starred=True).count(),
+        'unreplied': qs_assignment_counts.filter(
             last_message_direction=LeadWhatsAppMessage.DIRECTION_INBOUND
         ).count(),
     }
 
-    if status_filter == 'open':
-        qs = qs.filter(
-            Q(whatsapp_state__isnull=True)
-            | Q(whatsapp_state__status=WhatsAppConversationStatus.OPEN)
-        )
-    elif status_filter == 'unread':
-        qs = qs.filter(unread_count__gt=0)
-    elif status_filter == 'unsubscribed':
-        qs = qs.filter(whatsapp_state__is_unsubscribed=True)
-    elif status_filter in (
-        WhatsAppConversationStatus.PENDING,
-        WhatsAppConversationStatus.SPAM,
-        WhatsAppConversationStatus.INVALID,
-        WhatsAppConversationStatus.DONE,
-        WhatsAppConversationStatus.SNOOZED,
-    ):
-        qs = qs.filter(whatsapp_state__status=status_filter)
-    elif status_filter not in ('', 'all'):
+    qs = _apply_status(qs)
+    if qs is None:
         return validation_error_response({'status': ['Invalid status']})
 
     allowed_ordering = {'last_message_at', 'name', '-last_message_at', '-name'}

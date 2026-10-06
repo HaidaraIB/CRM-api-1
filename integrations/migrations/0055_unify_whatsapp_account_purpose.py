@@ -68,7 +68,8 @@ def copy_inbox_numbers(apps, schema_editor):
 
     # Flush deferred constraint triggers so later ALTER TABLE in this
     # transaction does not hit "pending trigger events" on Postgres.
-    schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+    if schema_editor.connection.vendor == "postgresql":
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
 
 
 class Migration(migrations.Migration):

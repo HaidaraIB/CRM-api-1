@@ -258,13 +258,15 @@ def social_inbox_connection_detail(request, pk: int):
 
 
 def _serialize_contact(contact) -> dict:
+    from ..services.meta_inbox_profile import absolute_profile_pic_url
+
     return {
         'id': contact.id,
         'external_id': contact.external_id,
         'name': contact.name,
         'username': contact.username,
         'display_name': contact.display_name,
-        'profile_pic_url': contact.profile_pic_url,
+        'profile_pic_url': absolute_profile_pic_url(contact.profile_pic_url),
     }
 
 
@@ -449,6 +451,26 @@ def social_conversations_list(request):
     if channel in ('instagram', 'messenger', 'whatsapp'):
         qs = qs.filter(channel=channel)
 
+    if converted == 'yes':
+        qs = qs.filter(client__isnull=False)
+    elif converted == 'no':
+        qs = qs.filter(client__isnull=True)
+
+    if starred:
+        qs = qs.filter(is_starred=True)
+    if unreplied:
+        qs = qs.filter(last_message_direction=SocialMessage.DIRECTION_INBOUND)
+    if search:
+        qs = qs.filter(
+            Q(contact__name__icontains=search)
+            | Q(contact__username__icontains=search)
+            | Q(last_message_preview__icontains=search)
+        )
+
+    # Shared filters above; assignment/status applied as disjunctive facets below
+    # so each rail dimension ignores its own selection but respects the other.
+    qs_shared = qs
+
     if assignment == 'mine':
         qs = qs.filter(assigned_to_id=request.user.id)
     elif assignment == 'unassigned':
@@ -472,24 +494,7 @@ def social_conversations_list(request):
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-    if converted == 'yes':
-        qs = qs.filter(client__isnull=False)
-    elif converted == 'no':
-        qs = qs.filter(client__isnull=True)
-
-    if starred:
-        qs = qs.filter(is_starred=True)
-    if unreplied:
-        qs = qs.filter(last_message_direction=SocialMessage.DIRECTION_INBOUND)
-    if search:
-        qs = qs.filter(
-            Q(contact__name__icontains=search)
-            | Q(contact__username__icontains=search)
-            | Q(last_message_preview__icontains=search)
-        )
-
-    # Counts are computed BEFORE the status filter so the filter rail can show
-    # every bucket's size while one bucket is selected.
+    # Status rail: respect assignment/agent, ignore status selection.
     status_counts = {
         row['status']: row['n']
         for row in qs.values('status').annotate(n=Count('id'))
@@ -497,11 +502,15 @@ def social_conversations_list(request):
     for value in WhatsAppConversationStatus.values:
         status_counts.setdefault(value, 0)
 
+    # Assignment rail: respect status, ignore assignment/agent selection.
+    qs_assignment_counts = qs_shared
+    if status_filter in WhatsAppConversationStatus.values:
+        qs_assignment_counts = qs_assignment_counts.filter(status=status_filter)
     assignment_counts = {
-        'all': qs.count(),
-        'mine': qs.filter(assigned_to_id=request.user.id).count(),
-        'unassigned': qs.filter(assigned_to__isnull=True).count(),
-        'unconverted': qs.filter(client__isnull=True).count(),
+        'all': qs_assignment_counts.count(),
+        'mine': qs_assignment_counts.filter(assigned_to_id=request.user.id).count(),
+        'unassigned': qs_assignment_counts.filter(assigned_to__isnull=True).count(),
+        'unconverted': qs_assignment_counts.filter(client__isnull=True).count(),
     }
 
     if status_filter in WhatsAppConversationStatus.values:

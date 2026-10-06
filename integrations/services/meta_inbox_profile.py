@@ -20,12 +20,27 @@ from ..oauth_utils import MetaInboxOAuth
 
 logger = logging.getLogger(__name__)
 
+# Messaging User Profile API fields only — unknown fields (#100) fail the whole lookup.
 _PROFILE_FIELDS = {
-    SocialChannel.INSTAGRAM: 'name,username,profile_pic,profile_picture_url',
-    SocialChannel.MESSENGER: 'first_name,last_name,profile_pic,profile_picture_url',
+    SocialChannel.INSTAGRAM: 'name,username,profile_pic',
+    SocialChannel.MESSENGER: 'first_name,last_name,profile_pic',
 }
 
 _PROFILE_PIC_RETRY = timedelta(hours=6)
+
+
+def absolute_profile_pic_url(url: str) -> str:
+    """FileSystemStorage.url is /media/... — browsers need the API host."""
+    raw = (url or '').strip()
+    if not raw or raw.startswith('http://') or raw.startswith('https://'):
+        return raw
+    from django.conf import settings
+
+    base = (getattr(settings, 'API_BASE_URL', '') or '').rstrip('/')
+    if not base:
+        return raw
+    path = raw if raw.startswith('/') else f'/{raw}'
+    return f'{base}{path}'
 
 
 def _extract_profile_pic_url(payload: dict) -> str:
@@ -56,8 +71,11 @@ def _parse_profile(channel: str, payload: dict) -> dict[str, str]:
 
     first = str(payload.get('first_name') or '').strip()
     last = str(payload.get('last_name') or '').strip()
+    full = ' '.join(part for part in (first, last) if part).strip()
+    if not full:
+        full = str(payload.get('name') or '').strip()
     return {
-        'name': ' '.join(part for part in (first, last) if part).strip(),
+        'name': full,
         'username': '',
         'profile_pic_url': pic,
     }
@@ -66,7 +84,7 @@ def _parse_profile(channel: str, payload: dict) -> dict[str, str]:
 def _store_profile_pic(contact: SocialContact, url: str) -> str:
     """Copy a Meta CDN avatar into our storage. Meta URLs expire."""
     if not url or url.startswith("/"):
-        return url
+        return absolute_profile_pic_url(url)
     try:
         response = requests.get(url, timeout=15)
     except requests.RequestException:
@@ -79,9 +97,10 @@ def _store_profile_pic(contact: SocialContact, url: str) -> str:
         default_storage.delete(key)
     saved = default_storage.save(key, ContentFile(response.content))
     try:
-        return default_storage.url(saved)
+        stored = default_storage.url(saved)
     except Exception:
-        return saved
+        stored = saved
+    return absolute_profile_pic_url(stored)
 
 
 def fetch_contact_profile(contact: SocialContact, *, page_token: str) -> dict[str, str]:
@@ -143,14 +162,19 @@ def ensure_contact_profile(contact: SocialContact, connection, *, force: bool = 
         return
 
     parsed = fetch_contact_profile(contact, page_token=page_token)
-    update_fields = ['profile_fetched_at', 'updated_at']
-    contact.profile_fetched_at = now
-
     pic = parsed.get('profile_pic_url', '')
     if pic:
         stored = _store_profile_pic(contact, pic)
         if stored:
             parsed['profile_pic_url'] = stored
+
+    got_anything = any(parsed.get(f) for f in ('name', 'username', 'profile_pic_url'))
+    # Empty Graph results must not stamp profile_fetched_at — that froze retries.
+    if not got_anything:
+        return
+
+    update_fields = ['profile_fetched_at', 'updated_at']
+    contact.profile_fetched_at = now
     for field in ('name', 'username', 'profile_pic_url'):
         value = parsed.get(field, '')
         if value and getattr(contact, field) != value:
@@ -161,15 +185,17 @@ def ensure_contact_profile(contact: SocialContact, connection, *, force: bool = 
 
 
 def refresh_profiles_for_conversations(conversations, *, limit: int = 10) -> None:
-    """Best-effort: fill missing avatars for the visible inbox page."""
+    """Best-effort: fill missing names/avatars for the visible inbox page."""
     refreshed = 0
     for conversation in conversations:
         if refreshed >= limit:
             break
         contact = getattr(conversation, 'contact', None)
-        if contact is None or contact.profile_pic_url:
+        if contact is None or contact.channel == SocialChannel.WHATSAPP:
             continue
-        if contact.channel == SocialChannel.WHATSAPP:
+        missing_name = not (contact.name or '').strip()
+        missing_pic = not (contact.profile_pic_url or '').strip()
+        if not missing_name and not missing_pic:
             continue
         connection = getattr(conversation, 'connection', None)
         if connection is None:

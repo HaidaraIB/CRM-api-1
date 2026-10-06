@@ -123,12 +123,11 @@ def process_whatsapp_inbox_message(
         text_body = media_body_from_meta_message(message) or f"[{message_type}]"
 
     contact = get_or_create_contact(inbox_number, from_number)
+    # Webhook contacts[].profile.name only — never stamp the phone as name
+    # (that permanently shadows display_name's +E.164 formatting).
     profile_name = str(profile_name or "").strip()
     if profile_name and contact.name != profile_name:
         contact.name = profile_name
-        contact.save(update_fields=['name', 'updated_at'])
-    elif not contact.name:
-        contact.name = from_number
         contact.save(update_fields=['name', 'updated_at'])
     conversation = get_or_create_conversation(inbox_number, contact)
 

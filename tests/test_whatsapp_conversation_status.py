@@ -281,6 +281,12 @@ class TestConversationFiltersAndCounts:
         mine = _results(authenticated_admin.get(f"{CONV_URL}?assignment=mine"))
         assert {r["id"] for r in mine} == {wa_client.id}
 
+        # Assignment badges stay disjunctive: All does not collapse to Mine.
+        counts_body = api_body(authenticated_admin.get(f"{CONV_URL}?assignment=mine"))
+        assert counts_body["assignment_counts"]["mine"] == 1
+        assert counts_body["assignment_counts"]["all"] >= 2
+        assert counts_body["assignment_counts"]["all"] > counts_body["assignment_counts"]["mine"]
+
         # employee sees only their assigned
         client = APIClient()
         client.force_authenticate(user=employee_user)

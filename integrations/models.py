@@ -1877,6 +1877,13 @@ class SocialContact(models.Model):
     @property
     def display_name(self):
         if self.name:
+            if self.channel == SocialChannel.WHATSAPP and self.external_id:
+                # Legacy ingest stamped the phone into name when Meta omitted profile.name
+                name_digits = "".join(ch for ch in self.name if ch.isdigit())
+                ext_digits = "".join(ch for ch in self.external_id if ch.isdigit())
+                if name_digits and name_digits == ext_digits:
+                    raw = self.external_id.strip()
+                    return raw if raw.startswith("+") else f"+{raw}"
             return self.name
         if self.username:
             return f"@{self.username.lstrip('@')}"
