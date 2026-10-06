@@ -652,7 +652,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         queryset = IntegrationAccount.objects.filter(company=user.company)
         # TikTok Lead Gen uses an internal row (leadgen_{company_id}); not a user-managed account.
         if self.action == 'list':
-            queryset = queryset.exclude(platform='tiktok')
+            queryset = queryset.exclude(platform='tiktok').prefetch_related('whatsapp_accounts')
 
         # فلترة حسب المنصة
         platform = self.request.query_params.get('platform', None)

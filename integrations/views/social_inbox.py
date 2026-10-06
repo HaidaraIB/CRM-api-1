@@ -1108,10 +1108,22 @@ def social_inbox_whatsapp_numbers(request):
     gate = _inbox_gate(company)
     if gate is not None:
         return gate
-    account = IntegrationAccount.objects.filter(
-        company=company,
-        platform=IntegrationPlatform.WHATSAPP_INBOX,
-    ).first()
+    # Prefer a connected inbox OAuth row when older disconnected shells still exist.
+    account = (
+        IntegrationAccount.objects.filter(
+            company=company,
+            platform=IntegrationPlatform.WHATSAPP_INBOX,
+            status='connected',
+        )
+        .order_by('-updated_at')
+        .first()
+        or IntegrationAccount.objects.filter(
+            company=company,
+            platform=IntegrationPlatform.WHATSAPP_INBOX,
+        )
+        .order_by('-updated_at')
+        .first()
+    )
     numbers = (
         WhatsAppAccount.objects.inbox().filter(company=company)
         .exclude(status='disconnected')

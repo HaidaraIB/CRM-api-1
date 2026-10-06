@@ -25,7 +25,8 @@ class IntegrationAccountSerializer(serializers.ModelSerializer):
         read_only=True
     )
     is_token_expired = serializers.BooleanField(read_only=True)
-    
+    display_phone_number = serializers.SerializerMethodField()
+
     class Meta:
         model = IntegrationAccount
         fields = [
@@ -43,6 +44,7 @@ class IntegrationAccountSerializer(serializers.ModelSerializer):
             'last_sync_at',
             'error_message',
             'metadata',
+            'display_phone_number',
             'created_at',
             'updated_at',
             'created_by',
@@ -60,6 +62,16 @@ class IntegrationAccountSerializer(serializers.ModelSerializer):
             'created_by',
         ]
     
+    def get_display_phone_number(self, obj):
+        connected = [
+            wa for wa in obj.whatsapp_accounts.all()
+            if wa.status == 'connected' and (wa.display_phone_number or '').strip()
+        ]
+        if not connected:
+            return None
+        connected.sort(key=lambda wa: wa.updated_at, reverse=True)
+        return connected[0].display_phone_number
+
     def validate_platform(self, value):
         """التحقق من صحة المنصة"""
         if value not in [choice[0] for choice in IntegrationPlatform.choices]:
