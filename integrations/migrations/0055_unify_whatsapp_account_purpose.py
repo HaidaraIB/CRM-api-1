@@ -48,8 +48,6 @@ def copy_inbox_numbers(apps, schema_editor):
             conv.inbox_account_id = new_id
             conv.save(update_fields=["inbox_account_id"])
 
-    # Clear wa_inbox_number in the same UPDATE — wa_call_exactly_one_sender is
-    # still active until later in this migration.
     for call in Call.objects.exclude(wa_inbox_number_id=None):
         new_id = id_map.get(call.wa_inbox_number_id)
         if new_id and not call.whatsapp_account_id:
@@ -67,6 +65,10 @@ def copy_inbox_numbers(apps, schema_editor):
             )
 
     Call.objects.filter(whatsapp_account_id=None).delete()
+
+    # Flush deferred constraint triggers so later ALTER TABLE in this
+    # transaction does not hit "pending trigger events" on Postgres.
+    schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
 
 
 class Migration(migrations.Migration):
@@ -135,6 +137,24 @@ class Migration(migrations.Migration):
                 to="integrations.whatsappaccount",
             ),
         ),
+        # Drop call constraints before row updates so Postgres does not queue
+        # deferred triggers that block later ALTER TABLE in this migration.
+        migrations.RemoveConstraint(
+            model_name="whatsappcall",
+            name="wa_call_exactly_one_sender",
+        ),
+        migrations.RemoveConstraint(
+            model_name="whatsappcall",
+            name="uniq_wa_call_inbox_meta_id",
+        ),
+        migrations.RemoveConstraint(
+            model_name="whatsappcall",
+            name="uniq_wa_call_account_meta_id",
+        ),
+        migrations.RemoveIndex(
+            model_name="whatsappcall",
+            name="integration_wa_inbo_f16f33_idx",
+        ),
         migrations.RunPython(copy_inbox_numbers, migrations.RunPython.noop),
         migrations.RemoveConstraint(
             model_name="socialcontact",
@@ -151,18 +171,6 @@ class Migration(migrations.Migration):
         migrations.RemoveIndex(
             model_name="socialcontact",
             name="social_cont_wa_inbo_b76b89_idx",
-        ),
-        migrations.RemoveConstraint(
-            model_name="whatsappcall",
-            name="wa_call_exactly_one_sender",
-        ),
-        migrations.RemoveConstraint(
-            model_name="whatsappcall",
-            name="uniq_wa_call_inbox_meta_id",
-        ),
-        migrations.RemoveIndex(
-            model_name="whatsappcall",
-            name="integration_wa_inbo_f16f33_idx",
         ),
         migrations.RemoveField(model_name="socialcontact", name="wa_inbox_number"),
         migrations.RemoveField(model_name="socialconversation", name="wa_inbox_number"),
@@ -236,10 +244,6 @@ class Migration(migrations.Migration):
                 ),
                 name="social_conv_one_inbox_source",
             ),
-        ),
-        migrations.RemoveConstraint(
-            model_name="whatsappcall",
-            name="uniq_wa_call_account_meta_id",
         ),
         migrations.AlterField(
             model_name="whatsappcall",
