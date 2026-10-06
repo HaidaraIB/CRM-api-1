@@ -50,6 +50,7 @@ from .twilio_sms import (
     twilio_settings_view,
 )
 from .viewsets_accounts import IntegrationAccountViewSet, IntegrationLogViewSet
+from .overview import integration_overview_view
 from .webhooks_messaging import (
     integration_policy_view,
     meta_webhook,
@@ -130,6 +131,7 @@ __all__ = [
     "create_campaign_batch",
     "complete_campaign_batch",
     "record_campaign_failure",
+    "integration_overview_view",
     "integration_policy_view",
     "social_inbox_connections",
     "social_inbox_connection_detail",

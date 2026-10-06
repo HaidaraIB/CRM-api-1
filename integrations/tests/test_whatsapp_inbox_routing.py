@@ -8,7 +8,12 @@ pytestmark = pytest.mark.django_db
 
 @pytest.fixture
 def whatsapp_inbox_number(company, db):
-    from integrations.models import IntegrationAccount, IntegrationPlatform, WhatsAppInboxNumber
+    from integrations.models import (
+        IntegrationAccount,
+        IntegrationPlatform,
+        WhatsAppAccount,
+        WhatsAppPurpose,
+    )
 
     account = IntegrationAccount.objects.create(
         company=company,
@@ -16,13 +21,14 @@ def whatsapp_inbox_number(company, db):
         name='Inbox WA',
         status='connected',
     )
-    row = WhatsAppInboxNumber.objects.create(
+    row = WhatsAppAccount.objects.create(
         company=company,
         integration_account=account,
         waba_id='waba_inbox_1',
         phone_number_id='inbox_phone_99',
         display_phone_number='+9647701111111',
         status='connected',
+        purpose=WhatsAppPurpose.INBOX,
     )
     row.set_access_token('test-token')
     row.save()

@@ -14,6 +14,7 @@ from integrations.models import (
 from integrations.policy import get_plan_integration_access, get_effective_integration_policy
 from integrations.views.webhooks_messaging import _integration_gate as whatsapp_policy_gate
 from integrations.views.whatsapp_calling import _company_calls_qs
+from integrations.social_inbox_access import user_can_access_social_inbox
 from integrations.whatsapp_access import (
     filter_whatsapp_messages_queryset,
     user_can_access_whatsapp_calls,
@@ -94,7 +95,9 @@ def whatsapp_calls_pending_for_user(user):
     gate = whatsapp_policy_gate(company, "whatsapp")
     if not gate.get("enabled"):
         return None
-    if not user_can_access_whatsapp_calls(user):
+    if not (
+        user_can_access_whatsapp_calls(user) or user_can_access_social_inbox(user)
+    ):
         return None
 
     seen = set()

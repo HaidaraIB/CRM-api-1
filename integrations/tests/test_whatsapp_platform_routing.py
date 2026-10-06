@@ -22,7 +22,7 @@ from integrations.models import (
     LeadWhatsAppMessage,
     SocialMessage,
     WhatsAppAccount,
-    WhatsAppInboxNumber,
+    WhatsAppPurpose,
 )
 from integrations.services.whatsapp_number_ownership import (
     OWNER_CRM,
@@ -101,12 +101,13 @@ def _inbox_number(company, pid, days_old=0):
     acc = IntegrationAccount.objects.create(
         company=company, platform="whatsapp_inbox", name="Inbox", status="connected"
     )
-    row = WhatsAppInboxNumber.objects.create(
+    row = WhatsAppAccount.objects.create(
         company=company,
         integration_account=acc,
         waba_id=f"waba_inbox_{pid}",
         phone_number_id=pid,
         status="connected",
+        purpose=WhatsAppPurpose.INBOX,
     )
     row.set_access_token("tok")
     row.save()
@@ -159,14 +160,12 @@ def test_unknown_number_is_ignored(db):
 # --- a conflict that hasn't been cleaned up yet goes to the would-be keeper ---------
 
 
-def test_unresolved_conflict_routes_to_keeper(company, other_company, wa_enabled):
-    pid = "shared_pid"
-    _crm_account(company, pid, days_old=10)  # connected first → keeper
-    _inbox_number(other_company, pid, days_old=1)
-    with patch("integrations.services.whatsapp_push.notify_whatsapp_inbound"):
-        process_whatsapp_message(_inbound(STRANGER_PHONE, "wamid.e1"), pid)
-    assert _crm_inbound("wamid.e1").client.company_id == company.id
-    assert not SocialMessage.objects.filter(external_message_id="wamid.e1").exists()
+def test_one_row_per_phone_number_id(company, other_company):
+    from django.db import IntegrityError
+
+    _crm_account(company, "shared_pid")
+    with pytest.raises(IntegrityError):
+        _inbox_number(other_company, "shared_pid")
 
 
 def test_status_follows_owner(company, wa_enabled):
@@ -240,10 +239,6 @@ def test_pick_keeper(company, other_company, platform_pid):
     _crm_account(company, platform_pid, days_old=100)
     assert pick_keeper(owners_for_phone_number_id(platform_pid)).kind == OWNER_PLATFORM
 
-    _crm_account(company, "p2", days_old=1)
-    _inbox_number(other_company, "p2", days_old=5)
-    assert pick_keeper(owners_for_phone_number_id("p2")).kind == OWNER_INBOX
-
 
 def test_platform_settings_reject_company_number(company):
     from settings.serializers import PlatformWhatsAppSettingsSerializer
@@ -296,31 +291,6 @@ def test_cleanup_platform_keeps_its_number(send, company, owner_user, platform_p
     assert find_number_conflicts() == []
     # Second run is a no-op.
     assert "Nothing to do" in _run("--apply")
-
-
-@patch("notifications.services.NotificationService.send_notification")
-def test_cleanup_earliest_connection_keeps_number(send, company, other_company):
-    _crm_account(company, "p3", days_old=1)
-    inbox = _inbox_number(other_company, "p3", days_old=30)
-
-    _run("--apply")
-
-    assert WhatsAppAccount.objects.get(phone_number_id="p3").status == "disconnected"
-    inbox.refresh_from_db()
-    assert inbox.status == "connected"
-    assert send.call_args.kwargs["data"]["error_key"] == "whatsapp_number_in_use_by_other_company"
-
-
-@patch("notifications.services.NotificationService.send_notification")
-def test_cleanup_keep_override(send, company, other_company):
-    _crm_account(company, "p4", days_old=1)
-    inbox = _inbox_number(other_company, "p4", days_old=30)
-
-    _run("--apply", "--keep", "p4=crm")
-
-    assert WhatsAppAccount.objects.get(phone_number_id="p4").status == "connected"
-    inbox.refresh_from_db()
-    assert inbox.status == "disconnected"
 
 
 @patch("notifications.services.NotificationService.send_notification")

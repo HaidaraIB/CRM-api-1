@@ -9,7 +9,7 @@ from typing import Optional
 
 from django.db import transaction
 
-from ..models import IntegrationAccount, WhatsAppAccount, WhatsAppInboxNumber
+from ..models import IntegrationAccount, WhatsAppAccount, WhatsAppPurpose
 from .whatsapp_coexistence import subscribe_waba_webhooks
 from .whatsapp_number_ownership import (
     OWNER_CRM,
@@ -28,7 +28,7 @@ InboxNumberConflictError = WhatsAppNumberConflictError
 def inbox_number_ids_for_company(company_id: int) -> set[str]:
     return {
         str(pid)
-        for pid in WhatsAppInboxNumber.objects.filter(
+        for pid in WhatsAppAccount.objects.inbox().filter(
             company_id=company_id, status='connected'
         ).values_list('phone_number_id', flat=True)
     }
@@ -37,7 +37,7 @@ def inbox_number_ids_for_company(company_id: int) -> set[str]:
 def crm_phone_number_ids_for_company(company_id: int) -> set[str]:
     return {
         str(pid)
-        for pid in WhatsAppAccount.objects.filter(
+        for pid in WhatsAppAccount.objects.crm().filter(
             company_id=company_id, status='connected'
         ).values_list('phone_number_id', flat=True)
     }
@@ -57,7 +57,7 @@ def disconnect_whatsapp_inbox_for_integration(account: IntegrationAccount) -> in
     if getattr(account, 'platform', None) != 'whatsapp_inbox':
         return 0
     count = 0
-    for row in WhatsAppInboxNumber.objects.filter(integration_account=account):
+    for row in WhatsAppAccount.objects.inbox().filter(integration_account=account):
         row.set_access_token(None)
         row.status = 'disconnected'
         row.integration_account = None
@@ -74,7 +74,7 @@ def upsert_inbox_number_from_embedded_signup(
     waba_id: str,
     phone_number_id: str,
     business_id: Optional[str] = None,
-) -> WhatsAppInboxNumber:
+) -> WhatsAppAccount:
     phone_number_id = str(phone_number_id).strip()
     assert_inbox_phone_not_used_by_crm(account.company_id, phone_number_id)
 
@@ -83,7 +83,7 @@ def upsert_inbox_number_from_embedded_signup(
     profile = _fetch_phone_profile(access_token, phone_number_id)
     display = profile['display']
 
-    row, _created = WhatsAppInboxNumber.objects.update_or_create(
+    row, _created = WhatsAppAccount.objects.update_or_create(
         phone_number_id=phone_number_id,
         defaults={
             'company': account.company,
@@ -93,6 +93,7 @@ def upsert_inbox_number_from_embedded_signup(
             'status': 'connected',
             'integration_account': account,
             'error_message': None,
+            'purpose': WhatsAppPurpose.INBOX,
         },
     )
     row.set_access_token(access_token)
@@ -112,7 +113,7 @@ def upsert_inbox_number_from_embedded_signup(
         subscribe_waba_webhooks(access_token, str(waba_id))
 
     # Only one inbox number per integration account.
-    WhatsAppInboxNumber.objects.filter(
+    WhatsAppAccount.objects.inbox().filter(
         company_id=account.company_id,
         integration_account=account,
         status='connected',
@@ -124,14 +125,14 @@ def upsert_inbox_number_from_embedded_signup(
     return row
 
 
-def disconnect_inbox_number(row: WhatsAppInboxNumber) -> WhatsAppInboxNumber:
+def disconnect_inbox_number(row: WhatsAppAccount) -> WhatsAppAccount:
     row.set_access_token(None)
     row.status = 'disconnected'
     row.save(update_fields=['access_token', 'status', 'updated_at'])
     return row
 
 
-def serialize_inbox_number(row: WhatsAppInboxNumber) -> dict:
+def serialize_inbox_number(row: WhatsAppAccount) -> dict:
     return {
         'id': row.id,
         'phone_number_id': row.phone_number_id,

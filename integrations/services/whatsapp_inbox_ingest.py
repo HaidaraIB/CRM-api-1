@@ -18,7 +18,7 @@ from ..models import (
     SocialContact,
     SocialConversation,
     SocialMessage,
-    WhatsAppInboxNumber,
+    WhatsAppAccount,
 )
 from ..policy import get_effective_integration_policy, get_plan_integration_access
 from .meta_inbox_ingest import preview_for, update_conversation_from_message
@@ -56,7 +56,7 @@ def inbox_allowed(company) -> bool:
     return True
 
 
-def get_or_create_contact(inbox_number: WhatsAppInboxNumber, wa_id: str) -> SocialContact:
+def get_or_create_contact(inbox_number: WhatsAppAccount, wa_id: str) -> SocialContact:
     wa_id = str(wa_id or '').strip()
     try:
         with transaction.atomic():
@@ -76,7 +76,7 @@ def get_or_create_contact(inbox_number: WhatsAppInboxNumber, wa_id: str) -> Soci
 
 
 def get_or_create_conversation(
-    inbox_number: WhatsAppInboxNumber, contact: SocialContact
+    inbox_number: WhatsAppAccount, contact: SocialContact
 ) -> SocialConversation:
     try:
         with transaction.atomic():
@@ -95,7 +95,9 @@ def get_or_create_conversation(
         )
 
 
-def process_whatsapp_inbox_message(inbox_number: WhatsAppInboxNumber, message: dict) -> None:
+def process_whatsapp_inbox_message(
+    inbox_number: WhatsAppAccount, message: dict, profile_name: str | None = None
+) -> None:
     if inbox_number.status != 'connected':
         return
     company = inbox_number.company
@@ -121,7 +123,11 @@ def process_whatsapp_inbox_message(inbox_number: WhatsAppInboxNumber, message: d
         text_body = media_body_from_meta_message(message) or f"[{message_type}]"
 
     contact = get_or_create_contact(inbox_number, from_number)
-    if not contact.name:
+    profile_name = str(profile_name or "").strip()
+    if profile_name and contact.name != profile_name:
+        contact.name = profile_name
+        contact.save(update_fields=['name', 'updated_at'])
+    elif not contact.name:
         contact.name = from_number
         contact.save(update_fields=['name', 'updated_at'])
     conversation = get_or_create_conversation(inbox_number, contact)
@@ -172,7 +178,7 @@ def process_whatsapp_inbox_message(inbox_number: WhatsAppInboxNumber, message: d
         logger.exception('WhatsApp inbox: push failed conv=%s', conversation.id)
 
 
-def process_whatsapp_inbox_status(inbox_number: WhatsAppInboxNumber, status_obj: dict) -> None:
+def process_whatsapp_inbox_status(inbox_number: WhatsAppAccount, status_obj: dict) -> None:
     wam_id = str(status_obj.get('id') or '').strip()
     if not wam_id:
         return

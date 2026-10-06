@@ -44,7 +44,6 @@ def log_whatsapp_call_error(
     client=None,
     peer_phone: str = "",
     whatsapp_account=None,
-    wa_inbox_number=None,
     whatsapp_call=None,
     meta_details: dict | None = None,
 ) -> WhatsAppCallErrorLog | None:
@@ -59,7 +58,6 @@ def log_whatsapp_call_error(
         return WhatsAppCallErrorLog.objects.create(
             company=company,
             whatsapp_account=whatsapp_account,
-            wa_inbox_number=wa_inbox_number,
             whatsapp_call=whatsapp_call,
             agent=agent if getattr(agent, "pk", None) else None,
             client=client if getattr(client, "pk", None) else None,

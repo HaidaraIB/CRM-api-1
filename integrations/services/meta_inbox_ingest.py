@@ -168,6 +168,13 @@ def update_conversation_from_message(conversation, message) -> None:
             fields += ['status', 'snoozed_until']
 
     conversation.save(update_fields=fields)
+    if message.direction == SocialMessage.DIRECTION_INBOUND:
+        try:
+            from integrations.services.inbox_assignment import assign_conversation
+
+            assign_conversation(conversation)
+        except Exception:
+            logger.exception("Inbox assign failed conv=%s", conversation.id)
 
 
 def _log(connection, action: str, status: str, message: str, data: dict | None = None) -> None:

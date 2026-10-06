@@ -18,7 +18,7 @@ from integrations.models import (
     SocialConversation,
     WhatsAppAccount,
     WhatsAppCall,
-    WhatsAppInboxNumber,
+    WhatsAppPurpose,
     WhatsAppCallDirection,
     WhatsAppCallErrorSource,
     WhatsAppCallRecordingStatus,
@@ -60,7 +60,7 @@ from integrations.whatsapp_access import (
     user_can_access_whatsapp_calls,
     user_sees_all_company_leads,
 )
-from integrations.services.whatsapp_sender import CrmSender, InboxSender
+from integrations.services.whatsapp_sender import AccountSender, sender_for_call
 from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
 from integrations.views.webhooks_messaging import _integration_gate
 from sync.conditional import conditional_token, not_modified, tag
@@ -170,10 +170,20 @@ def _serialize_call(call: WhatsAppCall, request=None) -> dict:
         "client_stage": getattr(getattr(client, "status", None), "name", None) if client else None,
         "agent": call.agent_id,
         "agent_username": getattr(call.agent, "username", None) if call.agent_id else None,
-        "whatsapp_account_id": call.whatsapp_account_id,
-        "wa_inbox_number_id": call.wa_inbox_number_id,
+        "whatsapp_account_id": (
+            call.whatsapp_account_id
+            if call.whatsapp_account.purpose == WhatsAppPurpose.CRM
+            else None
+        ),
+        "wa_inbox_number_id": (
+            call.whatsapp_account_id
+            if call.whatsapp_account.purpose == WhatsAppPurpose.INBOX
+            else None
+        ),
         "social_conversation_id": call.social_conversation_id,
-        "call_source": "inbox" if call.wa_inbox_number_id else "crm",
+        "call_source": (
+            "inbox" if call.whatsapp_account.purpose == WhatsAppPurpose.INBOX else "crm"
+        ),
         "offer_sdp": call.offer_sdp or None,
         "answer_sdp": call.answer_sdp or None,
         "started_at": call.started_at.isoformat() if call.started_at else None,
@@ -195,29 +205,37 @@ def _user_can_use_calling_api(user) -> bool:
 
 
 def _company_calls_qs(user):
+    from integrations.services.inbox_assignment import (
+        escalate_due_inbox_rings,
+        visible_inbox_calls,
+    )
+
+    escalate_due_inbox_rings(getattr(user, "company_id", None))
     qs = WhatsAppCall.objects.filter(company=user.company).select_related(
         "client",
         "client__status",
         "agent",
         "whatsapp_account",
-        "wa_inbox_number",
         "social_conversation",
     )
     from django.db.models import Q
 
-    crm_qs = qs.filter(whatsapp_account__isnull=False)
-    inbox_qs = qs.filter(wa_inbox_number__isnull=False)
+    crm_qs = qs.filter(whatsapp_account__purpose=WhatsAppPurpose.CRM)
+    inbox_qs = qs.filter(whatsapp_account__purpose=WhatsAppPurpose.INBOX)
     if user_sees_all_social_conversations(user):
-        allowed_inbox = inbox_qs
+        allowed_inbox = visible_inbox_calls(inbox_qs, user)
     elif user_can_access_social_inbox(user):
-        allowed_inbox = inbox_qs.filter(
-            Q(social_conversation__client__assigned_to_id=user.id)
-            | Q(
-                social_conversation__client__isnull=True,
-                status=WhatsAppCallStatus.RINGING,
-                agent__isnull=True,
-            )
-            | Q(agent_id=user.id)
+        allowed_inbox = visible_inbox_calls(
+            inbox_qs.filter(
+                Q(social_conversation__client__assigned_to_id=user.id)
+                | Q(
+                    social_conversation__client__isnull=True,
+                    status=WhatsAppCallStatus.RINGING,
+                    agent__isnull=True,
+                )
+                | Q(agent_id=user.id)
+            ),
+            user,
         )
     else:
         allowed_inbox = inbox_qs.none()
@@ -242,7 +260,7 @@ def _get_call_for_user(user, call_id: int) -> WhatsAppCall | None:
 def _resolve_account(user, account_id=None) -> tuple[WhatsAppAccount | None, str | None]:
     company = user.company
     if account_id:
-        wa = WhatsAppAccount.objects.filter(
+        wa = WhatsAppAccount.objects.crm().filter(
             company=company, pk=account_id, status="connected"
         ).first()
         if not wa:
@@ -254,19 +272,65 @@ def _resolve_account(user, account_id=None) -> tuple[WhatsAppAccount | None, str
 
 def _resolve_calling_target(
     user, *, account_id=None, inbox_number_id=None
-) -> tuple[CrmSender | InboxSender | None, str | None]:
+) -> tuple[AccountSender | None, str | None]:
     company = user.company
     if inbox_number_id:
-        row = WhatsAppInboxNumber.objects.filter(
+        row = WhatsAppAccount.objects.inbox().filter(
             company=company, pk=inbox_number_id, status="connected"
         ).first()
         if not row:
             return None, "whatsapp_inbox_number_not_found"
-        return InboxSender(row), None
+        return AccountSender(row), None
     wa, err = _resolve_account(user, account_id)
     if not wa:
         return None, err
-    return CrmSender(wa), None
+    return AccountSender(wa), None
+
+
+def _sender_account_fields(sender: AccountSender) -> dict:
+    return {"whatsapp_account": sender.account}
+
+
+def _resolve_sender_from_conversation(user, conversation_id):
+    """Inbox thread calls must use that thread's number, never the CRM number."""
+    if not conversation_id:
+        return None, None
+    try:
+        pk = int(conversation_id)
+    except (TypeError, ValueError):
+        return None, "conversation_not_found"
+    conv = (
+        SocialConversation.objects.filter(company=user.company, pk=pk)
+        .select_related("wa_inbox_number")
+        .first()
+    )
+    if not conv or not conv.wa_inbox_number_id:
+        return None, "conversation_not_found"
+    row = conv.wa_inbox_number
+    if row.status != "connected":
+        return None, "whatsapp_inbox_number_not_found"
+    return AccountSender(row), None
+
+
+def _resolve_call_sender(
+    user, *, account_id=None, inbox_number_id=None, conversation_id=None
+) -> tuple[AccountSender | None, str | None]:
+    if conversation_id:
+        return _resolve_sender_from_conversation(user, conversation_id)
+    return _resolve_calling_target(
+        user, account_id=account_id, inbox_number_id=inbox_number_id
+    )
+
+
+def _graph_sender_or_response(call: WhatsAppCall):
+    sender = sender_for_call(call)
+    if sender is None:
+        return None, error_response(
+            "This call has no WhatsApp number.",
+            code="whatsapp_sender_missing",
+            status_code=400,
+        )
+    return sender, None
 
 
 @api_view(["GET"])
@@ -601,9 +665,12 @@ def whatsapp_call_pre_accept(request, pk: int):
     sdp = (request.data.get("sdp") or "").strip()
     if not sdp:
         return validation_error_response({"sdp": ["Required"]})
+    sender, missing = _graph_sender_or_response(call)
+    if missing:
+        return missing
     try:
         graph_call_action(
-            call.whatsapp_account,
+            sender,
             action="pre_accept",
             call_id=call.meta_call_id,
             sdp=sdp,
@@ -637,9 +704,12 @@ def whatsapp_call_accept(request, pk: int):
     sdp = (request.data.get("sdp") or call.answer_sdp or "").strip()
     if not sdp:
         return validation_error_response({"sdp": ["Required"]})
+    sender, missing = _graph_sender_or_response(call)
+    if missing:
+        return missing
     try:
         graph_call_action(
-            call.whatsapp_account,
+            sender,
             action="accept",
             call_id=call.meta_call_id,
             sdp=sdp,
@@ -654,8 +724,8 @@ def whatsapp_call_accept(request, pk: int):
                 "agent": request.user,
                 "client": call.client,
                 "peer_phone": call.peer_phone,
-                "whatsapp_account": call.whatsapp_account,
                 "whatsapp_call": call,
+                **_sender_account_fields(sender),
             },
         )
     mark_call_answered(call, agent=request.user, answer_sdp=sdp)
@@ -671,9 +741,12 @@ def whatsapp_call_reject(request, pk: int):
     call = _get_call_for_user(request.user, pk)
     if not call:
         return error_response("Call not found", status_code=404)
+    sender, missing = _graph_sender_or_response(call)
+    if missing:
+        return missing
     try:
         graph_call_action(
-            call.whatsapp_account,
+            sender,
             action="reject",
             call_id=call.meta_call_id,
         )
@@ -693,9 +766,12 @@ def whatsapp_call_terminate(request, pk: int):
     if not call:
         return error_response("Call not found", status_code=404)
     notes = (request.data.get("notes") or "").strip()
+    sender, missing = _graph_sender_or_response(call)
+    if missing:
+        return missing
     try:
         graph_call_action(
-            call.whatsapp_account,
+            sender,
             action="terminate",
             call_id=call.meta_call_id,
         )
@@ -756,10 +832,11 @@ def whatsapp_call_initiate(request):
     if not sdp:
         return validation_error_response({"to": ["Required"], "sdp": ["Required"]})
 
-    sender, err = _resolve_calling_target(
+    sender, err = _resolve_call_sender(
         request.user,
         account_id=account_id,
         inbox_number_id=inbox_number_id,
+        conversation_id=conversation_id,
     )
     if not sender:
         return error_response(
@@ -781,7 +858,7 @@ def whatsapp_call_initiate(request):
 
     client = None
     social_conversation = None
-    if isinstance(sender, InboxSender):
+    if sender.kind == WhatsAppPurpose.INBOX:
         if conversation_id:
             social_conversation = filter_social_conversations_queryset(
                 request.user,
@@ -797,7 +874,7 @@ def whatsapp_call_initiate(request):
         client = Client.objects.filter(company=request.user.company, pk=client_id).first()
         if not client or not user_can_access_client(request.user, client):
             return error_response("Lead not found", status_code=404)
-    elif client is None and isinstance(sender, CrmSender):
+    elif client is None and sender.kind == WhatsAppPurpose.CRM:
         client = find_client_by_phone(request.user.company, to)
         if client and not user_can_access_client(request.user, client):
             return error_response("Lead not found", status_code=404)
@@ -809,16 +886,15 @@ def whatsapp_call_initiate(request):
         except WhatsAppCallingError as exc:
             return _calling_error_response(
                 exc,
-                log_ctx={
-                    "company": request.user.company,
-                    "source": WhatsAppCallErrorSource.INITIATE.value,
-                    "agent": request.user,
-                    "client": client,
-                    "peer_phone": to_digits,
-                    "whatsapp_account": sender.whatsapp_account if isinstance(sender, CrmSender) else None,
-                    "wa_inbox_number": sender.inbox_number if isinstance(sender, InboxSender) else None,
-                },
-            )
+            log_ctx={
+                "company": request.user.company,
+                "source": WhatsAppCallErrorSource.INITIATE.value,
+                "agent": request.user,
+                "client": client,
+                "peer_phone": to_digits,
+                **_sender_account_fields(sender),
+            },
+        )
         if not call_permission_allows_start(perms):
             log_whatsapp_call_error(
                 company=request.user.company,
@@ -828,9 +904,8 @@ def whatsapp_call_initiate(request):
                 agent=request.user,
                 client=client,
                 peer_phone=to_digits,
-                whatsapp_account=sender.whatsapp_account if isinstance(sender, CrmSender) else None,
-                wa_inbox_number=sender.inbox_number if isinstance(sender, InboxSender) else None,
                 meta_details={"permissions": perms},
+                **_sender_account_fields(sender),
             )
             return error_response(
                 "Call permission required. Send a call permission request first.",
@@ -856,8 +931,7 @@ def whatsapp_call_initiate(request):
                 "agent": request.user,
                 "client": client,
                 "peer_phone": to_digits,
-                "whatsapp_account": sender.whatsapp_account if isinstance(sender, CrmSender) else None,
-                "wa_inbox_number": sender.inbox_number if isinstance(sender, InboxSender) else None,
+                **_sender_account_fields(sender),
             },
         )
 
@@ -883,14 +957,12 @@ def whatsapp_call_initiate(request):
         "recording_status": WhatsAppCallRecordingStatus.NONE,
         "raw_payload": {"initiate_response": body},
     }
-    if isinstance(sender, InboxSender):
-        create_kwargs["wa_inbox_number"] = sender.inbox_number
+    create_kwargs["whatsapp_account"] = sender.account
+    if sender.kind == WhatsAppPurpose.INBOX:
         create_kwargs["social_conversation"] = social_conversation
-    else:
-        create_kwargs["whatsapp_account"] = sender.account
 
     call = WhatsAppCall.objects.create(**create_kwargs)
-    if isinstance(sender, InboxSender) and not call.social_conversation_id:
+    if sender.kind == WhatsAppPurpose.INBOX and not call.social_conversation_id:
         updates = sender.link_call(call, peer_phone=to_digits, peer_name="")
         if updates:
             call.save(update_fields=list(dict.fromkeys(updates + ["updated_at"])))
@@ -928,17 +1000,25 @@ def whatsapp_call_permission_request(request):
     language = (request.data.get("language") or user_lang or "en").strip() or "en"
     body_text = (request.data.get("body") or request.data.get("body_text") or "").strip()
     account_id = request.data.get("whatsapp_account_id")
+    inbox_number_id = request.data.get("wa_inbox_number_id")
+    conversation_id = request.data.get("conversation") or request.data.get("conversation_id")
 
     if not to:
         return validation_error_response({"to": ["Required"]})
 
-    wa, err = _resolve_account(request.user, account_id)
-    if not wa:
+    sender, err = _resolve_call_sender(
+        request.user,
+        account_id=account_id,
+        inbox_number_id=inbox_number_id,
+        conversation_id=conversation_id,
+    )
+    if not sender:
         return error_response(
             "No connected WhatsApp number for this company.",
             code=err or "no_connected_whatsapp_number",
             status_code=400,
         )
+    wa = sender
 
     company = request.user.company
     mode = "template"
@@ -963,25 +1043,35 @@ def whatsapp_call_permission_request(request):
         from integrations.services.phone_match import phone_match_keys
 
         to_digits = "".join(c for c in to if c.isdigit())
-        keys = phone_match_keys(to_digits) if to_digits else []
-        phone_q = Q()
-        for k in keys:
-            if len(k) >= 7:
-                phone_q |= Q(phone_number=k) | Q(phone_number__endswith=k[-10:])
-        msg_filter = Q(
-            client__company=company,
-            direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
-        )
-        if phone_q:
-            msg_filter &= phone_q
+        in_session = False
+        if sender.kind == WhatsAppPurpose.INBOX and conversation_id:
+            conv = SocialConversation.objects.filter(
+                company=company, pk=conversation_id
+            ).first()
+            last_inbound = conv.last_inbound_at if conv else None
+            in_session = bool(
+                last_inbound and timezone.now() < last_inbound + timedelta(hours=24)
+            )
         else:
-            msg_filter &= Q(pk__in=[])
-        last_inbound = (
-            LeadWhatsAppMessage.objects.filter(msg_filter).aggregate(m=Max("created_at"))["m"]
-        )
-        in_session = bool(
-            last_inbound and timezone.now() < last_inbound + timedelta(hours=24)
-        )
+            keys = phone_match_keys(to_digits) if to_digits else []
+            phone_q = Q()
+            for k in keys:
+                if len(k) >= 7:
+                    phone_q |= Q(phone_number=k) | Q(phone_number__endswith=k[-10:])
+            msg_filter = Q(
+                client__company=company,
+                direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
+            )
+            if phone_q:
+                msg_filter &= phone_q
+            else:
+                msg_filter &= Q(pk__in=[])
+            last_inbound = (
+                LeadWhatsAppMessage.objects.filter(msg_filter).aggregate(m=Max("created_at"))["m"]
+            )
+            in_session = bool(
+                last_inbound and timezone.now() < last_inbound + timedelta(hours=24)
+            )
 
         if in_session:
             mode = "interactive"
@@ -1028,25 +1118,41 @@ def whatsapp_call_permission_request(request):
                 "source": WhatsAppCallErrorSource.PERMISSION_REQUEST.value,
                 "agent": request.user,
                 "peer_phone": to,
-                "whatsapp_account": wa,
+                **_sender_account_fields(sender),
             },
         )
 
     # Persist into the chat thread so agents see the permission request (not a blank gap).
     try:
-        from integrations.models import LeadWhatsAppMessage
+        from integrations.models import LeadWhatsAppMessage, SocialMessage
         from integrations.services.whatsapp_client import ensure_client_for_whatsapp_phone
 
         to_digits = "".join(c for c in to if c.isdigit())
-        client = ensure_client_for_whatsapp_phone(
-            company,
-            to_digits,
-            integration_account=wa.integration_account,
-        )
         wam_id = None
         messages = body.get("messages") if isinstance(body, dict) else None
         if isinstance(messages, list) and messages:
             wam_id = messages[0].get("id")
+        if sender.kind == WhatsAppPurpose.INBOX:
+            conv = None
+            if conversation_id:
+                conv = SocialConversation.objects.filter(
+                    company=company, pk=conversation_id, wa_inbox_number=sender.account
+                ).first()
+            if conv:
+                SocialMessage.objects.create(
+                    conversation=conv,
+                    direction=SocialMessage.DIRECTION_OUTBOUND,
+                    body=preview_body[:65535],
+                    external_message_id=wam_id or "",
+                    created_by=request.user,
+                )
+            client = None
+        else:
+            client = ensure_client_for_whatsapp_phone(
+                company,
+                to_digits,
+                integration_account=sender.account.integration_account,
+            )
         if client and to_digits:
             LeadWhatsAppMessage.objects.create(
                 client=client,
@@ -1079,7 +1185,14 @@ def whatsapp_call_permissions(request):
     to = (request.query_params.get("to") or request.query_params.get("phone") or "").strip()
     if not to:
         return validation_error_response({"to": ["Required"]})
-    wa, err = _resolve_account(request.user, request.query_params.get("whatsapp_account_id"))
+    sender, err = _resolve_call_sender(
+        request.user,
+        account_id=request.query_params.get("whatsapp_account_id"),
+        inbox_number_id=request.query_params.get("wa_inbox_number_id"),
+        conversation_id=request.query_params.get("conversation")
+        or request.query_params.get("conversation_id"),
+    )
+    wa = sender
     if not wa:
         return error_response(
             "No connected WhatsApp number for this company.",
@@ -1124,7 +1237,7 @@ def whatsapp_calling_enable(request):
 
     # Cloud Calling requires a Cloud-API-only number. Coexistence (Business app + API)
     # keeps voice/video on the app only — Meta rejects enable with #141000.
-    if isinstance(sender, CrmSender):
+    if sender.kind == WhatsAppPurpose.CRM:
         wa = sender.account
         integ_meta = {}
         if wa.integration_account_id and isinstance(
@@ -1154,8 +1267,8 @@ def whatsapp_calling_enable(request):
     return success_response(
         {
             "calling_enabled": config.calling_enabled,
-            "whatsapp_account_id": config.id if isinstance(sender, CrmSender) else None,
-            "wa_inbox_number_id": config.id if isinstance(sender, InboxSender) else None,
+            "whatsapp_account_id": config.id if sender.kind == WhatsAppPurpose.CRM else None,
+            "wa_inbox_number_id": config.id if sender.kind == WhatsAppPurpose.INBOX else None,
             "graph": body,
         }
     )

@@ -32,16 +32,25 @@ logger = logging.getLogger(__name__)
 MAX_RECIPIENTS = 25
 
 
-def _eligible_recipients(call):
+def _eligible_recipients(call, *, escalated: bool = False):
     """Users who should be rung for this call, in the UI's own order."""
     from django.contrib.auth import get_user_model
 
+    from integrations.models import WhatsAppPurpose
+    from integrations.services.inbox_assignment import agent_is_ready, ready_agents
     from integrations.services.whatsapp_call_availability import (
         user_is_whatsapp_call_away,
     )
     from integrations.whatsapp_access import user_can_access_whatsapp_calls
 
     User = get_user_model()
+    account = getattr(call, "whatsapp_account", None)
+    if account is not None and account.purpose == WhatsAppPurpose.INBOX:
+        conversation = getattr(call, "social_conversation", None)
+        assignee = getattr(conversation, "assigned_to", None) if conversation else None
+        if assignee and not escalated and not call.ring_escalated_at and agent_is_ready(assignee):
+            return [assignee]
+        return ready_agents(call.company)[:MAX_RECIPIENTS]
 
     assigned_to_id = getattr(getattr(call, "client", None), "assigned_to_id", None)
     if assigned_to_id:
@@ -67,7 +76,7 @@ def _eligible_recipients(call):
     return recipients
 
 
-def notify_inbound_ringing_call(call) -> int:
+def notify_inbound_ringing_call(call, *, escalated: bool = False) -> int:
     """
     Push "incoming call" to whoever can answer it. Returns how many were notified.
 
@@ -77,7 +86,7 @@ def notify_inbound_ringing_call(call) -> int:
         from notifications.models import NotificationType
         from notifications.services import NotificationService
 
-        recipients = _eligible_recipients(call)
+        recipients = _eligible_recipients(call, escalated=escalated)
         if not recipients:
             return 0
 

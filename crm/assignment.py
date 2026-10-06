@@ -80,19 +80,20 @@ def _employees_with_workload_queryset(company):
     )
 
 
-def _pick_round_robin_among_tied(company, tied_employees):
+def _pick_round_robin_among_tied(company, tied_employees, pointer_field="last_auto_assigned_employee"):
     """Among employees at the minimum workload, rotate fairly using a company pointer."""
     from companies.models import Company
 
     tied_employees = sorted(tied_employees, key=lambda employee: employee.id)
     employee_ids = [employee.id for employee in tied_employees]
+    pointer_id_attr = f"{pointer_field}_id"
 
     with transaction.atomic():
         locked_company = Company.objects.select_for_update().get(pk=company.pk)
         if len(tied_employees) == 1:
             selected = tied_employees[0]
         else:
-            last_id = locked_company.last_auto_assigned_employee_id
+            last_id = getattr(locked_company, pointer_id_attr)
             if last_id in employee_ids:
                 current_index = employee_ids.index(last_id)
                 next_index = (current_index + 1) % len(employee_ids)
@@ -100,8 +101,8 @@ def _pick_round_robin_among_tied(company, tied_employees):
                 next_index = 0
             selected = tied_employees[next_index]
 
-        locked_company.last_auto_assigned_employee = selected
-        locked_company.save(update_fields=["last_auto_assigned_employee"])
+        setattr(locked_company, pointer_field, selected)
+        locked_company.save(update_fields=[pointer_field])
         return selected
 
 

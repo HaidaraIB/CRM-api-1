@@ -168,7 +168,9 @@ def _disable_company_platform_integrations(*, company_id: str | int, platform: s
         is_active=True,
     ).update(is_active=False)
     if platform == "whatsapp":
-        WhatsAppAccount.objects.filter(company_id=company_id, status="connected").update(status="disconnected")
+        WhatsAppAccount.objects.crm().filter(company_id=company_id, status="connected").update(status="disconnected")
+    if platform == "whatsapp_inbox":
+        WhatsAppAccount.objects.inbox().filter(company_id=company_id, status="connected").update(status="disconnected")
     if platform == "meta_inbox":
         MetaInboxConnection.objects.filter(company_id=company_id, status="connected").update(status="disconnected")
     if platform == "twilio":
@@ -212,10 +214,15 @@ def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] |
                 account_qs = account_qs.exclude(company_id__in=exception_company_ids)
             account_qs.update(is_active=False)
             if platform == "whatsapp":
-                wa_qs = WhatsAppAccount.objects.filter(status="connected")
+                wa_qs = WhatsAppAccount.objects.crm().filter(status="connected")
                 if exception_company_ids:
                     wa_qs = wa_qs.exclude(company_id__in=exception_company_ids)
                 wa_qs.update(status="disconnected")
+            if platform == "whatsapp_inbox":
+                inbox_qs = WhatsAppAccount.objects.inbox().filter(status="connected")
+                if exception_company_ids:
+                    inbox_qs = inbox_qs.exclude(company_id__in=exception_company_ids)
+                inbox_qs.update(status="disconnected")
             if platform == "meta_inbox":
                 mi_qs = MetaInboxConnection.objects.filter(status="connected")
                 if exception_company_ids:

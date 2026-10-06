@@ -39,7 +39,7 @@ from ..models import (
     SocialConversation,
     SocialMessage,
     WhatsAppConversationStatus,
-    WhatsAppInboxNumber,
+    WhatsAppAccount,
 )
 from ..policy import get_effective_integration_policy, get_plan_integration_access
 from ..services.meta_inbox_connections import (
@@ -1113,7 +1113,7 @@ def social_inbox_whatsapp_numbers(request):
         platform=IntegrationPlatform.WHATSAPP_INBOX,
     ).first()
     numbers = (
-        WhatsAppInboxNumber.objects.filter(company=company)
+        WhatsAppAccount.objects.inbox().filter(company=company)
         .exclude(status='disconnected')
         .order_by('-created_at')
     )
@@ -1149,7 +1149,7 @@ def social_inbox_whatsapp_number_detail(request, pk: int):
             code='meta_inbox_admin_only',
             status_code=status.HTTP_403_FORBIDDEN,
         )
-    row = WhatsAppInboxNumber.objects.filter(pk=pk, company=company).first()
+    row = WhatsAppAccount.objects.inbox().filter(pk=pk, company=company).first()
     if not row:
         return error_response(
             'Number not found.',

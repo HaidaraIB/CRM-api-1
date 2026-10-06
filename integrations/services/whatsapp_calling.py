@@ -24,8 +24,7 @@ from integrations.models import (
     WhatsAppCallStatus,
 )
 from integrations.services.whatsapp_sender import (
-    CrmSender,
-    InboxSender,
+    AccountSender,
     ResolvedSender,
     resolve_whatsapp_sender,
     sender_for_call,
@@ -47,9 +46,9 @@ class WhatsAppCallingError(Exception):
 
 
 def _as_sender(account_or_sender: WhatsAppAccount | ResolvedSender) -> ResolvedSender:
-    if isinstance(account_or_sender, (CrmSender, InboxSender)):
+    if isinstance(account_or_sender, AccountSender):
         return account_or_sender
-    return CrmSender(account_or_sender)
+    return AccountSender(account_or_sender)
 
 
 def _token(sender: WhatsAppAccount | ResolvedSender) -> str:
@@ -156,7 +155,7 @@ def enable_calling_on_sender(sender: WhatsAppAccount | ResolvedSender) -> dict:
 
 
 def enable_calling_on_account(account: WhatsAppAccount) -> dict:
-    return enable_calling_on_sender(CrmSender(account))
+    return enable_calling_on_sender(AccountSender(account))
 
 
 def get_calling_settings(account_or_sender: WhatsAppAccount | ResolvedSender) -> dict:
@@ -432,10 +431,7 @@ def _upsert_from_call_event(
 
     defaults = _call_get_or_create_defaults(sender, direction, peer, peer_name, raw_value)
     defaults["started_at"] = _parse_ts(call_obj.get("timestamp")) or defaults["started_at"]
-    if isinstance(sender, CrmSender):
-        lookup = {"whatsapp_account": sender.account, "meta_call_id": meta_call_id}
-    else:
-        lookup = {"wa_inbox_number": sender.inbox_number, "meta_call_id": meta_call_id}
+    lookup = {"whatsapp_account": sender.account, "meta_call_id": meta_call_id}
     call, _created = WhatsAppCall.objects.select_for_update().get_or_create(
         **lookup,
         defaults=defaults,
@@ -532,10 +528,18 @@ def _upsert_from_call_event(
         # makes that visible here.
         if call.status == WhatsAppCallStatus.RINGING:
             try:
+                from integrations.models import WhatsAppPurpose
+                from integrations.services.inbox_assignment import assign_conversation
                 from integrations.services.whatsapp_call_push import (
                     notify_inbound_ringing_call,
                 )
 
+                if (
+                    sender.kind == WhatsAppPurpose.INBOX
+                    and call.social_conversation_id
+                ):
+                    assign_conversation(call.social_conversation)
+                    call.social_conversation.refresh_from_db()
                 notify_inbound_ringing_call(call)
             except Exception:
                 # Never fail the webhook for a push. Meta retries what we do not
@@ -553,14 +557,9 @@ def _apply_status_event(
     meta_call_id = str(status_obj.get("id") or status_obj.get("call_id") or "").strip()
     if not meta_call_id:
         return None
-    if isinstance(sender, CrmSender):
-        qs = WhatsAppCall.objects.select_for_update().filter(
-            whatsapp_account=sender.account, meta_call_id=meta_call_id
-        )
-    else:
-        qs = WhatsAppCall.objects.select_for_update().filter(
-            wa_inbox_number=sender.inbox_number, meta_call_id=meta_call_id
-        )
+    qs = WhatsAppCall.objects.select_for_update().filter(
+        whatsapp_account=sender.account, meta_call_id=meta_call_id
+    )
     call = qs.first()
     if not call:
         return None

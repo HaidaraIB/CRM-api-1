@@ -32,7 +32,7 @@ def disconnect_whatsapp_accounts_for_integration(account: IntegrationAccount) ->
     if getattr(account, 'platform', None) != 'whatsapp':
         return 0
 
-    qs = WhatsAppAccount.objects.filter(company_id=account.company_id).filter(
+    qs = WhatsAppAccount.objects.crm().filter(company_id=account.company_id).filter(
         Q(integration_account=account)
         | Q(integration_account__isnull=True, status='connected')
     )
@@ -102,7 +102,7 @@ def disconnect_extra_whatsapp_phones_for_integration(
     keep = str(keep_phone_number_id or '').strip()
     if not keep or getattr(account, 'platform', None) != 'whatsapp':
         return 0
-    extras = WhatsAppAccount.objects.filter(
+    extras = WhatsAppAccount.objects.crm().filter(
         company_id=account.company_id,
         integration_account=account,
         status='connected',
@@ -213,6 +213,7 @@ def upsert_whatsapp_account_from_embedded_signup(
             'display_phone_number': display,
             'status': 'connected',
             'integration_account': account,
+            'purpose': 'crm',
         },
     )
     wa_account.set_access_token(access_token)
@@ -336,6 +337,7 @@ def sync_whatsapp_accounts_from_integration(
             'display_phone_number': display or None,
             'status': 'connected',
             'integration_account': account,
+            'purpose': 'crm',
         },
     )
     wa_account.set_access_token(token)
@@ -381,6 +383,7 @@ def _whatsapp_account_from_integration_metadata(
             'waba_id': str(waba_id),
             'status': 'connected',
             'integration_account': account,
+            'purpose': 'crm',
         },
     )
     if token:
@@ -414,7 +417,7 @@ def get_connected_whatsapp_account(company, phone_number_id=None) -> Optional[Wh
     pid_filter = str(phone_number_id).strip() if phone_number_id else None
 
     def _query():
-        qs = WhatsAppAccount.objects.filter(company=company, status='connected')
+        qs = WhatsAppAccount.objects.crm().filter(company=company, status='connected')
         if pid_filter:
             return qs.filter(phone_number_id=pid_filter).first()
 

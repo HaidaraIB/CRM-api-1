@@ -4,8 +4,8 @@ Who owns a WhatsApp ``phone_number_id``.
 Rule: **one number = one owner**. A Meta phone number is used in exactly one place:
 
 * ``platform`` – the LOOP platform number (signup OTP + admin ↔ company-owner thread)
-* ``crm``      – a company's CRM WhatsApp number (``WhatsAppAccount``)
-* ``inbox``    – a company's WhatsApp inbox number (``WhatsAppInboxNumber``)
+* ``crm``      – a company's CRM WhatsApp number (``WhatsAppAccount.purpose=crm``)
+* ``inbox``    – a company's inbox WhatsApp number (``WhatsAppAccount.purpose=inbox``)
 
 * ``assert_number_available`` enforces the rule whenever a number is connected/synced.
 * ``resolve_inbound_owner`` gives the single owner an inbound message belongs to.
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from ..models import WhatsAppAccount, WhatsAppInboxNumber
+from ..models import WhatsAppAccount, WhatsAppPurpose
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +63,16 @@ class NumberOwner:
     kind: str
     company_id: Optional[int] = None
     wa_account: Optional[WhatsAppAccount] = None
-    inbox_number: Optional[WhatsAppInboxNumber] = None
+
+    @property
+    def inbox_number(self) -> Optional[WhatsAppAccount]:
+        if self.kind == OWNER_INBOX:
+            return self.wa_account
+        return None
 
     @property
     def row(self):
-        return self.wa_account or self.inbox_number
+        return self.wa_account
 
     @property
     def connected_at(self) -> Optional[datetime]:
@@ -101,14 +106,8 @@ def owners_for_phone_number_id(phone_number_id) -> list[NumberOwner]:
         .first()
     )
     if wa:
-        owners.append(NumberOwner(OWNER_CRM, wa.company_id, wa_account=wa))
-    inbox = (
-        WhatsAppInboxNumber.objects.filter(phone_number_id=pid, status='connected')
-        .select_related('company', 'integration_account')
-        .first()
-    )
-    if inbox:
-        owners.append(NumberOwner(OWNER_INBOX, inbox.company_id, inbox_number=inbox))
+        kind = OWNER_INBOX if wa.purpose == WhatsAppPurpose.INBOX else OWNER_CRM
+        owners.append(NumberOwner(kind, wa.company_id, wa_account=wa))
     return owners
 
 
@@ -154,8 +153,6 @@ def find_number_conflicts() -> list[tuple[str, list[NumberOwner]]]:
     """Every phone_number_id currently owned by more than one place."""
     pids = set(
         WhatsAppAccount.objects.filter(status='connected').values_list('phone_number_id', flat=True)
-    ) | set(
-        WhatsAppInboxNumber.objects.filter(status='connected').values_list('phone_number_id', flat=True)
     )
     out = []
     for pid in sorted(_pid(p) for p in pids if p):

@@ -11,6 +11,8 @@ import logging
 from datetime import timedelta
 
 import requests
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.utils import timezone
 
 from ..models import SocialChannel, SocialContact
@@ -61,6 +63,27 @@ def _parse_profile(channel: str, payload: dict) -> dict[str, str]:
     }
 
 
+def _store_profile_pic(contact: SocialContact, url: str) -> str:
+    """Copy a Meta CDN avatar into our storage. Meta URLs expire."""
+    if not url or url.startswith("/"):
+        return url
+    try:
+        response = requests.get(url, timeout=15)
+    except requests.RequestException:
+        logger.info("Meta Inbox: avatar download failed contact=%s", contact.id)
+        return ""
+    if not response.ok or not response.content:
+        return ""
+    key = f"social_profiles/{contact.company_id}/{contact.id}.jpg"
+    if default_storage.exists(key):
+        default_storage.delete(key)
+    saved = default_storage.save(key, ContentFile(response.content))
+    try:
+        return default_storage.url(saved)
+    except Exception:
+        return saved
+
+
 def fetch_contact_profile(contact: SocialContact, *, page_token: str) -> dict[str, str]:
     """Call Graph for one sender. Returns parsed profile fields (may be empty)."""
     fields = _PROFILE_FIELDS.get(contact.channel)
@@ -86,11 +109,14 @@ def fetch_contact_profile(contact: SocialContact, *, page_token: str) -> dict[st
         return {}
 
     if not response.ok:
+        err = payload.get('error') if isinstance(payload, dict) else {}
         logger.info(
-            "Meta Inbox: profile lookup rejected for contact=%s channel=%s: %s",
+            "Meta Inbox: profile lookup rejected for contact=%s channel=%s code=%s subcode=%s message=%s",
             contact.id,
             contact.channel,
-            payload.get('error') if isinstance(payload, dict) else payload,
+            (err or {}).get('code'),
+            (err or {}).get('error_subcode'),
+            (err or {}).get('message'),
         )
         return {}
 
@@ -120,6 +146,11 @@ def ensure_contact_profile(contact: SocialContact, connection, *, force: bool = 
     update_fields = ['profile_fetched_at', 'updated_at']
     contact.profile_fetched_at = now
 
+    pic = parsed.get('profile_pic_url', '')
+    if pic:
+        stored = _store_profile_pic(contact, pic)
+        if stored:
+            parsed['profile_pic_url'] = stored
     for field in ('name', 'username', 'profile_pic_url'):
         value = parsed.get(field, '')
         if value and getattr(contact, field) != value:

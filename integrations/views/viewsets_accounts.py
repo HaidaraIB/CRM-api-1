@@ -883,7 +883,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
                 integration_account=account,
             ).first()
         if not wa:
-            wa = WhatsAppAccount.objects.filter(
+            wa = WhatsAppAccount.objects.crm().filter(
                 company=account.company,
                 status='connected',
             ).first()

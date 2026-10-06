@@ -285,6 +285,19 @@ class OAuthState(models.Model):
         return f"state={self.state[:8]}... account={self.account_id}"
 
 
+class WhatsAppPurpose(models.TextChoices):
+    CRM = "crm", "CRM"
+    INBOX = "inbox", "Inbox"
+
+
+class WhatsAppAccountQuerySet(models.QuerySet):
+    def crm(self):
+        return self.filter(purpose=WhatsAppPurpose.CRM)
+
+    def inbox(self):
+        return self.filter(purpose=WhatsAppPurpose.INBOX)
+
+
 class WhatsAppCallingConfig(models.Model):
     """Shared WhatsApp Cloud Calling settings for CRM and inbox numbers."""
 
@@ -319,9 +332,10 @@ class WhatsAppCallingConfig(models.Model):
 
 class WhatsAppAccount(WhatsAppCallingConfig):
     """
-    جدول حسابات واتساب (Embedded Signup Flow).
-    كل صف = رقم واتساب واحد مرتبط بـ tenant (company).
-    يُستخدم للويب هوك (استخراج tenant من phone_number_id) ولإرسال الرسائل.
+    One WhatsApp Cloud API number for a company.
+
+    ``purpose=crm`` is the Chats/Calls number (inbound phones become leads).
+    ``purpose=inbox`` is the Omni-Channel Inbox number (lead-less until convert).
     """
     company = models.ForeignKey(
         Company,
@@ -350,11 +364,19 @@ class WhatsAppAccount(WhatsAppCallingConfig):
         help_text="معرف Business في Meta إن وُجد",
     )
     display_phone_number = models.CharField(
-        max_length=20,
+        max_length=32,
         blank=True,
         null=True,
         help_text="رقم الهاتف المعروض للمستخدم",
     )
+    purpose = models.CharField(
+        max_length=8,
+        choices=WhatsAppPurpose.choices,
+        default=WhatsAppPurpose.CRM,
+        db_index=True,
+    )
+    error_message = models.TextField(blank=True, null=True)
+    last_webhook_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
         choices=[
@@ -383,7 +405,10 @@ class WhatsAppAccount(WhatsAppCallingConfig):
         indexes = [
             models.Index(fields=['company', 'status']),
             models.Index(fields=['phone_number_id']),
+            models.Index(fields=['company', 'purpose', 'status']),
         ]
+
+    objects = WhatsAppAccountQuerySet.as_manager()
 
     def __str__(self):
         return f"{self.company.name} - {self.display_phone_number or self.phone_number_id}"
@@ -1496,15 +1521,6 @@ class WhatsAppCall(models.Model):
         WhatsAppAccount,
         on_delete=models.CASCADE,
         related_name="calls",
-        null=True,
-        blank=True,
-    )
-    wa_inbox_number = models.ForeignKey(
-        "WhatsAppInboxNumber",
-        on_delete=models.CASCADE,
-        related_name="calls",
-        null=True,
-        blank=True,
     )
     social_conversation = models.ForeignKey(
         "SocialConversation",
@@ -1512,6 +1528,11 @@ class WhatsAppCall(models.Model):
         related_name="whatsapp_calls",
         null=True,
         blank=True,
+    )
+    ring_escalated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When an inbox ring left the assignee and opened to every ready agent.",
     )
     meta_call_id = models.CharField(max_length=256, db_index=True)
     direction = models.CharField(
@@ -1574,26 +1595,12 @@ class WhatsAppCall(models.Model):
             models.Index(fields=["company", "-created_at"]),
             models.Index(fields=["company", "status"]),
             models.Index(fields=["whatsapp_account", "status"]),
-            models.Index(fields=["wa_inbox_number", "status"]),
             models.Index(fields=["social_conversation", "-created_at"]),
         ]
         constraints = [
-            models.CheckConstraint(
-                check=(
-                    Q(whatsapp_account__isnull=False, wa_inbox_number__isnull=True)
-                    | Q(whatsapp_account__isnull=True, wa_inbox_number__isnull=False)
-                ),
-                name="wa_call_exactly_one_sender",
-            ),
             models.UniqueConstraint(
                 fields=["whatsapp_account", "meta_call_id"],
-                condition=Q(whatsapp_account__isnull=False),
                 name="uniq_wa_call_account_meta_id",
-            ),
-            models.UniqueConstraint(
-                fields=["wa_inbox_number", "meta_call_id"],
-                condition=Q(wa_inbox_number__isnull=False),
-                name="uniq_wa_call_inbox_meta_id",
             ),
         ]
 
@@ -1621,13 +1628,6 @@ class WhatsAppCallErrorLog(models.Model):
     )
     whatsapp_account = models.ForeignKey(
         WhatsAppAccount,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="call_error_logs",
-    )
-    wa_inbox_number = models.ForeignKey(
-        "WhatsAppInboxNumber",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -1800,68 +1800,6 @@ class MetaInboxConnection(models.Model):
             self.page_access_token = None
 
 
-class WhatsAppInboxNumber(WhatsAppCallingConfig):
-    """
-    WhatsApp Cloud API number used only for the Omni-Channel Inbox.
-
-    Kept separate from WhatsAppAccount so CRM auto-lead creation and outbound
-    sends never pick this number by accident.
-    """
-
-    company = models.ForeignKey(
-        Company,
-        on_delete=models.CASCADE,
-        related_name='whatsapp_inbox_numbers',
-    )
-    integration_account = models.ForeignKey(
-        IntegrationAccount,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='whatsapp_inbox_numbers',
-    )
-    waba_id = models.CharField(max_length=64)
-    phone_number_id = models.CharField(max_length=64, unique=True)
-    business_id = models.CharField(max_length=64, blank=True, default="")
-    display_phone_number = models.CharField(max_length=32, blank=True, default="")
-    access_token = models.TextField(blank=True, null=True)
-    status = models.CharField(
-        max_length=20,
-        choices=[
-            ('connected', 'Connected'),
-            ('disconnected', 'Disconnected'),
-            ('error', 'Error'),
-        ],
-        default='connected',
-    )
-    error_message = models.TextField(blank=True, null=True)
-    last_webhook_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'whatsapp_inbox_numbers'
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['company', 'status']),
-            models.Index(fields=['phone_number_id']),
-        ]
-
-    def __str__(self):
-        return f"{self.company.name} - {self.display_phone_number or self.phone_number_id}"
-
-    def get_access_token(self):
-        if not self.access_token:
-            return None
-        return decrypt_token(self.access_token)
-
-    def set_access_token(self, token):
-        if token:
-            self.access_token = encrypt_token(token)
-        else:
-            self.access_token = None
-
-
 class SocialContact(models.Model):
     """
     A person who messaged the business on Instagram or Messenger.
@@ -1885,11 +1823,12 @@ class SocialContact(models.Model):
         blank=True,
     )
     wa_inbox_number = models.ForeignKey(
-        WhatsAppInboxNumber,
+        WhatsAppAccount,
         on_delete=models.CASCADE,
-        related_name='contacts',
+        related_name='inbox_contacts',
         null=True,
         blank=True,
+        limit_choices_to={'purpose': WhatsAppPurpose.INBOX},
     )
     channel = models.CharField(max_length=16, choices=SocialChannel.choices)
     external_id = models.CharField(
@@ -1937,7 +1876,18 @@ class SocialContact(models.Model):
 
     @property
     def display_name(self):
-        return self.name or self.username or f"{self.get_channel_display()} {self.external_id[-6:]}"
+        if self.name:
+            return self.name
+        if self.username:
+            return f"@{self.username.lstrip('@')}"
+        if self.channel == SocialChannel.WHATSAPP and self.external_id:
+            raw = self.external_id.strip()
+            return raw if raw.startswith("+") else f"+{raw}"
+        if self.channel == SocialChannel.INSTAGRAM:
+            return "Instagram user"
+        if self.channel == SocialChannel.MESSENGER:
+            return "Messenger user"
+        return "Contact"
 
 
 class SocialConversation(models.Model):
@@ -1963,11 +1913,12 @@ class SocialConversation(models.Model):
         blank=True,
     )
     wa_inbox_number = models.ForeignKey(
-        WhatsAppInboxNumber,
+        WhatsAppAccount,
         on_delete=models.CASCADE,
-        related_name='conversations',
+        related_name='inbox_conversations',
         null=True,
         blank=True,
+        limit_choices_to={'purpose': WhatsAppPurpose.INBOX},
     )
     contact = models.ForeignKey(
         SocialContact,
@@ -2206,4 +2157,26 @@ class SocialMessage(models.Model):
 
     def __str__(self):
         return f"{self.direction}: {(self.body or self.attachment_kind or '')[:40]}"
+
+
+class QuickReply(models.Model):
+    """Saved reply text an agent can insert in any inbox channel."""
+
+    company = models.ForeignKey(
+        Company, on_delete=models.CASCADE, related_name="quick_replies"
+    )
+    title = models.CharField(max_length=80)
+    body = models.TextField()
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="quick_replies"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "quick_replies"
+        ordering = ["title"]
+
+    def __str__(self):
+        return self.title
 

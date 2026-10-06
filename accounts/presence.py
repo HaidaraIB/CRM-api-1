@@ -49,7 +49,16 @@ def mark_live(user_id: int) -> None:
     """Record that this user currently holds an open socket."""
     if not user_id:
         return
-    cache.set(_live_key(user_id), 1, LIVE_TTL_SECONDS)
+    key = _live_key(user_id)
+    was_live = cache.get(key)
+    cache.set(key, 1, LIVE_TTL_SECONDS)
+    if not was_live:
+        try:
+            from integrations.services.inbox_assignment import on_agent_became_ready
+
+            on_agent_became_ready(user_id)
+        except Exception:
+            pass
 
 
 def clear_live(user_id: int) -> None:

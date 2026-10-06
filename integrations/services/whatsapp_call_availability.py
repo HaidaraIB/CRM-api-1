@@ -15,9 +15,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.utils import timezone
 
-from integrations.models import WhatsAppAccount, WhatsAppCall, WhatsAppCallStatus, WhatsAppInboxNumber
+from integrations.models import WhatsAppAccount, WhatsAppCall, WhatsAppCallStatus, WhatsAppPurpose
 
-CallingConfig = WhatsAppAccount | WhatsAppInboxNumber
+CallingConfig = WhatsAppAccount
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,13 @@ def set_agent_call_away(user, *, duration_minutes: Optional[int]) -> dict[str, A
     if not duration_minutes:
         user.whatsapp_call_away_until = None
         user.save(update_fields=["whatsapp_call_away_until"])
+        try:
+            from integrations.services.inbox_assignment import drain_unassigned
+
+            if user.company_id:
+                drain_unassigned(user.company)
+        except Exception:
+            logger.exception("Inbox queue drain failed user=%s", user.id)
         return serialize_agent_call_status(user)
 
     minutes = int(duration_minutes)
@@ -213,15 +220,14 @@ def build_meta_call_hours_payload(account: WhatsAppAccount) -> dict:
 
 
 def sync_call_hours_to_meta(account: CallingConfig) -> dict:
-    from integrations.models import WhatsAppInboxNumber
     from integrations.services.whatsapp_calling import (
         WhatsAppCallingError,
         _as_sender,
         _graph_post,
     )
-    from integrations.services.whatsapp_sender import CrmSender, InboxSender, is_seed_sender
+    from integrations.services.whatsapp_sender import AccountSender, is_seed_sender
 
-    sender = InboxSender(account) if isinstance(account, WhatsAppInboxNumber) else CrmSender(account)
+    sender = AccountSender(account)
     resolved = _as_sender(sender)
 
     if is_seed_sender(resolved):
@@ -322,7 +328,6 @@ def reject_inbound_out_of_hours(call: WhatsAppCall, *, sender=None) -> WhatsAppC
             client=call.client,
             peer_phone=call.peer_phone,
             whatsapp_account=call.whatsapp_account,
-            wa_inbox_number=call.wa_inbox_number,
             whatsapp_call=call,
         )
     except Exception:
@@ -332,9 +337,7 @@ def reject_inbound_out_of_hours(call: WhatsAppCall, *, sender=None) -> WhatsAppC
 
 
 def serialize_call_hours(account: CallingConfig) -> dict[str, Any]:
-    from integrations.models import WhatsAppInboxNumber
-
-    is_inbox = isinstance(account, WhatsAppInboxNumber)
+    is_inbox = account.purpose == WhatsAppPurpose.INBOX
     return {
         "whatsapp_account_id": account.id if not is_inbox else None,
         "wa_inbox_number_id": account.id if is_inbox else None,

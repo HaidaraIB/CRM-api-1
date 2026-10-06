@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from .views.quick_replies import quick_replies, quick_reply_detail
 from .views import (
     IntegrationAccountViewSet,
     IntegrationLogViewSet,
@@ -35,6 +36,7 @@ from .views import (
     campaign_requests_reject,
     campaign_requests_resubmit,
     integration_policy_view,
+    integration_overview_view,
     social_inbox_connections,
     social_inbox_connection_detail,
     social_conversations_list,
@@ -148,6 +150,7 @@ urlpatterns = [
     path('whatsapp/send-template/', whatsapp_send_template, name='whatsapp_send_template'),
     path('whatsapp/session-window/', whatsapp_session_window, name='whatsapp_session_window'),
     path('policy/', integration_policy_view, name='integration_policy'),
+    path('overview/', integration_overview_view, name='integration_overview'),
     path('whatsapp/limits/', whatsapp_limits, name='whatsapp_limits'),
     path('whatsapp/conversations/', whatsapp_conversations_list, name='whatsapp_conversations'),
     path(
@@ -219,6 +222,8 @@ urlpatterns = [
     path('inbox/send-media/', social_send_media, name='social_send_media'),
     path('inbox/send-location/', social_send_location, name='social_send_location'),
     path('inbox/send-template/', social_send_template, name='social_send_template'),
+    path('quick-replies/', quick_replies, name='quick_replies'),
+    path('quick-replies/<int:pk>/', quick_reply_detail, name='quick_reply_detail'),
     path('inbox/window/', social_send_window, name='social_send_window'),
     path(
         'inbox/whatsapp-numbers/',

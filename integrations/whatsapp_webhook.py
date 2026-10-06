@@ -157,9 +157,14 @@ def whatsapp_webhook(request):
                                         phone_number_id,
                                         len(messages),
                                     )
+                                    names = _contact_names(value)
                                     for message in messages:
                                         try:
-                                            process_whatsapp_message(message, phone_number_id)
+                                            process_whatsapp_message(
+                                                message,
+                                                phone_number_id,
+                                                profile_name=names.get(str(message.get("from") or "")),
+                                            )
                                         except Exception as e:
                                             logger.error(
                                                 "Error processing WhatsApp message: %s",
@@ -247,7 +252,19 @@ def process_platform_admin_inbound(message):
     )
 
 
-def process_whatsapp_message(message, phone_number_id):
+def _contact_names(value) -> dict:
+    names = {}
+    for row in value.get("contacts") or []:
+        if not isinstance(row, dict):
+            continue
+        wa_id = str(row.get("wa_id") or "").strip()
+        name = str((row.get("profile") or {}).get("name") or "").strip()
+        if wa_id and name:
+            names[wa_id] = name
+    return names
+
+
+def process_whatsapp_message(message, phone_number_id, profile_name=None):
     """
     معالجة رسالة WhatsApp واردة.
     Multi-tenant: phone_number_id → its owner (platform / company CRM / company inbox).
@@ -279,7 +296,9 @@ def process_whatsapp_message(message, phone_number_id):
         process_platform_admin_inbound(message)
         return
     if owner.kind == OWNER_INBOX:
-        process_whatsapp_inbox_message(owner.inbox_number, message)
+        process_whatsapp_inbox_message(
+            owner.inbox_number, message, profile_name=profile_name
+        )
         return
     _process_tenant_inbound(owner.wa_account, message, phone_number_id)
 

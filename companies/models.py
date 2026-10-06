@@ -38,6 +38,14 @@ class Company(models.Model):
         blank=True,
         help_text="Last employee chosen by smart auto-assign (tie-break rotation).",
     )
+    last_inbox_assigned_agent = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="inbox_round_robin_companies",
+        null=True,
+        blank=True,
+        help_text="Last call-center agent given an inbox conversation.",
+    )
     # Auto assignment settings
     class AutoAssignAlgorithm(models.TextChoices):
         LEAST_BUSY = "least_busy", "Least busy (workload-based)"
