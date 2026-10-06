@@ -848,7 +848,7 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
         POST /api/integrations/accounts/:id/whatsapp/sync-phone-numbers/
         """
         account = self.get_object()
-        if account.platform != 'whatsapp':
+        if account.platform not in ('whatsapp', 'whatsapp_inbox'):
             return error_response(
                 'This action is only for WhatsApp integration accounts.',
                 code='bad_request',
@@ -863,6 +863,40 @@ class IntegrationAccountViewSet(viewsets.ModelViewSet):
             return error_response(
                 'WhatsApp account has no access token.',
                 code='whatsapp_no_access_token',
+            )
+
+        if account.platform == 'whatsapp_inbox':
+            meta = account.metadata or {}
+            phone_number_id = str(meta.get('phone_number_id') or '').strip()
+            waba_id = str(meta.get('waba_id') or '').strip()
+            if not phone_number_id or not waba_id:
+                return error_response(
+                    'Inbox WhatsApp account has no phone number metadata. Reconnect via Embedded Signup.',
+                    code='whatsapp_phone_numbers_not_synced',
+                    details={'metadata': meta},
+                )
+            from ..services.whatsapp_inbox_numbers import upsert_inbox_number_from_embedded_signup
+
+            try:
+                wa = upsert_inbox_number_from_embedded_signup(
+                    account,
+                    token,
+                    waba_id=waba_id,
+                    phone_number_id=phone_number_id,
+                    business_id=str(meta.get('business_id') or '').strip() or None,
+                )
+            except WhatsAppNumberConflictError as exc:
+                return error_response(exc.message, code=exc.error_key)
+            account.refresh_from_db()
+            return success_response(
+                data={
+                    'synced': 1,
+                    'phone_number_id': wa.phone_number_id,
+                    'display_phone_number': wa.display_phone_number,
+                    'waba_id': wa.waba_id,
+                    'calling_enabled': wa.calling_enabled,
+                    'connected_phone_count': 1,
+                },
             )
 
         synced = sync_whatsapp_accounts_from_integration(account, token)
