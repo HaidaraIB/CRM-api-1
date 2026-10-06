@@ -21,6 +21,12 @@ def _tests_skip_api_key_gate(settings):
 
 
 @pytest.fixture(autouse=True)
+def _tests_sync_social_profile_enrichment(settings):
+    """Profile enrichment must run inline in tests (no django_q worker)."""
+    settings.META_INBOX_PROFILE_ENRICH_SYNC = True
+
+
+@pytest.fixture(autouse=True)
 def _execute_on_commit_in_tests(request):
     """
     pytest-django wraps tests in a transaction that never commits, so

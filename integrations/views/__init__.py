@@ -16,6 +16,7 @@ from .campaign_requests import (
 )
 from .social_inbox import (
     social_convert_conversation,
+    social_debug_profile,
     social_delete_conversation,
     social_conversation_messages,
     social_inbox_whatsapp_number_detail,
@@ -32,6 +33,7 @@ from .social_inbox import (
     social_inbox_connections,
     social_mark_conversation_read,
     social_unread_count,
+    social_update_contact,
     social_update_conversation_state,
 )
 from .templates_whatsapp import (
@@ -146,6 +148,8 @@ __all__ = [
     "social_send_window",
     "social_message_attachment",
     "social_convert_conversation",
+    "social_update_contact",
+    "social_debug_profile",
     "MessageTemplateViewSet",
     "meta_webhook",
     "send_lead_sms_view",

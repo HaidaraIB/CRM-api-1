@@ -257,6 +257,16 @@ def _get_call_for_user(user, call_id: int) -> WhatsAppCall | None:
     return _company_calls_qs(user).filter(pk=call_id).first()
 
 
+def _filter_qs_by_call_source(qs, request):
+    """Optional CRM vs inbox WhatsApp number filter (`call_source=crm|inbox`)."""
+    source = (request.query_params.get("call_source") or "").strip().lower()
+    if source == "inbox":
+        return qs.filter(whatsapp_account__purpose=WhatsAppPurpose.INBOX)
+    if source == "crm":
+        return qs.filter(whatsapp_account__purpose=WhatsAppPurpose.CRM)
+    return qs
+
+
 def _resolve_account(user, account_id=None) -> tuple[WhatsAppAccount | None, str | None]:
     company = user.company
     if account_id:
@@ -363,7 +373,7 @@ def whatsapp_calls_list(request):
     if cached is not None:
         return cached
 
-    qs = _company_calls_qs(request.user)
+    qs = _filter_qs_by_call_source(_company_calls_qs(request.user), request)
     status_filter = (request.query_params.get("status") or "").strip()
     direction = (request.query_params.get("direction") or "").strip()
     my_calls = (request.query_params.get("my_calls") or "").lower() in ("1", "true", "yes")
@@ -478,6 +488,7 @@ def whatsapp_calls_pending(request):
     agent_away = user_is_whatsapp_call_away(request.user)
     results = []
     seen = set()
+    scoped_qs = _filter_qs_by_call_source(_company_calls_qs(request.user), request)
 
     if not agent_away:
         # Only ring the assigned agent (or, for an unassigned lead, anyone eligible
@@ -486,7 +497,7 @@ def whatsapp_calls_pending(request):
         from django.db.models import Q
 
         qs = (
-            _company_calls_qs(request.user)
+            scoped_qs
             .filter(
                 status=WhatsAppCallStatus.RINGING,
                 direction=WhatsAppCallDirection.INBOUND,
@@ -503,7 +514,7 @@ def whatsapp_calls_pending(request):
 
     # Outbound ringing owned by this agent (waiting for remote SDP answer)
     mine = (
-        _company_calls_qs(request.user)
+        scoped_qs
         .filter(
             status=WhatsAppCallStatus.RINGING,
             agent_id=request.user.id,
@@ -608,18 +619,21 @@ def whatsapp_calls_live(request):
         | Q(client__isnull=True, agent__isnull=True)
         | Q(agent_id=request.user.id)
     )
-    qs = _company_calls_qs(request.user).filter(
-        Q(
-            status=WhatsAppCallStatus.RINGING,
-            created_at__gte=ringing_cutoff,
-        )
-        & personal_scope
-        | Q(status=WhatsAppCallStatus.ANSWERED, answered_at__gte=answered_cutoff)
-        | Q(
-            status=WhatsAppCallStatus.ANSWERED,
-            answered_at__isnull=True,
-            updated_at__gte=answered_cutoff,
-        )
+    qs = _filter_qs_by_call_source(
+        _company_calls_qs(request.user).filter(
+            Q(
+                status=WhatsAppCallStatus.RINGING,
+                created_at__gte=ringing_cutoff,
+            )
+            & personal_scope
+            | Q(status=WhatsAppCallStatus.ANSWERED, answered_at__gte=answered_cutoff)
+            | Q(
+                status=WhatsAppCallStatus.ANSWERED,
+                answered_at__isnull=True,
+                updated_at__gte=answered_cutoff,
+            )
+        ),
+        request,
     )
     agent_away = user_is_whatsapp_call_away(request.user)
     results = []

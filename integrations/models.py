@@ -1836,14 +1836,40 @@ class SocialContact(models.Model):
         help_text="IGSID (Instagram) or PSID (Messenger) — app-scoped",
     )
 
-    name = models.CharField(max_length=255, blank=True, default="")
+    name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Display name from Meta / WhatsApp / agent override.",
+    )
     username = models.CharField(max_length=255, blank=True, default="")
     profile_pic_url = models.TextField(
         blank=True,
         default="",
-        help_text="Meta CDN URL. Stored as a URL only — never mirrored into our storage.",
+        help_text="Stable public URL for the avatar (our storage), not a Meta CDN link.",
+    )
+    avatar_path = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="Storage key for the mirrored avatar file (e.g. social_profiles/…). Empty when none.",
     )
     profile_fetched_at = models.DateTimeField(null=True, blank=True)
+    profile_fetch_status = models.CharField(
+        max_length=16,
+        blank=True,
+        default="",
+        choices=[
+            ("ok", "ok"),
+            ("failed", "failed"),
+            ("unavailable", "unavailable"),
+        ],
+        help_text="Last Graph/profile enrichment outcome.",
+    )
+    name_manually_set = models.BooleanField(
+        default=False,
+        help_text="When True, automated enrichment must not overwrite name.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1890,10 +1916,12 @@ class SocialContact(models.Model):
         if self.channel == SocialChannel.WHATSAPP and self.external_id:
             raw = self.external_id.strip()
             return raw if raw.startswith("+") else f"+{raw}"
+        ext = (self.external_id or "").strip()
+        suffix = ext[-4:] if len(ext) >= 4 else ext
         if self.channel == SocialChannel.INSTAGRAM:
-            return "Instagram user"
+            return f"Instagram user · {suffix}" if suffix else "Instagram user"
         if self.channel == SocialChannel.MESSENGER:
-            return "Messenger user"
+            return f"Messenger user · {suffix}" if suffix else "Messenger user"
         return "Contact"
 
 

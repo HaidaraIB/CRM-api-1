@@ -36,6 +36,7 @@ from ..models import (
     MessageTemplate,
     MetaInboxConnection,
     SocialChannel,
+    SocialContact,
     SocialConversation,
     SocialMessage,
     WhatsAppConversationStatus,
@@ -258,15 +259,20 @@ def social_inbox_connection_detail(request, pk: int):
 
 
 def _serialize_contact(contact) -> dict:
-    from ..services.meta_inbox_profile import absolute_profile_pic_url
+    from ..services.meta_inbox_profile import contact_avatar_url
 
+    avatar_url = contact_avatar_url(contact)
     return {
         'id': contact.id,
+        'channel': contact.channel,
         'external_id': contact.external_id,
         'name': contact.name,
         'username': contact.username,
         'display_name': contact.display_name,
-        'profile_pic_url': absolute_profile_pic_url(contact.profile_pic_url),
+        'avatar_url': avatar_url,
+        'profile_pic_url': avatar_url,  # legacy alias for web/mobile clients
+        'name_manually_set': bool(contact.name_manually_set),
+        'profile_fetch_status': contact.profile_fetch_status or '',
     }
 
 
@@ -464,6 +470,7 @@ def social_conversations_list(request):
         qs = qs.filter(
             Q(contact__name__icontains=search)
             | Q(contact__username__icontains=search)
+            | Q(contact__external_id__icontains=search)
             | Q(last_message_preview__icontains=search)
         )
 
@@ -1465,3 +1472,182 @@ def social_convert_conversation(request, pk: int):
         message='Conversation converted to a lead.',
         status_code=status.HTTP_201_CREATED,
     )
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated, HasActiveSubscription, CanUseSocialInbox])
+def social_update_contact(request, pk: int):
+    """
+    Rename a social contact. Sets name_manually_set so Graph enrichment will not
+    overwrite the agent's choice.
+    """
+    company = getattr(request.user, 'company', None)
+    if company is None:
+        return error_response('No company.', status_code=status.HTTP_400_BAD_REQUEST)
+
+    gate = _inbox_gate(company)
+    if gate is not None:
+        return gate
+
+    contact = SocialContact.objects.filter(pk=pk, company=company).first()
+    if contact is None:
+        return error_response(
+            'Contact not found.',
+            code='social_contact_not_found',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    # ACL: viewer must be able to see at least one conversation for this contact.
+    visible = filter_social_conversations_queryset(
+        request.user,
+        SocialConversation.objects.filter(contact=contact, company=company),
+    )
+    if not visible.exists():
+        return error_response(
+            'Contact not found.',
+            code='social_contact_not_found',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    raw_name = request.data.get('name', request.data.get('display_name'))
+    if raw_name is None:
+        return error_response(
+            'name is required.',
+            code='social_contact_name_required',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    name = str(raw_name).strip()
+    if not name:
+        return error_response(
+            'name cannot be empty.',
+            code='social_contact_name_empty',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if len(name) > 255:
+        return error_response(
+            'name is too long.',
+            code='social_contact_name_too_long',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    contact.name = name
+    contact.name_manually_set = True
+    contact.save(update_fields=['name', 'name_manually_set', 'updated_at'])
+    bump_company_slice(company.id, 'inbox')
+
+    return success_response(
+        data={'contact': _serialize_contact(contact)},
+        message='Contact updated.',
+    )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, HasActiveSubscription, CanUseSocialInbox])
+def social_debug_profile(request, channel: str, external_id: str):
+    """
+    Dev-only: call Graph once for a PSID/IGSID and return the raw JSON.
+    Disabled when DEBUG is False or APP_ENV/DJANGO_ENV is production.
+    """
+    import requests
+    from django.conf import settings as dj_settings
+
+    app_env = (
+        getattr(dj_settings, 'APP_ENV', '')
+        or getattr(dj_settings, 'DJANGO_ENV', '')
+        or getattr(dj_settings, 'ENVIRONMENT', '')
+        or ''
+    ).strip().lower()
+    if not dj_settings.DEBUG or app_env in ('production', 'prod'):
+        return error_response(
+            'Not found.',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    company = getattr(request.user, 'company', None)
+    if company is None:
+        return error_response('No company.', status_code=status.HTTP_400_BAD_REQUEST)
+
+    channel = (channel or '').strip().lower()
+    external_id = (external_id or '').strip()
+    if channel not in (SocialChannel.INSTAGRAM, SocialChannel.MESSENGER):
+        return error_response(
+            'channel must be instagram or messenger.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if not external_id:
+        return error_response(
+            'external_id is required.',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from ..oauth_utils import MetaInboxOAuth
+    from ..services.meta_inbox_profile import _PROFILE_FIELDS
+
+    contact = (
+        SocialContact.objects.filter(
+            company=company, channel=channel, external_id=external_id
+        )
+        .select_related('connection')
+        .first()
+    )
+    connection = contact.connection if contact else None
+    if connection is None:
+        connection = (
+            MetaInboxConnection.objects.filter(company=company, status='connected')
+            .order_by('-updated_at')
+            .first()
+        )
+    if connection is None:
+        return error_response(
+            'No Meta Inbox connection for this company.',
+            code='meta_inbox_not_connected',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    page_token = connection.get_page_access_token()
+    if not page_token:
+        return error_response(
+            'Page access token missing.',
+            code='meta_inbox_no_token',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    handler = MetaInboxOAuth()
+    fields = _PROFILE_FIELDS.get(channel, 'name,profile_pic')
+    params = {'fields': fields, 'access_token': page_token}
+    proof = handler._appsecret_proof(page_token)
+    if proof:
+        params['appsecret_proof'] = proof
+    url = f"{handler.graph_api_url}/{external_id}"
+
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {'raw': response.text[:2000]}
+    except requests.RequestException as exc:
+        return success_response(
+            data={
+                'channel': channel,
+                'external_id': external_id,
+                'graph_url': url,
+                'error': str(exc),
+            },
+            message='Graph request failed.',
+        )
+
+    # Never echo the access token.
+    safe_params = {k: v for k, v in params.items() if k != 'access_token'}
+    return success_response(
+        data={
+            'channel': channel,
+            'external_id': external_id,
+            'http_status': response.status_code,
+            'graph_url': url,
+            'params': safe_params,
+            'response': payload,
+        },
+        message='Raw Graph profile response.',
+    )
+

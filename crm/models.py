@@ -151,6 +151,12 @@ class Client(models.Model):
         null=True,
         help_text="Optional free-form notes on this lead (not activity/task notes).",
     )
+    avatar_path = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="Optional avatar storage path/URL copied from a social contact on convert.",
+    )
     interested_developer = models.ForeignKey(
         "real_estate.Developer",
         on_delete=models.SET_NULL,

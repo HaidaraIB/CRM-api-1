@@ -677,16 +677,34 @@ def ensure_client_call_for_whatsapp_call(call: WhatsAppCall):
         cc = call.client_call
         notes = call.notes or cc.notes or ""
         changed = False
+        update_fields = ["updated_at"]
         if notes and cc.notes != notes:
             cc.notes = notes
+            update_fields.append("notes")
             changed = True
         if call.ended_at or call.answered_at or call.started_at:
             dt = call.answered_at or call.started_at or call.ended_at
             if cc.call_datetime != dt:
                 cc.call_datetime = dt
+                update_fields.append("call_datetime")
                 changed = True
+        # Keep ClientCall recording fields in lockstep with WhatsAppCall
+        # (upload often lands after the ClientCall row was first created).
+        if (call.recording_storage_key or "") != (cc.recording_storage_key or ""):
+            cc.recording_storage_key = call.recording_storage_key or ""
+            update_fields.append("recording_storage_key")
+            changed = True
+        if (call.recording_status or "") != (cc.recording_status or ""):
+            cc.recording_status = call.recording_status or ""
+            update_fields.append("recording_status")
+            changed = True
+        duration = call.duration_sec or None
+        if duration is not None and cc.recording_duration_sec != duration:
+            cc.recording_duration_sec = duration
+            update_fields.append("recording_duration_sec")
+            changed = True
         if changed:
-            cc.save(update_fields=["notes", "call_datetime", "updated_at"])
+            cc.save(update_fields=list(dict.fromkeys(update_fields)))
         return cc
 
     if call.status not in (

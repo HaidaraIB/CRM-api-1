@@ -311,6 +311,102 @@ def test_store_recording_rejects_unanswered_call(company, wa_account):
 
 
 @pytest.mark.django_db
+def test_store_recording_syncs_existing_client_call(company, wa_account):
+    """Recording upload after hangup must copy storage key onto the ClientCall row."""
+    from integrations.services.whatsapp_calling import store_call_recording
+
+    lead = Client.objects.create(company=company, name="Rec Lead")
+    cc = ClientCall.objects.create(
+        client=lead,
+        source=ClientCallSource.WHATSAPP,
+        notes="WhatsApp call",
+        call_datetime=timezone.now(),
+        recording_status=WhatsAppCallRecordingStatus.PENDING,
+    )
+    call = WhatsAppCall.objects.create(
+        company=company,
+        whatsapp_account=wa_account,
+        client=lead,
+        client_call=cc,
+        meta_call_id="wacid.rec.sync",
+        direction=WhatsAppCallDirection.INBOUND,
+        status=WhatsAppCallStatus.ENDED,
+        peer_phone="15559871111",
+        answered_at=timezone.now(),
+        ended_at=timezone.now(),
+        duration_sec=42,
+        recording_status=WhatsAppCallRecordingStatus.PENDING,
+    )
+    store_call_recording(call, file_bytes=b"fake-webm-bytes", original_filename="call.webm")
+    call.refresh_from_db()
+    cc.refresh_from_db()
+    assert call.recording_status == WhatsAppCallRecordingStatus.READY
+    assert call.recording_storage_key
+    assert cc.recording_storage_key == call.recording_storage_key
+    assert cc.recording_status == WhatsAppCallRecordingStatus.READY
+    assert cc.recording_duration_sec == 42
+
+
+@pytest.mark.django_db
+def test_calls_list_filters_by_call_source(
+    company, wa_account, admin_user, plan, subscription
+):
+    from integrations.models import WhatsAppPurpose
+
+    plan.features = {**(plan.features or {}), "integration_whatsapp": True}
+    plan.save(update_fields=["features"])
+
+    inbox_account = WhatsAppAccount.objects.create(
+        company=company,
+        waba_id="waba_inbox",
+        phone_number_id="pid_inbox_1",
+        display_phone_number="+15550002222",
+        status="connected",
+        calling_enabled=True,
+        purpose=WhatsAppPurpose.INBOX,
+    )
+    WhatsAppCall.objects.create(
+        company=company,
+        whatsapp_account=wa_account,
+        meta_call_id="wacid.src.crm",
+        direction=WhatsAppCallDirection.INBOUND,
+        status=WhatsAppCallStatus.ENDED,
+        peer_phone="15550001",
+        recording_status=WhatsAppCallRecordingStatus.NONE,
+    )
+    WhatsAppCall.objects.create(
+        company=company,
+        whatsapp_account=inbox_account,
+        meta_call_id="wacid.src.inbox",
+        direction=WhatsAppCallDirection.INBOUND,
+        status=WhatsAppCallStatus.ENDED,
+        peer_phone="15550002",
+        recording_status=WhatsAppCallRecordingStatus.NONE,
+    )
+
+    client_api = APIClient()
+    client_api.force_authenticate(user=admin_user)
+    url = reverse("whatsapp_calls_list")
+
+    all_res = client_api.get(url)
+    assert all_res.status_code == 200
+    all_data = all_res.json().get("data") or all_res.json()
+    assert all_data["count"] == 2
+
+    crm_res = client_api.get(url, {"call_source": "crm"})
+    assert crm_res.status_code == 200
+    crm_data = crm_res.json().get("data") or crm_res.json()
+    crm_ids = {r["meta_call_id"] for r in crm_data["results"]}
+    assert crm_ids == {"wacid.src.crm"}
+
+    inbox_res = client_api.get(url, {"call_source": "inbox"})
+    assert inbox_res.status_code == 200
+    inbox_data = inbox_res.json().get("data") or inbox_res.json()
+    inbox_ids = {r["meta_call_id"] for r in inbox_data["results"]}
+    assert inbox_ids == {"wacid.src.inbox"}
+
+
+@pytest.mark.django_db
 def test_pending_calls_only_ring_assigned_agent_not_owner(
     company, wa_account, admin_user, employee_user, plan, subscription
 ):

@@ -556,6 +556,25 @@ META_INBOX_FACEBOOK_LOGIN_FOR_BUSINESS_CONFIG_ID = os.getenv(
 
 META_INBOX_GRAPH_API_VERSION = os.getenv("META_INBOX_GRAPH_API_VERSION", "v25.0").strip()
 
+# Alias documented as GRAPH_API_VERSION in env examples — same Graph version for inbox profiles.
+GRAPH_API_VERSION = os.getenv("GRAPH_API_VERSION", "").strip() or META_INBOX_GRAPH_API_VERSION
+if GRAPH_API_VERSION and not os.getenv("META_INBOX_GRAPH_API_VERSION", "").strip():
+    META_INBOX_GRAPH_API_VERSION = GRAPH_API_VERSION
+
+# When True, profile enrichment runs inline (pytest sets this). Production uses django_q.
+META_INBOX_PROFILE_ENRICH_SYNC = (
+    os.getenv("META_INBOX_PROFILE_ENRICH_SYNC", "false").strip().lower()
+    in ("1", "true", "yes")
+)
+
+# Mirrored contact avatars (Meta CDN links expire).
+SOCIAL_AVATAR_MAX_BYTES = int(
+    os.getenv("SOCIAL_AVATAR_MAX_BYTES", "").strip() or (5 * 1024 * 1024)
+)
+SOCIAL_AVATAR_DOWNLOAD_TIMEOUT_SECONDS = int(
+    os.getenv("SOCIAL_AVATAR_DOWNLOAD_TIMEOUT_SECONDS", "").strip() or 10
+)
+
 _mi_ips = os.getenv("META_INBOX_WEBHOOK_ALLOWED_IPS", "").strip()
 
 META_INBOX_WEBHOOK_ALLOWED_IPS = (

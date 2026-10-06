@@ -175,6 +175,10 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
         or contact.username
         or f"{channel_label} {contact.external_id[-6:]}"
     )
+    avatar_path = (
+        (contact.avatar_path or '').strip()
+        or (contact.profile_pic_url or '').strip()
+    )
 
     external_lead_id = f"{conversation.channel}:{contact.external_id}"
 
@@ -195,6 +199,7 @@ def convert_conversation_to_lead(conversation, actor, payload: dict):
             assigned_to=assignee,
             assigned_at=timezone.now() if assignee else None,
             created_by=actor,
+            avatar_path=avatar_path,
         )
     except IntegrityError:
         # Double-click, or a racing second agent. external_lead_id is unique per

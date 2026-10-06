@@ -112,6 +112,14 @@ def fetch_call_error_logs(company, params) -> dict:
     qs = WhatsAppCallErrorLog.objects.filter(company=company).select_related(
         "client", "agent", "whatsapp_account"
     )
+    call_source = (params.get("call_source") or "").strip().lower()
+    if call_source in ("crm", "inbox"):
+        from integrations.models import WhatsAppPurpose
+
+        purpose = (
+            WhatsAppPurpose.INBOX if call_source == "inbox" else WhatsAppPurpose.CRM
+        )
+        qs = qs.filter(whatsapp_account__purpose=purpose)
     if source and source != "all":
         qs = qs.filter(source=source)
     if error_code:

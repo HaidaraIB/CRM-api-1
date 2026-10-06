@@ -757,6 +757,7 @@ class MetaInboxOAuth(MetaOAuth):
         OAuthBase.__init__(self, 'META_INBOX')
         version = (
             getattr(settings, 'META_INBOX_GRAPH_API_VERSION', '')
+            or getattr(settings, 'GRAPH_API_VERSION', '')
             or META_GRAPH_API_VERSION
         )
         if isinstance(version, str):

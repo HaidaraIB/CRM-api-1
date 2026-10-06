@@ -31,7 +31,7 @@ from ..models import (
 )
 from ..policy import get_effective_integration_policy, get_plan_integration_access
 from .meta_inbox_media import apply_attachment_to_message
-from .meta_inbox_profile import ensure_contact_profile
+from .meta_inbox_profile import schedule_ensure_contact_profile
 
 logger = logging.getLogger(__name__)
 
@@ -233,10 +233,10 @@ def process_messaging_event(
 
     contact = get_or_create_contact(connection, channel, contact_external_id)
     try:
-        ensure_contact_profile(contact, connection)
+        schedule_ensure_contact_profile(contact, connection)
     except Exception:
         logger.exception(
-            "Meta Inbox: profile enrichment failed for external_id=%s",
+            "Meta Inbox: profile enrichment schedule failed for external_id=%s",
             contact_external_id,
         )
     conversation = get_or_create_conversation(connection, contact)
