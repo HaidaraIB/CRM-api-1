@@ -48,17 +48,23 @@ def copy_inbox_numbers(apps, schema_editor):
             conv.inbox_account_id = new_id
             conv.save(update_fields=["inbox_account_id"])
 
+    # Clear wa_inbox_number in the same UPDATE — wa_call_exactly_one_sender is
+    # still active until later in this migration.
     for call in Call.objects.exclude(wa_inbox_number_id=None):
         new_id = id_map.get(call.wa_inbox_number_id)
         if new_id and not call.whatsapp_account_id:
-            call.whatsapp_account_id = new_id
-            call.save(update_fields=["whatsapp_account_id"])
+            Call.objects.filter(pk=call.pk).update(
+                whatsapp_account_id=new_id,
+                wa_inbox_number_id=None,
+            )
 
     for log in ErrorLog.objects.exclude(wa_inbox_number_id=None):
         new_id = id_map.get(log.wa_inbox_number_id)
         if new_id and not log.whatsapp_account_id:
-            log.whatsapp_account_id = new_id
-            log.save(update_fields=["whatsapp_account_id"])
+            ErrorLog.objects.filter(pk=log.pk).update(
+                whatsapp_account_id=new_id,
+                wa_inbox_number_id=None,
+            )
 
     Call.objects.filter(whatsapp_account_id=None).delete()
 
