@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 import pytest
+from django.core.cache import cache
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -51,6 +52,69 @@ def test_platform_whatsapp_patch_updates_only_sent_fields(
     assert settings_row.phone_number_id == "222"
     assert settings_row.graph_api_version == "v25.0"
     assert settings_row.otp_template_name == "otp_code"
+
+
+@pytest.mark.django_db
+@patch(
+    "accounts.platform_whatsapp.send_otp_template",
+    return_value=(True, {"messages": [{"id": "wamid.test"}]}),
+)
+def test_platform_whatsapp_send_test_otp_success(
+    mock_send, super_admin_client, settings
+):
+    cache.clear()
+    row = PlatformWhatsAppSettings.get_settings()
+    row.phone_number_id = "1234567890"
+    row.otp_template_name = "auth_otp"
+    row.otp_template_lang = "en"
+    row.set_access_token("EAA" + ("x" * 80))
+    row.save()
+
+    response = super_admin_client.post(
+        "/api/v1/settings/platform-whatsapp/1/send-test-otp/",
+        {"phone": "+9647501234567"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["phone_suffix"] == "4567"
+    assert body["template_name"] == "auth_otp"
+    assert body["template_lang"] == "en"
+    assert len(body["otp_code"]) == 6
+    mock_send.assert_called_once()
+    assert mock_send.call_args[0][0] == "9647501234567"
+    assert mock_send.call_args[0][1] == body["otp_code"]
+
+
+@pytest.mark.django_db
+def test_platform_whatsapp_send_test_otp_invalid_phone(super_admin_client):
+    response = super_admin_client.post(
+        "/api/v1/settings/platform-whatsapp/1/send-test-otp/",
+        {"phone": "123"},
+        format="json",
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_phone"
+
+
+@pytest.mark.django_db
+def test_platform_whatsapp_send_test_otp_not_configured(super_admin_client, settings):
+    cache.clear()
+    settings.PLATFORM_WHATSAPP_PHONE_NUMBER_ID = ""
+    settings.PLATFORM_WHATSAPP_ACCESS_TOKEN = ""
+    row = PlatformWhatsAppSettings.get_settings()
+    row.phone_number_id = ""
+    row.set_access_token("")
+    row.save()
+
+    response = super_admin_client.post(
+        "/api/v1/settings/platform-whatsapp/1/send-test-otp/",
+        {"phone": "+9647501234567"},
+        format="json",
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "whatsapp_otp_not_configured"
 
 
 @pytest.mark.django_db

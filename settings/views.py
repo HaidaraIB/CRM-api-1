@@ -345,7 +345,7 @@ class PlatformWhatsAppSettingsViewSet(viewsets.ModelViewSet):
 
     permission_classes = [IsAuthenticated, CanManageSettings]
     serializer_class = PlatformWhatsAppSettingsSerializer
-    http_method_names = ["get", "put", "patch", "head", "options"]
+    http_method_names = ["get", "put", "patch", "post", "head", "options"]
 
     def get_queryset(self):
         return PlatformWhatsAppSettings.objects.filter(pk=1)
@@ -359,6 +359,89 @@ class PlatformWhatsAppSettingsViewSet(viewsets.ModelViewSet):
         instance = PlatformWhatsAppSettings.get_settings()
         serializer = self.get_serializer(instance)
         return success_response(data=serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="send-test-otp")
+    def send_test_otp(self, request, pk=None):
+        """
+        Super-admin utility: send a one-off WhatsApp OTP template to a phone
+        without creating a registration challenge.
+        """
+        import logging
+        import secrets
+
+        from django.core.cache import cache
+
+        from accounts.platform_whatsapp import (
+            effective_otp_template_lang,
+            effective_otp_template_name,
+            normalize_phone_digits,
+            platform_whatsapp_configured,
+            send_otp_template,
+        )
+
+        logger = logging.getLogger(__name__)
+        self.get_object()
+
+        phone_raw = (request.data.get("phone") or "").strip()
+        phone = normalize_phone_digits(phone_raw)
+        if len(phone) < 10 or len(phone) > 15:
+            return error_response(
+                "Enter a valid phone number with country code.",
+                code="invalid_phone",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not platform_whatsapp_configured():
+            return error_response(
+                "Platform WhatsApp is not configured (phone number ID and access token).",
+                code="whatsapp_otp_not_configured",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        template_name = effective_otp_template_name()
+        if not template_name:
+            return error_response(
+                "OTP template name is not configured.",
+                code="otp_template_not_configured",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        rate_key = f"platform_wa_test_otp:{request.user.pk}"
+        attempts = cache.get(rate_key, 0)
+        if attempts >= 5:
+            return error_response(
+                "Too many test OTP sends. Wait a minute and try again.",
+                code="otp_rate_limited",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        cache.set(rate_key, attempts + 1, timeout=60)
+
+        code = f"{secrets.randbelow(900000) + 100000}"
+        ok, details = send_otp_template(phone, code)
+        if not ok:
+            logger.warning(
+                "Platform WhatsApp test OTP failed: user=%s phone=%s details=%s",
+                request.user.pk,
+                phone[-4:],
+                details,
+            )
+            return error_response(
+                "Could not send test OTP via WhatsApp.",
+                code="whatsapp_send_failed",
+                status_code=status.HTTP_424_FAILED_DEPENDENCY,
+                details=details if isinstance(details, dict) else {"error": str(details)},
+            )
+
+        template_lang = effective_otp_template_lang()
+        return success_response(
+            data={
+                "phone_suffix": phone[-4:],
+                "otp_code": code,
+                "template_name": template_name,
+                "template_lang": template_lang,
+            },
+            message="Test OTP sent.",
+        )
 
 
 class SystemBackupViewSet(viewsets.ModelViewSet):
