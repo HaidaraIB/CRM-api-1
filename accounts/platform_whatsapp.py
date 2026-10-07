@@ -153,13 +153,16 @@ def _post_messages(payload: dict) -> tuple[bool, Any]:
 
 def send_otp_template(to_digits: str, code: str) -> tuple[bool, Any]:
     """
-    Send authentication template with one body placeholder = OTP code.
-    Template name/lang from DB or env must match an approved Meta template.
+    Send authentication template with OTP code in body {{1}} and URL button.
+
+    Meta auth templates with a Copy code / one-tap button are type Url and require
+    the same code as button index 0 (#131008 if omitted).
     """
     name = effective_otp_template_name()
     lang = effective_otp_template_lang()
     if not name:
         return False, {"error": "otp_template_not_configured"}
+    code_text = str(code)[:32]
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -171,8 +174,14 @@ def send_otp_template(to_digits: str, code: str) -> tuple[bool, Any]:
             "components": [
                 {
                     "type": "body",
-                    "parameters": [{"type": "text", "text": str(code)[:32]}],
-                }
+                    "parameters": [{"type": "text", "text": code_text}],
+                },
+                {
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": "0",
+                    "parameters": [{"type": "text", "text": code_text}],
+                },
             ],
         },
     }
