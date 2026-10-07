@@ -42,7 +42,6 @@ MAINTENANCE_WHITELIST_PREFIXES = [
     "/api/payments/alqaseh-webhook/",
     "/api/integrations/accounts/oauth/callback/",
     "/api/integrations/webhooks/",
-    "/api/integrations/pbx/connector/",
     "/api/integrations/leads/inbound/",
     "/api/integrations/leads/mujeb/",
 ]
@@ -120,7 +119,6 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         "/api/payments/alqaseh-webhook/",
         "/api/integrations/accounts/oauth/callback/",
         "/api/integrations/webhooks/",
-        "/api/integrations/pbx/connector/",
         "/api/integrations/leads/inbound/",
         "/api/integrations/leads/mujeb/",
     ]

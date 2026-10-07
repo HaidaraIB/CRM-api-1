@@ -287,8 +287,7 @@ more than the rest.
    count under an unchanged token. Invisible while the bell read the endpoint
    directly; a stuck badge the moment it reads the digest. `mark_all_read` was
    already covered, `delete_all_read` only touches read rows, and
-   `_soft_delete_unread_pbx_incoming` is always followed by a create for the same
-   users, which bumps. `tests/test_sync_digest.py::test_delete_all_invalidates_badge_cache`
+   similar soft-delete-then-create paths bump via the create. `tests/test_sync_digest.py::test_delete_all_invalidates_badge_cache`
    pins it — verified failing (`assert 1 == 0`) with the bump removed.
 4. **A dedicated mobile notification channel for ringing calls.** The push
    currently borrows the `arrival` channel to get an insistent ring. Behaviour is

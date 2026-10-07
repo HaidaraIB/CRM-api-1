@@ -1323,7 +1323,7 @@ def whatsapp_call_recording_upload(request, pk: int):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def whatsapp_call_recording_play(request, pk: int):
-    """Signed-token or authenticated playback (mirrors PBX recording play)."""
+    """Signed-token or authenticated playback for WhatsApp call recordings."""
     token = (request.query_params.get("token") or "").strip()
     call = None
     if token:

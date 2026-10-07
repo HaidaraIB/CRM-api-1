@@ -149,7 +149,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         Soft-delete all notifications for the current user.
 
         Optional query/body ``type`` limits deletion to that notification type
-        (e.g. ``pbx_incoming_call``). Comma-separated types are allowed.
+        (e.g. ``whatsapp_call_incoming``). Comma-separated types are allowed.
         """
         qs = exclude_inbox_noise_notifications(
             Notification.objects.filter(

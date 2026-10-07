@@ -309,7 +309,7 @@ else:
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "db.sqlite3",
             "OPTIONS": {
-                # Wait for writers under concurrent PBX webhook bursts.
+                # Wait for writers under concurrent webhook bursts.
                 "timeout": 30,
             },
         }
@@ -686,7 +686,7 @@ DEMO_META_ACCOUNT_EMAIL = os.getenv("DEMO_META_ACCOUNT_EMAIL", "")
 DEMO_META_ACCOUNT_2FA_CODE = os.getenv("DEMO_META_ACCOUNT_2FA_CODE", "")
 
 # ============================================================================
-# PBX call recording storage (local disk or S3-compatible e.g. Cloudflare R2)
+# Call recording storage (local disk or S3-compatible e.g. Cloudflare R2)
 # ============================================================================
 
 RECORDING_STORAGE_BACKEND = (

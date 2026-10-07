@@ -3,7 +3,7 @@ Push notification for an inbound WhatsApp call that is ringing.
 
 This was the one significant event in the product with no push path at all. Every
 other thing a user waits on — a new lead, a walk-in arrival, a team-chat message,
-a PBX screen pop — sends an FCM push. A ringing WhatsApp call was discovered only
+an alert — sends an FCM push. A ringing WhatsApp call was discovered only
 by polling, which means a closed tab or a backgrounded phone never learned about
 it, and the caller rang out.
 

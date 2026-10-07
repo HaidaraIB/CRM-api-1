@@ -256,7 +256,6 @@ class TestSyncDigest:
         assert digest["whatsapp_unread"] == wa["unread_count"]
         assert digest["notifications_unread"] == notif["unread_count"]
         assert digest["news_unread"] == news["unread_count"]
-        assert digest["pbx_screen_pop"] is None
         assert "tenant_chat_unread" in digest
         assert "whatsapp_calls_pending" in digest
 

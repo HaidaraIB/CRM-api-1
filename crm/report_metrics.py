@@ -147,14 +147,6 @@ def is_converted_lead(client: Client, category_by_id: dict[int, str]) -> bool:
 
 
 def _classify_call(call: ClientCall) -> str:
-    disposition = ""
-    if call.pbx_call_record_id and call.pbx_call_record:
-        disposition = (call.pbx_call_record.disposition or "").lower()
-    if disposition == "answered":
-        return "answered"
-    if disposition in {"no_answer", "busy", "missed"}:
-        return "missed"
-
     method = (call.call_method.name if call.call_method_id and call.call_method else "").lower()
     if "no answer" in method or "not answered" in method:
         return "missed"
@@ -179,7 +171,7 @@ def _user_display_name(user: User) -> str:
 
 def _filter_calls(company, start_dt, end_dt):
     qs = ClientCall.objects.filter(client__company=company).select_related(
-        "call_method", "pbx_call_record", "created_by"
+        "call_method", "created_by"
     )
     if start_dt:
         qs = qs.filter(created_at__gte=start_dt)
@@ -417,7 +409,6 @@ def build_marketing_rows(
 
 def _summarize_crm_calls(calls: list[ClientCall]) -> dict:
     manual = 0
-    pbx_linked = 0
     answered = 0
     missed = 0
     unknown = 0
@@ -425,11 +416,8 @@ def _summarize_crm_calls(calls: list[ClientCall]) -> dict:
     by_method: dict[str, dict] = {}
 
     for call in calls:
-        is_manual = call.source == "manual" or not call.pbx_call_record_id
-        if is_manual:
+        if call.source == "manual":
             manual += 1
-        else:
-            pbx_linked += 1
 
         kind = _classify_call(call)
         if kind == "answered":
@@ -450,7 +438,6 @@ def _summarize_crm_calls(calls: list[ClientCall]) -> dict:
                 "answered": 0,
                 "missed": 0,
                 "manual": 0,
-                "pbx_linked": 0,
             },
         )
         user_bucket["total"] += 1
@@ -458,10 +445,8 @@ def _summarize_crm_calls(calls: list[ClientCall]) -> dict:
             user_bucket["answered"] += 1
         if kind == "missed":
             user_bucket["missed"] += 1
-        if is_manual:
+        if call.source == "manual":
             user_bucket["manual"] += 1
-        else:
-            user_bucket["pbx_linked"] += 1
 
         method_name = (
             call.call_method.name if call.call_method_id and call.call_method else "Unspecified"
@@ -480,7 +465,6 @@ def _summarize_crm_calls(calls: list[ClientCall]) -> dict:
         "summary": {
             "total": len(calls),
             "manual": manual,
-            "pbx_linked": pbx_linked,
             "answered": answered,
             "missed": missed,
             "unknown": unknown,
@@ -488,135 +472,6 @@ def _summarize_crm_calls(calls: list[ClientCall]) -> dict:
         "by_user": sorted(by_user.values(), key=lambda row: row["name"].lower()),
         "by_method": sorted(by_method.values(), key=lambda row: (-row["total"], row["name"].lower())),
     }
-
-
-def _build_pbx_report_section(company, from_date: str | None, to_date: str | None):
-    from django.db.models import Avg
-
-    from integrations.models import (
-        PbxCallDisposition,
-        PbxCallDirection,
-        PbxCallRecord,
-        PbxEventType,
-        PbxSettings,
-        UserPbxExtension,
-    )
-
-    try:
-        settings = PbxSettings.objects.get(company=company)
-    except PbxSettings.DoesNotExist:
-        return {"enabled": False, "summary": None, "agents": [], "_from_date": from_date, "_to_date": to_date}
-
-    if not settings.is_enabled:
-        return {"enabled": False, "summary": None, "agents": [], "_from_date": from_date, "_to_date": to_date}
-
-    qs = PbxCallRecord.objects.filter(company=company, event_type=PbxEventType.HANGUP)
-    if from_date:
-        qs = qs.filter(started_at__date__gte=from_date)
-    if to_date:
-        qs = qs.filter(started_at__date__lte=to_date)
-
-    summary = {
-        "total": qs.count(),
-        "inbound": qs.filter(direction=PbxCallDirection.INBOUND).count(),
-        "outbound": qs.filter(direction=PbxCallDirection.OUTBOUND).count(),
-        "answered": qs.filter(disposition=PbxCallDisposition.ANSWERED).count(),
-        "missed": qs.filter(
-            disposition__in=[PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY]
-        ).count(),
-        "avg_duration_sec": round(qs.aggregate(avg=Avg("billsec"))["avg"] or 0, 1),
-    }
-
-    agents = []
-    for ext in qs.values_list("extension", flat=True).distinct():
-        if not ext:
-            continue
-        ext_qs = qs.filter(extension=ext)
-        mapping = (
-            UserPbxExtension.objects.filter(company=company, extension=ext)
-            .select_related("user")
-            .first()
-        )
-        agents.append(
-            {
-                "extension": ext,
-                "user_id": mapping.user_id if mapping else None,
-                "username": mapping.user.username if mapping else None,
-                "total": ext_qs.count(),
-                "answered": ext_qs.filter(disposition=PbxCallDisposition.ANSWERED).count(),
-                "missed": ext_qs.filter(
-                    disposition__in=[PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY]
-                ).count(),
-                "avg_duration_sec": round(ext_qs.aggregate(avg=Avg("billsec"))["avg"] or 0, 1),
-            }
-        )
-
-    return {
-        "enabled": True,
-        "summary": summary,
-        "agents": agents,
-        "_from_date": from_date,
-        "_to_date": to_date,
-    }
-
-
-def _build_combined_call_summary(crm_summary: dict, pbx_section: dict, company):
-    from integrations.models import PbxCallDisposition, PbxCallRecord, PbxEventType
-
-    combined = {
-        "total": crm_summary["total"],
-        "answered": crm_summary["answered"],
-        "missed": crm_summary["missed"],
-        "manual": crm_summary["manual"],
-        "pbx_cdr_unlinked": 0,
-        "avg_duration_sec": 0.0,
-    }
-
-    if not pbx_section.get("enabled") or not pbx_section.get("summary"):
-        return combined
-
-    linked_ids = set(
-        ClientCall.objects.filter(
-            client__company=company,
-            pbx_call_record_id__isnull=False,
-        ).values_list("pbx_call_record_id", flat=True)
-    )
-
-    pbx_qs = PbxCallRecord.objects.filter(
-        company=company,
-        event_type=PbxEventType.HANGUP,
-    )
-    if pbx_section.get("_from_date"):
-        pbx_qs = pbx_qs.filter(started_at__date__gte=pbx_section["_from_date"])
-    if pbx_section.get("_to_date"):
-        pbx_qs = pbx_qs.filter(started_at__date__lte=pbx_section["_to_date"])
-
-    unlinked_qs = pbx_qs.exclude(id__in=linked_ids)
-    unlinked_total = unlinked_qs.count()
-    unlinked_answered = unlinked_qs.filter(disposition=PbxCallDisposition.ANSWERED).count()
-    unlinked_missed = unlinked_qs.filter(
-        disposition__in=[PbxCallDisposition.NO_ANSWER, PbxCallDisposition.BUSY]
-    ).count()
-
-    combined["pbx_cdr_unlinked"] = unlinked_total
-    combined["total"] = crm_summary["total"] + unlinked_total
-    combined["answered"] = crm_summary["answered"] + unlinked_answered
-    combined["missed"] = crm_summary["missed"] + unlinked_missed
-
-    duration_values = list(unlinked_qs.values_list("billsec", flat=True))
-    linked_calls = ClientCall.objects.filter(
-        client__company=company,
-        pbx_call_record_id__in=pbx_qs.values_list("id", flat=True),
-    ).select_related("pbx_call_record")
-    for call in linked_calls:
-        if call.pbx_call_record:
-            duration_values.append(call.pbx_call_record.billsec or 0)
-    if duration_values:
-        combined["avg_duration_sec"] = round(sum(duration_values) / len(duration_values), 1)
-    elif pbx_section["summary"]:
-        combined["avg_duration_sec"] = pbx_section["summary"]["avg_duration_sec"]
-
-    return combined
 
 
 def build_call_report(
@@ -628,22 +483,14 @@ def build_call_report(
 ):
     start_dt, end_dt = _date_bounds(from_date, to_date)
     calls_qs = _filter_calls(company, start_dt, end_dt).select_related(
-        "client", "call_method", "pbx_call_record", "created_by"
+        "client", "call_method", "created_by"
     )
     if user_id:
         calls_qs = calls_qs.filter(created_by_id=user_id)
     calls = list(calls_qs)
 
     crm = _summarize_crm_calls(calls)
-    pbx = _build_pbx_report_section(company, from_date, to_date)
-    combined = _build_combined_call_summary(crm["summary"], pbx, company)
 
     return {
         "crm": crm,
-        "pbx": {
-            "enabled": pbx["enabled"],
-            "summary": pbx["summary"],
-            "agents": pbx["agents"],
-        },
-        "combined": {"summary": combined},
     }

@@ -174,51 +174,7 @@ class TestCallReportAPI:
 
         payload = api_body(response)
         assert payload["crm"]["summary"]["total"] == 2
-        assert payload["combined"]["summary"]["total"] >= 2
         assert len(payload["crm"]["by_user"]) >= 1
-
-    def test_call_report_combined_deduplicates_linked_pbx(
-        self, authenticated_admin, report_company, report_data
-    ):
-        from django.utils import timezone
-        from integrations.models import PbxCallDisposition, PbxCallRecord, PbxEventType, PbxSettings
-
-        PbxSettings.objects.create(
-            company=report_company,
-            webhook_token="wh-call-report-test",
-            connector_api_key="conn-call-report-test",
-            is_enabled=True,
-        )
-        pbx_record = PbxCallRecord.objects.create(
-            company=report_company,
-            uniqueid="test-uniq-1",
-            event_type=PbxEventType.HANGUP,
-            disposition=PbxCallDisposition.ANSWERED,
-            billsec=120,
-            started_at=timezone.now(),
-        )
-        call = ClientCall.objects.filter(client=report_data["lead_new"]).first()
-        call.pbx_call_record = pbx_record
-        call.source = "pbx"
-        call.save(update_fields=["pbx_call_record", "source"])
-
-        PbxCallRecord.objects.create(
-            company=report_company,
-            uniqueid="test-uniq-2",
-            event_type=PbxEventType.HANGUP,
-            disposition=PbxCallDisposition.NO_ANSWER,
-            billsec=0,
-            started_at=timezone.now(),
-        )
-
-        response = authenticated_admin.get("/api/v1/reports/calls/")
-        payload = api_body(response)
-
-        assert payload["crm"]["summary"]["pbx_linked"] == 1
-        assert payload["pbx"]["enabled"] is True
-        assert payload["pbx"]["summary"]["total"] == 2
-        assert payload["combined"]["summary"]["pbx_cdr_unlinked"] == 1
-        assert payload["combined"]["summary"]["total"] == 3
 
     def test_call_report_denied_for_employee(self, authenticated_employee, report_data):
         response = authenticated_employee.get("/api/v1/reports/calls/")

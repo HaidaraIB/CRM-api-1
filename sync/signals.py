@@ -73,7 +73,7 @@ _USER_ACCESS_SKIP_UPDATE_FIELDS = frozenset(
 )
 
 
-# --- user scope: notifications_unread, pbx_screen_pop, news_unread -------------
+# --- user scope: notifications_unread, news_unread -----------------------------
 
 
 @receiver(post_save, sender=Notification)

@@ -24,7 +24,6 @@ INTEGRATION_POLICY_PLATFORMS = (
     "openai",
     "api",
     "mujeb",
-    "pbx",
     "meta_inbox",
     "whatsapp_inbox",
 )
@@ -37,7 +36,6 @@ PLAN_INTEGRATION_FEATURE_MAP = {
     "openai": "integration_openai",
     "api": "integration_api",
     "mujeb": "integration_mujeb",
-    "pbx": "integration_pbx",
     "meta_inbox": "integration_meta_inbox",
     "whatsapp_inbox": "integration_meta_inbox",
 }
@@ -190,12 +188,6 @@ def _disable_company_platform_integrations(*, company_id: str | int, platform: s
             company_id=company_id,
             is_enabled=True,
         ).update(is_enabled=False)
-    if platform == "pbx":
-        from integrations.models import PbxSettings
-        PbxSettings.objects.filter(
-            company_id=company_id,
-            is_enabled=True,
-        ).update(is_enabled=False)
 
 
 def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] | None, new_policies: dict[str, Any] | None) -> None:
@@ -243,12 +235,6 @@ def apply_integration_policy_side_effects(*, previous_policies: dict[str, Any] |
                 if exception_company_ids:
                     openai_qs = openai_qs.exclude(company_id__in=exception_company_ids)
                 openai_qs.update(is_enabled=False)
-            if platform == "pbx":
-                from integrations.models import PbxSettings
-                pbx_qs = PbxSettings.objects.filter(is_enabled=True)
-                if exception_company_ids:
-                    pbx_qs = pbx_qs.exclude(company_id__in=exception_company_ids)
-                pbx_qs.update(is_enabled=False)
 
         # Company-level disable / exception removal transitions
         prev_overrides = prev["company_overrides"]

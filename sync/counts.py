@@ -21,7 +21,7 @@ from integrations.whatsapp_access import (
     user_can_access_whatsapp_chats,
 )
 from integrations.services.whatsapp_call_availability import user_is_whatsapp_call_away
-from notifications.models import Notification, NotificationType
+from notifications.models import Notification
 from notifications.views import exclude_inbox_noise_notifications
 from platform_content.models import NewsPost, UserNewsReadState
 from settings.models import SystemSettings
@@ -239,23 +239,3 @@ def arrivals_waiting_for_user(user) -> int:
     ).count()
 
 
-def pbx_screen_pop_for_user(user):
-    n = (
-        Notification.objects.filter(
-            user=user,
-            type=NotificationType.PBX_INCOMING_CALL,
-            read=False,
-            deleted_at__isnull=True,
-        )
-        .order_by("-created_at")
-        .first()
-    )
-    if n is None:
-        return None
-    data = n.data if isinstance(n.data, dict) else {}
-    client_id = data.get("client_id") or data.get("lead_id")
-    try:
-        client_id = int(client_id) if client_id is not None else None
-    except (TypeError, ValueError):
-        client_id = None
-    return {"notification_id": n.id, "client_id": client_id}

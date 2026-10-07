@@ -685,7 +685,6 @@ class ClientTask(models.Model):
 
 class ClientCallSource(models.TextChoices):
     MANUAL = "manual", "Manual"
-    PBX = "pbx", "PBX"
     WHATSAPP = "whatsapp", "WhatsApp"
 
 
@@ -707,13 +706,6 @@ class ClientCall(models.Model):
         max_length=16,
         choices=ClientCallSource.choices,
         default=ClientCallSource.MANUAL,
-    )
-    pbx_call_record = models.ForeignKey(
-        "integrations.PbxCallRecord",
-        on_delete=models.SET_NULL,
-        related_name="client_calls",
-        blank=True,
-        null=True,
     )
     dialed_phone_number = models.CharField(
         max_length=32,

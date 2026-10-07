@@ -9,7 +9,6 @@ from integrations.models import (
     CompanyLeadApiKey,
     IntegrationAccount,
     OpenAISettings,
-    PbxSettings,
     TwilioSettings,
 )
 from integrations.policy import get_effective_integration_policy, get_plan_integration_access
@@ -24,7 +23,6 @@ OVERVIEW_KEYS = (
     ("openai", "openai"),
     ("api", "api"),
     ("mujeb", "mujeb"),
-    ("pbx", "pbx"),
 )
 
 
@@ -82,17 +80,6 @@ def integration_overview_view(request):
                 "status": "connected" if enabled else "disconnected",
                 "account_name": "",
                 "last_activity_at": _iso(getattr(settings_row, "updated_at", None)) if settings_row else None,
-                "policy_enabled": _policy_on(company, policies, policy_platform),
-            })
-            continue
-        if key == "pbx":
-            settings_row = PbxSettings.objects.filter(company=company).first()
-            enabled = bool(settings_row and settings_row.is_enabled)
-            rows.append({
-                "key": key,
-                "status": "connected" if enabled else "disconnected",
-                "account_name": "",
-                "last_activity_at": _iso(settings_row.connector_last_seen_at) if settings_row else None,
                 "policy_enabled": _policy_on(company, policies, policy_platform),
             })
             continue

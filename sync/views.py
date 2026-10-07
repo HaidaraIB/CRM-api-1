@@ -15,7 +15,6 @@ from .counts import (
     arrivals_waiting_for_user,
     news_unread_for_user,
     notifications_unread_for_user,
-    pbx_screen_pop_for_user,
     support_chat_unread_for_user,
     tenant_chat_unread_for_user,
     whatsapp_calls_pending_for_user,
@@ -52,7 +51,6 @@ def build_live(user) -> dict:
     """Counts that drive an alert the user is waiting on. Never cached."""
     return {
         "whatsapp_calls_pending": whatsapp_calls_pending_for_user(user),
-        "pbx_screen_pop": pbx_screen_pop_for_user(user),
         "arrivals_pending": arrivals_pending_for_user(user),
     }
 
