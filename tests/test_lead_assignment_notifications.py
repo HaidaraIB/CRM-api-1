@@ -487,31 +487,31 @@ def test_delete_all_notifications_and_by_type(api_client, employee_user, subscri
         body="x",
         data={},
     )
-    pbx_a = Notification.objects.create(
+    typed_a = Notification.objects.create(
         user=employee_user,
-        type=NotificationType.PBX_INCOMING_CALL,
+        type=NotificationType.WHATSAPP_CALL_INCOMING,
         title="Call",
-        body="Incoming call from 100",
+        body="Incoming WhatsApp call from 100",
         data={"phone": "100"},
     )
-    pbx_b = Notification.objects.create(
+    typed_b = Notification.objects.create(
         user=employee_user,
-        type=NotificationType.PBX_CALL_MISSED,
+        type=NotificationType.WHATSAPP_SEND_FAILED,
         title="Missed",
-        body="Missed call from 100",
+        body="WhatsApp send failed for 100",
         data={"phone": "100"},
     )
     api_client.force_authenticate(user=employee_user)
 
     typed = api_client.delete(
-        "/api/v1/notifications/delete_all/?type=pbx_incoming_call,pbx_call_missed"
+        "/api/v1/notifications/delete_all/?type=whatsapp_call_incoming,whatsapp_send_failed"
     )
     assert typed.status_code == 200, getattr(typed, "data", typed.content)
-    pbx_a.refresh_from_db()
-    pbx_b.refresh_from_db()
+    typed_a.refresh_from_db()
+    typed_b.refresh_from_db()
     lead_n.refresh_from_db()
-    assert pbx_a.deleted_at is not None
-    assert pbx_b.deleted_at is not None
+    assert typed_a.deleted_at is not None
+    assert typed_b.deleted_at is not None
     assert lead_n.deleted_at is None
 
     wiped = api_client.delete("/api/v1/notifications/delete_all/")

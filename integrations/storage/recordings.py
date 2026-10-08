@@ -1,4 +1,4 @@
-"""PBX call recording object storage (local dev, S3/R2 prod)."""
+"""Call recording object storage (local dev, S3/R2 prod)."""
 
 from __future__ import annotations
 
@@ -39,11 +39,11 @@ def build_storage_key(
     linkedid: str,
     original_name: str,
     *,
-    prefix: str = "pbx",
+    prefix: str = "recording",
 ) -> str:
     ext = Path(original_name).suffix.lower() or ".wav"
     safe_linked = "".join(c if c.isalnum() or c in ".-_" else "_" for c in linkedid)[:64]
-    safe_prefix = "".join(c if c.isalnum() or c in ".-_" else "_" for c in (prefix or "pbx"))[:32]
+    safe_prefix = "".join(c if c.isalnum() or c in ".-_" else "_" for c in (prefix or "recording"))[:32]
     return f"{safe_prefix}/{company_id}/{safe_linked}/{uuid.uuid4().hex}{ext}"
 
 
@@ -53,7 +53,7 @@ def save_recording(
     linkedid: str,
     file_bytes: bytes,
     original_filename: str,
-    prefix: str = "pbx",
+    prefix: str = "recording",
 ) -> str:
     """Persist recording bytes; returns opaque storage key."""
     key = build_storage_key(
@@ -72,7 +72,7 @@ def _save_local(key: str, file_bytes: bytes) -> str:
     dest = root / key
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(file_bytes)
-    logger.info("Saved PBX recording locally key=%s bytes=%s", key, len(file_bytes))
+    logger.info("Saved recording locally key=%s bytes=%s", key, len(file_bytes))
     return key
 
 
@@ -88,7 +88,7 @@ def _save_s3(key: str, file_bytes: bytes) -> str:
         Body=file_bytes,
         ContentType=_guess_content_type(key),
     )
-    logger.info("Saved PBX recording to S3 key=%s bytes=%s", key, len(file_bytes))
+    logger.info("Saved recording to S3 key=%s bytes=%s", key, len(file_bytes))
     return key
 
 

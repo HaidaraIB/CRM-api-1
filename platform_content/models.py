@@ -187,7 +187,6 @@ class PageHelpVideo(models.Model):
         AI = "ai", "AI / OpenAI"
         LEAD_API = "lead_api", "Lead API"
         MUJEB = "mujeb", "Mujeb"
-        PBX = "pbx", "PBX"
 
     page_key = models.CharField(
         max_length=64,

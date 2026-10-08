@@ -1,1 +1,1 @@
-"""PBX / integration file storage helpers (not a Django app — utilities under integrations)."""
+"""Integration file storage helpers (not a Django app — utilities under integrations)."""

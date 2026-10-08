@@ -1,4 +1,4 @@
-"""Phone matching for PBX / SMS lead lookup."""
+"""Phone matching for SMS / lead lookup."""
 
 import pytest
 from django.db import IntegrityError
