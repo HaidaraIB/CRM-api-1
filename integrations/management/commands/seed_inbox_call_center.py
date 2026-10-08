@@ -6,7 +6,11 @@ Run:
 """
 from __future__ import annotations
 
+import math
+import struct
+import wave
 from datetime import timedelta
+from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
@@ -28,11 +32,31 @@ from integrations.models import (
     WhatsAppAccount,
     WhatsAppCall,
     WhatsAppCallDirection,
+    WhatsAppCallRecordingStatus,
     WhatsAppCallStatus,
     WhatsAppConversationStatus,
     WhatsAppPurpose,
 )
+from integrations.storage.recordings import save_recording
 from settings.models import Channel, LeadStatus
+
+
+def _tiny_wav_bytes(duration_sec: float = 2.0, freq: float = 440.0) -> bytes:
+    """Short mono WAV tone for Calls UI playback demos."""
+    rate = 16000
+    n = int(rate * duration_sec)
+    buf = BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        frames = bytearray()
+        for i in range(n):
+            amp = 0.35 * (1.0 - i / max(n, 1))
+            sample = int(amp * 32767 * math.sin(2 * math.pi * freq * (i / rate)))
+            frames += struct.pack("<h", sample)
+        wf.writeframes(frames)
+    return buf.getvalue()
 
 SEED_MARKER = "[INBOX-SEED]"
 SEED_PAGE_ID = "seed_meta_inbox_page_ui_review"
@@ -615,6 +639,8 @@ class Command(BaseCommand):
                 "conv": wa_threads[0],
                 "minutes_ago": 45,
                 "duration": 0,
+                "recording": False,
+                "tone_hz": 440.0,
             },
             {
                 "meta": "wacid.inbox.seed.ended.1",
@@ -624,11 +650,25 @@ class Command(BaseCommand):
                 "conv": wa_threads[0],
                 "minutes_ago": 120,
                 "duration": 185,
+                "recording": True,
+                "tone_hz": 440.0,
+            },
+            {
+                "meta": "wacid.inbox.seed.ended.2",
+                "status": WhatsAppCallStatus.ENDED,
+                "direction": WhatsAppCallDirection.INBOUND,
+                "agent": sara,
+                "conv": wa_threads[0],
+                "minutes_ago": 30,
+                "duration": 94,
+                "recording": True,
+                "tone_hz": 523.25,
             },
         ]
         rows = []
         for spec in specs:
             started = now - timedelta(minutes=spec["minutes_ago"])
+            answered = bool(spec["duration"])
             call, _ = WhatsAppCall.objects.update_or_create(
                 company=company,
                 meta_call_id=spec["meta"],
@@ -641,14 +681,31 @@ class Command(BaseCommand):
                     "peer_name": spec["conv"].contact.name or spec["conv"].contact.external_id,
                     "agent": spec["agent"],
                     "started_at": started,
-                    "answered_at": started + timedelta(seconds=8)
-                    if spec["duration"]
-                    else None,
+                    "answered_at": started + timedelta(seconds=8) if answered else None,
                     "ended_at": started + timedelta(seconds=spec["duration"] or 20),
                     "duration_sec": spec["duration"],
                     "notes": SEED_MARKER,
                     "raw_payload": {"seed": True},
+                    "recording_status": WhatsAppCallRecordingStatus.NONE,
+                    "recording_storage_key": "",
                 },
             )
+            if spec.get("recording") and answered:
+                key = save_recording(
+                    company_id=company.id,
+                    linkedid=call.meta_call_id,
+                    file_bytes=_tiny_wav_bytes(duration_sec=2.5, freq=float(spec["tone_hz"])),
+                    original_filename="seed_inbox_call.wav",
+                    prefix="whatsapp_calls",
+                )
+                call.recording_storage_key = key
+                call.recording_status = WhatsAppCallRecordingStatus.READY
+                call.save(
+                    update_fields=[
+                        "recording_storage_key",
+                        "recording_status",
+                        "updated_at",
+                    ]
+                )
             rows.append(call)
         return rows
