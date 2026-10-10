@@ -76,7 +76,9 @@ def _register_payload(domain_suffix: str, trial_code: str | None = None):
             "email": f"owner-{domain_suffix}@test.com",
             "username": f"owner_{domain_suffix}",
             "password": "SecurePass123!",
-            "phone": f"+964770{domain_suffix[:7].zfill(7)}",
+            # Must be a real E.164 phone — the server now enforces the
+            # `auth.register` catalog's phone_e164 rule (previously client_only).
+            "phone": f"+964770{abs(hash(domain_suffix)) % 10_000_000:07d}",
         },
     }
     if trial_code:

@@ -30,6 +30,10 @@ from django.utils import timezone
 ONLINE_WINDOW = timedelta(seconds=90)
 
 LIVE_PREFIX = "presence:live:v1"
+# Open sockets for this user. A disconnect clears the live marker only when the
+# count reaches zero, so a phone backgrounding does not blink the web session
+# offline (and does not re-fire inbox round-robin).
+CONN_PREFIX = "presence:conns:v1"
 # Slightly longer than the client's heartbeat cadence so one missed frame does
 # not blink someone offline.
 LIVE_TTL_SECONDS = 90
@@ -43,6 +47,10 @@ DB_WRITE_INTERVAL_SECONDS = 300
 
 def _live_key(user_id: int) -> str:
     return f"{LIVE_PREFIX}:{user_id}"
+
+
+def _conn_key(user_id: int) -> str:
+    return f"{CONN_PREFIX}:{user_id}"
 
 
 def mark_live(user_id: int) -> None:
@@ -59,6 +67,85 @@ def mark_live(user_id: int) -> None:
             on_agent_became_ready(user_id)
         except Exception:
             pass
+
+
+def refresh_live(user_id: int) -> None:
+    """
+    Extend the live marker for a connection that is already counted.
+
+    ``cache.touch`` misses when the marker has expired. That is a real
+    offline-to-online transition (heartbeats stopped long enough), so it goes
+    through ``mark_live`` and may re-queue the agent. A marker that is still
+    present is only extended — no second round-robin pass.
+    """
+    if not user_id:
+        return
+    key = _live_key(user_id)
+    if cache.touch(key, LIVE_TTL_SECONDS):
+        return
+    mark_live(user_id)
+
+
+def _bump_conn(user_id: int, delta: int) -> int | None:
+    """
+    Move the connection counter by ``delta``.
+
+    Returns the new count, or None when the key was already gone (a decrement
+    against an expired counter). The TTL is refreshed on every successful
+    change so it stays aligned with the live marker.
+    """
+    key = _conn_key(user_id)
+    try:
+        count = cache.incr(key, delta)
+    except ValueError:
+        if delta < 0:
+            return None
+        cache.set(key, delta, LIVE_TTL_SECONDS)
+        return delta
+    if count <= 0:
+        cache.delete(key)
+        return 0
+    cache.touch(key, LIVE_TTL_SECONDS)
+    return count
+
+
+def connection_opened(user_id: int) -> None:
+    """One socket accepted. The live marker appears on the 0 → 1 transition."""
+    if not user_id:
+        return
+    count = _bump_conn(user_id, 1)
+    if count == 1:
+        mark_live(user_id)
+    else:
+        refresh_live(user_id)
+
+
+def connection_heartbeat(user_id: int) -> None:
+    """
+    Keep the counters alive for a socket that is already open.
+
+    Does not increment. A heartbeat is "still here", and counting it as a new
+    connection would leak the refcount until the TTL.
+    """
+    if not user_id:
+        return
+    key = _conn_key(user_id)
+    if not cache.touch(key, LIVE_TTL_SECONDS):
+        # Evicted between beats. This socket is still open, so re-seed at one
+        # rather than inventing connections that are no longer visible.
+        cache.set(key, 1, LIVE_TTL_SECONDS)
+    refresh_live(user_id)
+
+
+def connection_closed(user_id: int) -> None:
+    """
+    One socket dropped. The user stays live while any other socket remains.
+    """
+    if not user_id:
+        return
+    count = _bump_conn(user_id, -1)
+    if count == 0:
+        clear_live(user_id)
 
 
 def clear_live(user_id: int) -> None:

@@ -427,8 +427,8 @@ def social_conversations_list(request):
 
     # A snooze expiring changes what the list shows but writes no row, so sweep
     # BEFORE minting the token or the list would 304 with the thread still hidden.
-    if sweep_expired_snoozes(company):
-        bump_company_slice('inbox', company.id)
+    # The sweep itself bumps the inbox slice when it reopens anything.
+    sweep_expired_snoozes(company)
 
     # The whole query string is the variant so switching filters cannot 304 with
     # the previous filter's rows.
@@ -1533,7 +1533,7 @@ def social_update_contact(request, pk: int):
     contact.name = name
     contact.name_manually_set = True
     contact.save(update_fields=['name', 'name_manually_set', 'updated_at'])
-    bump_company_slice(company.id, 'inbox')
+    bump_company_slice('inbox', company.id)
 
     return success_response(
         data={'contact': _serialize_contact(contact)},

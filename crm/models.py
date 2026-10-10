@@ -1,3 +1,4 @@
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 from enum import Enum
@@ -561,6 +562,40 @@ class Deal(models.Model):
     description = models.TextField(
         blank=True, null=True, help_text="Deal description/notes"
     )
+    title = models.CharField(max_length=255, blank=True, default="")
+    pipeline = models.ForeignKey(
+        "settings.DealPipeline",
+        on_delete=models.SET_NULL,
+        related_name="deals",
+        blank=True,
+        null=True,
+    )
+    pipeline_stage = models.ForeignKey(
+        "settings.DealStage",
+        on_delete=models.SET_NULL,
+        related_name="deals",
+        blank=True,
+        null=True,
+    )
+    probability = models.PositiveSmallIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Optional override of the stage probability (0-100).",
+    )
+    expected_close_date = models.DateField(blank=True, null=True)
+    currency = models.CharField(max_length=10, blank=True, default="")
+    lost_reason = models.ForeignKey(
+        "settings.DealLostReason",
+        on_delete=models.SET_NULL,
+        related_name="deals",
+        blank=True,
+        null=True,
+    )
+    lost_note = models.TextField(blank=True, default="")
+    won_at = models.DateTimeField(blank=True, null=True)
+    lost_at = models.DateTimeField(blank=True, null=True)
+    stage_changed_at = models.DateTimeField(blank=True, null=True)
     # Real estate specific fields
     unit = models.ForeignKey(
         "real_estate.Unit",
@@ -603,10 +638,108 @@ class Deal(models.Model):
             models.Index(fields=["company", "employee"], name="idx_deal_company_employee"),
             models.Index(fields=["company", "stage"], name="idx_deal_company_stage"),
             models.Index(fields=["company", "created_at"], name="idx_deal_company_created"),
+            models.Index(fields=["company", "pipeline_stage"], name="idx_deal_company_pstage"),
+            models.Index(
+                fields=["company", "employee", "pipeline_stage"],
+                name="idx_deal_co_emp_pstage",
+            ),
+            models.Index(
+                fields=["company", "expected_close_date"],
+                name="idx_deal_company_expected",
+            ),
+            models.Index(fields=["company", "status"], name="idx_deal_company_status"),
         ]
 
     def __str__(self):
-        return f"{self.client.name} - {self.stage}"
+        label = self.title or (self.client.name if self.client_id else "Deal")
+        return f"{label} - {self.stage}"
+
+
+class DealLineItemType(models.TextChoices):
+    PRODUCT = "product", "Product"
+    SERVICE = "service", "Service"
+    SERVICE_PACKAGE = "service_package", "Service package"
+    UNIT = "unit", "Unit"
+    CUSTOM = "custom", "Custom"
+
+
+class DealLineItem(models.Model):
+    """Snapshot of a product, service, package, unit, or custom charge on a deal."""
+
+    deal = models.ForeignKey(Deal, on_delete=models.CASCADE, related_name="line_items")
+    item_type = models.CharField(max_length=32, choices=DealLineItemType.choices)
+    product = models.ForeignKey(
+        "products.Product",
+        on_delete=models.SET_NULL,
+        related_name="deal_line_items",
+        blank=True,
+        null=True,
+    )
+    service = models.ForeignKey(
+        "services.Service",
+        on_delete=models.SET_NULL,
+        related_name="deal_line_items",
+        blank=True,
+        null=True,
+    )
+    service_package = models.ForeignKey(
+        "services.ServicePackage",
+        on_delete=models.SET_NULL,
+        related_name="deal_line_items",
+        blank=True,
+        null=True,
+    )
+    unit = models.ForeignKey(
+        "real_estate.Unit",
+        on_delete=models.SET_NULL,
+        related_name="deal_line_items",
+        blank=True,
+        null=True,
+    )
+    name = models.CharField(max_length=255)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    position = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "crm_deal_line_item"
+        ordering = ["position", "id"]
+
+    def __str__(self):
+        return self.name
+
+
+class DealEvent(models.Model):
+    """Append-only activity log for a deal (stage changes, notes, assignments)."""
+
+    deal = models.ForeignKey(Deal, on_delete=models.CASCADE, related_name="events")
+    event_type = models.CharField(max_length=50)
+    old_value = models.TextField(blank=True, default="")
+    new_value = models.TextField(blank=True, default="")
+    reason = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        related_name="created_deal_events",
+        blank=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "crm_deal_event"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["deal", "-created_at"], name="idx_dealevent_deal_created"),
+        ]
+
+    def __str__(self):
+        return f"{self.deal_id} - {self.event_type}"
 
 
 class Task(models.Model):

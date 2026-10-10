@@ -101,10 +101,10 @@ class Command(BaseCommand):
             ).annotate(
                 deals_count=Count(
                     'deals',
-                    filter=Q(
-                        deals__created_at__gte=week_start,
-                        deals__stage='won',
-                        deals__company=company
+                    filter=Q(deals__created_at__gte=week_start, deals__company=company)
+                    & (
+                        Q(deals__pipeline_stage__stage_type="won")
+                        | Q(deals__stage__iexact="won")
                     )
                 )
             ).order_by('-deals_count').first()

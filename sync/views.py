@@ -9,7 +9,7 @@ from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import success_response
 
 from .cache import BADGES_CACHE_TTL, badges_cache_key
-from .version import digest_token, normalize_etag, slice_versions
+from .version import badge_token, digest_token, normalize_etag, slice_versions
 from .counts import (
     arrivals_pending_for_user,
     arrivals_waiting_for_user,
@@ -73,7 +73,10 @@ def build_digest(user, token: str | None = None) -> dict:
     if token is None:
         token = digest_token(user)
 
-    key = badges_cache_key(user.id, token)
+    # Badge counts are keyed by badge_token, which omits the company-data
+    # counter. ``token`` (the digest ETag) still includes it, so a lead edit
+    # is a 200 with fresh ``versions`` and a cache hit on the expensive tier.
+    key = badges_cache_key(user.id, badge_token(user))
     badges = cache.get(key)
     if not isinstance(badges, dict):
         badges = build_badges(user)
@@ -84,10 +87,9 @@ def build_digest(user, token: str | None = None) -> dict:
         **build_live(user),
         "version": token,
         # Per-slice counters, so a client can refetch only what actually moved
-        # instead of running a timer per query. Built here rather than inside the
-        # badge cache: the cached tier is keyed by the token, so a cached entry is
-        # only ever reachable while these values are unchanged anyway — but
-        # recomputing them keeps the two independent, and it is one MGET.
+        # instead of running a timer per query. Recomputed on every 200 — not
+        # stored in the badge cache — because a lead edit rotates the digest
+        # ETag without rotating the badge key.
         "versions": slice_versions(user),
     }
 

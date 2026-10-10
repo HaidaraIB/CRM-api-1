@@ -158,7 +158,7 @@ def publish_company_slice(slice_name: str, company_id) -> None:
         version = cache.get(company_slice_key(slice_name, company_id)) or 0
         _send(COMPANY_GROUP.format(company_id), f"company:{slice_name}", int(version))
 
-    _on_commit(_publish)
+    _schedule(("company", company_id, slice_name), _publish)
 
 
 def publish_support_inbox() -> None:
@@ -170,7 +170,7 @@ def publish_support_inbox() -> None:
         version = cache.get(SUPPORT_INBOX_SEQ_KEY) or 0
         _send(SUPPORT_INBOX_GROUP, "support_inbox", int(version))
 
-    _on_commit(_publish)
+    _schedule(("support_inbox",), _publish)
 
 
 def publish_user(user_id) -> None:
@@ -182,7 +182,7 @@ def publish_user(user_id) -> None:
         version = cache.get(user_seq_key(user_id)) or 0
         _send(USER_GROUP.format(user_id), "user", int(version))
 
-    _on_commit(_publish)
+    _schedule(("user", user_id), _publish)
 
 
 def publish_support_conversation(conversation_id) -> None:
@@ -209,7 +209,7 @@ def publish_support_conversation(conversation_id) -> None:
             },
         )
 
-    _on_commit(_publish)
+    _schedule(("support_conversation", conversation_id), _publish)
 
 
 def publish_conversation(conversation_id) -> None:
@@ -241,7 +241,7 @@ def publish_conversation(conversation_id) -> None:
             },
         )
 
-    _on_commit(_publish)
+    _schedule(("conversation", conversation_id), _publish)
 
 
 def publish_presence(conversation_id, user_id, state: str) -> None:
@@ -291,8 +291,76 @@ def on_counter_changed(kind: str, **details) -> None:
         publish_support_inbox()
 
 
-def _on_commit(fn) -> None:
+def _safe_build(builder) -> None:
     try:
-        transaction.on_commit(fn)
+        builder()
+    except Exception as exc:
+        logger.debug("Realtime publish failed (%s)", exc)
+
+
+def _flush_still_armed(connection, marker) -> bool:
+    """True when the flush callback registered for ``marker`` is still pending."""
+    if marker is None:
+        return False
+    for _sids, func, _robust in getattr(connection, "run_on_commit", ()):
+        if getattr(func, "_realtime_marker", None) is marker:
+            return True
+    return False
+
+
+def _schedule(key, builder) -> None:
+    """
+    Run ``builder`` once per transaction for ``key``.
+
+    Bulk writes bump the same slice once per row. Without this, each bump
+    registers its own ``on_commit`` callback and the socket gets one frame per
+    row. The builder reads the cache counter at commit time, so the single
+    frame carries the final version.
+
+    A rolled-back savepoint drops the callback Django registered for it. The
+    next schedule in the surviving transaction notices the callback is gone and
+    arms a fresh flush, instead of appending to a bucket nobody will drain.
+    Outside an atomic block there is nothing to collapse, so the builder runs
+    immediately — the same moment ``on_commit`` would have.
+    """
+    if not realtime_enabled():
+        return
+    try:
+        connection = transaction.get_connection()
     except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Could not schedule realtime publish (%s)", exc)
+        return
+
+    if not connection.in_atomic_block:
+        _safe_build(builder)
+        return
+
+    state = getattr(connection, "_realtime_coalesce", None)
+    fresh = state is None or not _flush_still_armed(connection, state.get("marker"))
+    if fresh:
+        marker = object()
+        state = {"marker": marker, "pending": {}}
+        connection._realtime_coalesce = state
+
+    # Record the builder before arming the flush. Tests (and autocommit) run
+    # on_commit immediately, and a flush that fires before this assignment
+    # would send an empty batch and drop the event.
+    state["pending"][key] = builder
+
+    if not fresh:
+        return
+
+    def _flush(state=state):
+        if getattr(connection, "_realtime_coalesce", None) is state:
+            connection._realtime_coalesce = None
+        items = list(state["pending"].values())
+        state["pending"].clear()
+        for build in items:
+            _safe_build(build)
+
+    _flush._realtime_marker = marker
+    try:
+        transaction.on_commit(_flush)
+    except Exception as exc:  # pragma: no cover - defensive
+        connection._realtime_coalesce = None
         logger.debug("Could not schedule realtime publish (%s)", exc)

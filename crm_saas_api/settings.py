@@ -242,6 +242,7 @@ INSTALLED_APPS = [
     "tenant_chat",
     "company_library",
     "sync",
+    "validation",
     "realtime",
     "drf_spectacular",
     "drf_spectacular_sidecar",

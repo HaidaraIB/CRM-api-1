@@ -620,15 +620,9 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
-    def validate_login_max_failed_attempts(self, value):
-        if value is not None and value < 1:
-            raise serializers.ValidationError("Must be at least 1.")
-        return value
-
-    def validate_login_lockout_duration_minutes(self, value):
-        if value is not None and value < 1:
-            raise serializers.ValidationError("Must be at least 1.")
-        return value
+    # login_max_failed_attempts / login_lockout_duration_minutes range checks are
+    # enforced by the `system_settings.update` catalog form (validation/schemas/
+    # settings.py) via CatalogValidatedSerializerMixin.
 
     def validate_integration_policies(self, value):
         if value in (None, ""):
@@ -708,4 +702,64 @@ class BillingSettingsSerializer(serializers.ModelSerializer):
         if request:
             return request.build_absolute_uri(url)
         return url
+
+
+class DealPipelineSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(source="company.name", read_only=True)
+    stages = serializers.SerializerMethodField()
+
+    class Meta:
+        from .models import DealPipeline
+
+        model = DealPipeline
+        fields = [
+            "id",
+            "name",
+            "order",
+            "is_default",
+            "is_active",
+            "company",
+            "company_name",
+            "stages",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "company", "created_at", "updated_at"]
+
+    def get_stages(self, obj):
+        stages = obj.stages.all().order_by("order", "id")
+        return DealStageSerializer(stages, many=True).data
+
+
+class DealStageSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import DealStage
+
+        model = DealStage
+        fields = [
+            "id",
+            "pipeline",
+            "name",
+            "color",
+            "order",
+            "stage_type",
+            "probability",
+            "system_key",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "system_key", "created_at", "updated_at"]
+
+    # probability / stage_type checks are enforced by the `deal_stage.upsert`
+    # catalog form (validation/schemas/settings.py) via CatalogValidatedSerializerMixin.
+
+
+class DealLostReasonSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models import DealLostReason
+
+        model = DealLostReason
+        fields = ["id", "name", "order", "is_active", "company", "created_at", "updated_at"]
+        read_only_fields = ["id", "company", "created_at", "updated_at"]
 

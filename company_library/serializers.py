@@ -30,10 +30,6 @@ class CompanyLibraryFileSerializer(serializers.ModelSerializer):
 
 
 class CompanyLibraryFileRenameSerializer(serializers.Serializer):
+    # `trim_whitespace=True` + `allow_blank=False` (the default) already reject an
+    # empty/whitespace-only filename at the DRF field level.
     original_filename = serializers.CharField(max_length=255, trim_whitespace=True)
-
-    def validate_original_filename(self, value):
-        name = (value or "").strip()
-        if not name:
-            raise serializers.ValidationError("Filename is required.")
-        return name

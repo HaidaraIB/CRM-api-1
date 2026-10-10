@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.exceptions import ErrorDetail
 from django.db import transaction
 from django.utils import timezone
 
@@ -985,27 +986,15 @@ class ImpersonateSerializer(serializers.Serializer):
 
 
 class ChangePasswordSerializer(serializers.Serializer):
-    """Serializer for changing user password"""
+    """Serializer for changing user password.
+
+    Password policy and the new/confirm match check are enforced by the
+    `auth.change_password` catalog form (validation/schemas/auth.py) via
+    CatalogValidatedSerializerMixin — see validation/bindings.py.
+    """
     current_password = serializers.CharField(write_only=True, required=True)
     new_password = serializers.CharField(write_only=True, required=True)
     confirm_password = serializers.CharField(write_only=True, required=True)
-
-    def validate(self, attrs):
-        """Validate that new_password and confirm_password match"""
-        if attrs['new_password'] != attrs['confirm_password']:
-            raise serializers.ValidationError({
-                'confirm_password': 'New password and confirm password do not match.'
-            })
-        return attrs
-
-    def validate_new_password(self, value):
-        """Validate new password using Django's password validators"""
-        user = self.context['request'].user
-        try:
-            validate_password(value, user)
-        except ValidationError as e:
-            raise serializers.ValidationError(list(e.messages))
-        return value
 
 
 class RegisterCompanySerializer(serializers.Serializer):
@@ -1132,51 +1121,47 @@ class RegisterCompanySerializer(serializers.Serializer):
         return attrs
 
     def validate_company(self, value):
-        """Validate company data"""
-        required_fields = ['name', 'domain', 'specialization']
-        for field in required_fields:
-            if field not in value:
-                raise serializers.ValidationError(f"Company {field} is required")
-        
-        if value['specialization'] not in ['real_estate', 'services', 'products', 'medical']:
-            raise serializers.ValidationError("Invalid specialization")
-        
-        # Check if domain already exists
-        if Company.objects.filter(domain=value['domain']).exists():
-            raise serializers.ValidationError("Company with this domain already exists")
-        
+        """DB-level checks the `auth.register` catalog form can't express (no DB access
+        in the validation DSL). Required/format/choice checks for company.* are enforced
+        by that catalog form via CatalogValidatedSerializerMixin.
+        """
+        domain = (value.get("domain") or "").strip()
+        if domain and Company.objects.filter(domain=domain).exists():
+            raise serializers.ValidationError(
+                ErrorDetail("Company with this domain already exists", code="unique")
+            )
         return value
 
     def validate_owner(self, value):
-        """Validate owner data"""
-        required_fields = ['first_name', 'last_name', 'email', 'username', 'password', 'phone']
-        for field in required_fields:
-            if field not in value:
-                raise serializers.ValidationError(f"Owner {field} is required")
-        
-        # Check if username already exists
-        if User.objects.filter(username=value['username']).exists():
-            raise serializers.ValidationError("Username already exists")
-        
-        # Check if email already exists
-        if User.objects.filter(email=value['email']).exists():
-            raise serializers.ValidationError("Email already exists")
+        """DB-level uniqueness checks the `auth.register` catalog form can't express.
+        Required/format checks for owner.* are enforced by that catalog form via
+        CatalogValidatedSerializerMixin.
+        """
+        username = value.get("username")
+        if username and User.objects.filter(username=username).exists():
+            raise serializers.ValidationError(
+                ErrorDetail("Username already exists", code="unique")
+            )
 
+        email = value.get("email")
+        if email and User.objects.filter(email=email).exists():
+            raise serializers.ValidationError(
+                ErrorDetail("Email already exists", code="unique")
+            )
+
+        # Uniqueness check only — don't overwrite `value["phone"]` here. User.phone is
+        # stored digits-only (see normalize_phone_digits), but the `auth.register`
+        # catalog form's phone_e164 rule expects the submitted +E.164 string; stripping
+        # the `+` before the catalog mixin runs would make that rule reject it. The
+        # digits-only normalization for storage happens in create() instead.
         from .platform_whatsapp import normalize_phone_digits
 
-        phone = normalize_phone_digits(value.get("phone", "").strip())
-        if not phone:
-            raise serializers.ValidationError("Phone number is required")
-        if User.objects.filter(phone=phone).exists():
-            raise serializers.ValidationError("Phone number already exists")
-        value["phone"] = phone
-        
-        # Validate password
-        try:
-            validate_password(value['password'])
-        except ValidationError as e:
-            raise serializers.ValidationError(list(e.messages))
-        
+        phone = normalize_phone_digits((value.get("phone") or "").strip())
+        if phone and User.objects.filter(phone=phone).exists():
+            raise serializers.ValidationError(
+                ErrorDetail("Phone number already exists", code="unique")
+            )
+
         return value
 
     @transaction.atomic
@@ -1192,6 +1177,8 @@ class RegisterCompanySerializer(serializers.Serializer):
         billing_cycle = validated_data.get('billing_cycle', 'monthly')
         trial_code_raw = (validated_data.pop("trial_code", None) or "").strip()
 
+        from .platform_whatsapp import normalize_phone_digits
+
         # Create owner user
         owner = User.objects.create_user(
             username=owner_data['username'],
@@ -1199,7 +1186,7 @@ class RegisterCompanySerializer(serializers.Serializer):
             password=owner_data['password'],
             first_name=owner_data['first_name'],
             last_name=owner_data['last_name'],
-            phone=owner_data['phone'],
+            phone=normalize_phone_digits(owner_data['phone']),
             role=Role.ADMIN.value,
             login_two_factor_enabled=False,
         )
@@ -1357,17 +1344,17 @@ class RegistrationAvailabilitySerializer(serializers.Serializer):
         domain = attrs.get('company_domain')
         if domain:
             if Company.objects.filter(domain__iexact=domain.strip()).exists():
-                errors['company_domain'] = "Company domain already exists"
+                errors['company_domain'] = ErrorDetail("Company domain already exists", code="unique")
 
         email = attrs.get('email')
         if email:
             if User.objects.filter(email__iexact=email.strip()).exists():
-                errors['email'] = "Email already exists"
+                errors['email'] = ErrorDetail("Email already exists", code="unique")
 
         username = attrs.get('username')
         if username:
             if User.objects.filter(username__iexact=username.strip()).exists():
-                errors['username'] = "Username already exists"
+                errors['username'] = ErrorDetail("Username already exists", code="unique")
 
         phone = attrs.get("phone")
         if phone:
@@ -1375,7 +1362,7 @@ class RegistrationAvailabilitySerializer(serializers.Serializer):
 
             pn = normalize_phone_digits(phone.strip())
             if pn and User.objects.filter(phone=pn).exists():
-                errors["phone"] = "Phone number already exists"
+                errors["phone"] = ErrorDetail("Phone number already exists", code="unique")
 
         if errors:
             raise serializers.ValidationError(errors)

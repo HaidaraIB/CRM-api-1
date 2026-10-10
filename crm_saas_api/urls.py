@@ -96,6 +96,9 @@ from settings.views import (
     PlatformOTPIQSettingsViewSet,
     PlatformWhatsAppSettingsViewSet,
     BillingSettingsViewSet,
+    DealPipelineViewSet,
+    DealStageViewSet,
+    DealLostReasonViewSet,
 )
 from settings.views_public import MaintenanceStatusPublicView, MobileAppVersionPublicView
 from real_estate.views import (
@@ -198,6 +201,9 @@ router.register(r"settings/statuses", LeadStatusViewSet, basename="leadstatus")
 router.register(r"settings/call-methods", CallMethodViewSet, basename="callmethod")
 router.register(r"settings/visit-types", VisitTypeViewSet, basename="visittype")
 router.register(r"settings/tags", TagViewSet, basename="tag")
+router.register(r"settings/deal-pipelines", DealPipelineViewSet, basename="dealpipeline")
+router.register(r"settings/deal-stages", DealStageViewSet, basename="dealstage")
+router.register(r"settings/deal-lost-reasons", DealLostReasonViewSet, basename="deallostreason")
 router.register(r"settings/backups", SystemBackupViewSet, basename="systembackup")
 router.register(
     r"settings/audit-logs", SystemAuditLogViewSet, basename="systemauditlog"
@@ -461,6 +467,7 @@ v1_patterns = [
     path("work-sessions/today/", WorkSessionTodayView.as_view(), name="work_session_today"),
     path("work-sessions/summary/", WorkSessionSummaryView.as_view(), name="work_session_summary"),
     path("", include("notifications.urls")),
+    path("validation/", include("validation.urls")),
 ]
 
 urlpatterns = [

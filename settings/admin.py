@@ -9,6 +9,9 @@ from .models import (
     CallMethod,
     VisitType,
     Tag,
+    DealPipeline,
+    DealStage,
+    DealLostReason,
     SystemSettings,
     BillingSettings,
 )
@@ -36,6 +39,27 @@ class LeadStatusAdmin(admin.ModelAdmin):
     list_filter = ['category', 'is_default', 'is_hidden', 'is_active', 'created_at']
     search_fields = ['name', 'description']
     readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(DealPipeline)
+class DealPipelineAdmin(admin.ModelAdmin):
+    list_display = ["name", "company", "is_default", "is_active", "order"]
+    list_filter = ["is_default", "is_active"]
+    search_fields = ["name", "company__name"]
+
+
+@admin.register(DealStage)
+class DealStageAdmin(admin.ModelAdmin):
+    list_display = ["name", "pipeline", "stage_type", "probability", "order", "system_key", "is_active"]
+    list_filter = ["stage_type", "is_active"]
+    search_fields = ["name", "system_key"]
+
+
+@admin.register(DealLostReason)
+class DealLostReasonAdmin(admin.ModelAdmin):
+    list_display = ["name", "company", "order", "is_active"]
+    list_filter = ["is_active"]
+    search_fields = ["name"]
 
 
 @admin.register(SMTPSettings)

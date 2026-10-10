@@ -65,7 +65,16 @@ COMPANY_SLICE_PREFIXES = {
     "inbox": "sync_seq_company_inbox_v1",  # SocialMessage + SocialConversation
     "support_chat": "sync_seq_company_support_chat_v1",  # SupportMessage (owner)
     "account": "sync_seq_company_account_v1",  # Subscription / company status
+    "leads": "sync_seq_company_leads_v1",  # Client + ClientEvent
+    "deals": "sync_seq_company_deals_v1",  # Deal
+    "todos": "sync_seq_company_todos_v1",  # ClientTask
 }
+
+# These slices rotate the digest ETag (clients refetch the list) but must not
+# rotate the badge cache. A lead edit is common; rebuilding tenant_chat_unread
+# for every user in the company on each one is not.
+DATA_ONLY_SLICES = frozenset({"leads", "deals", "todos"})
+COMPANY_DATA_SEQ_PREFIX = "sync_seq_company_data_v1"
 
 USER_ACCESS_SEQ_PREFIX = "sync_seq_user_access_v1"
 
@@ -79,6 +88,10 @@ def company_seq_key(company_id: int) -> str:
 
 def company_slice_key(slice_name: str, company_id: int) -> str:
     return f"{COMPANY_SLICE_PREFIXES[slice_name]}:{company_id}"
+
+
+def company_data_seq_key(company_id: int) -> str:
+    return f"{COMPANY_DATA_SEQ_PREFIX}:{company_id}"
 
 
 def user_seq_key(user_id: int) -> str:
@@ -171,7 +184,13 @@ def bump_company_slice(slice_name: str, company_id) -> None:
     if not company_id:
         return
     _bump(company_slice_key(slice_name, company_id))
-    _bump(company_seq_key(company_id))
+    # Lead/deal/todo writes are frequent and do not change sidebar badges.
+    # They move ``company_data`` (in the digest ETag, not the badge key)
+    # instead of the coarse company counter the badge cache is keyed on.
+    if slice_name in DATA_ONLY_SLICES:
+        _bump(company_data_seq_key(company_id))
+    else:
+        _bump(company_seq_key(company_id))
     _notify("company_slice", slice_name=slice_name, company_id=company_id)
 
 
@@ -250,18 +269,17 @@ def conversation_token(conversation_id, user_id, variant: str = "") -> str:
     return f"{conversation_id}.{user_id}.{seq}.{digest}.{bucket}"
 
 
-def digest_token(user) -> str:
-    """
-    Current version token for this user's digest.
-
-    One ``get_many`` (a single MGET on Redis) and no database access, which is the
-    whole point — this runs on every poll, including the ones that 304.
-    """
+def _token_keys(user, *, include_data: bool) -> list[str]:
     company_id = getattr(user, "company_id", None)
     keys = [GLOBAL_SEQ_KEY, user_seq_key(user.id)]
     if company_id:
         keys.append(company_seq_key(company_id))
+        if include_data:
+            keys.append(company_data_seq_key(company_id))
+    return keys
 
+
+def _fold_token(user, keys: list[str]) -> str:
     values = cache.get_many(keys)
     # Leading user id so two users can never hold the same token. Counters are
     # per-user and start at the same place, so without it a client that kept a
@@ -271,6 +289,28 @@ def digest_token(user) -> str:
     parts.extend(str(values.get(key) or 0) for key in keys)
     parts.append(str(int(time.time() // SAFETY_BUCKET_SECONDS)))
     return ".".join(parts)
+
+
+def digest_token(user) -> str:
+    """
+    Current version token for this user's digest.
+
+    Includes the company-data counter, so a lead/deal/todo edit rotates the
+    ETag and clients refetch. One ``get_many`` and no database access — this
+    runs on every poll, including the ones that 304.
+    """
+    return _fold_token(user, _token_keys(user, include_data=True))
+
+
+def badge_token(user) -> str:
+    """
+    Token for the cached badge tier only.
+
+    Same inputs as ``digest_token`` except the company-data counter. Lead edits
+    must not rebuild ``tenant_chat_unread`` for every user in the company; the
+    digest ETag still moves, and ``versions`` is recomputed on the 200 path.
+    """
+    return _fold_token(user, _token_keys(user, include_data=False))
 
 
 def slice_versions(user) -> dict:

@@ -363,9 +363,15 @@ def _apply_reaction(conversation, reaction) -> None:
     value = '' if reaction.get('action') == 'unreact' else (
         reaction.get('emoji') or reaction.get('reaction') or ''
     )
-    SocialMessage.objects.filter(
+    updated = SocialMessage.objects.filter(
         conversation=conversation, external_message_id=mid
     ).update(reaction=value[:32])
+    # queryset.update skips signals, so a reaction would otherwise wait for the
+    # next unrelated inbox write.
+    if updated and getattr(conversation, 'company_id', None):
+        from sync.version import bump_company_slice
+
+        bump_company_slice('inbox', conversation.company_id)
 
 
 def _apply_delivery_or_read(conversation, event) -> None:
@@ -376,11 +382,15 @@ def _apply_delivery_or_read(conversation, event) -> None:
     mids = [str(m).strip() for m in (delivery.get('mids') or []) if str(m).strip()]
     if not mids:
         return
-    SocialMessage.objects.filter(
+    updated = SocialMessage.objects.filter(
         conversation=conversation,
         external_message_id__in=mids,
         direction=SocialMessage.DIRECTION_OUTBOUND,
     ).exclude(delivery_status='failed').update(delivery_status='delivered')
+    if updated and getattr(conversation, 'company_id', None):
+        from sync.version import bump_company_slice
+
+        bump_company_slice('inbox', conversation.company_id)
 
 
 def process_entry(webhook_object: str, entry: dict) -> int:

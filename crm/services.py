@@ -8,6 +8,20 @@ from crm.availability import assignment_block_error, assignment_block_reason
 from .models import Client, ClientEvent
 
 
+def announce_lead_assignment(company_id, user_ids=()) -> None:
+    """
+    One leads-slice bump plus a user bump for each assignee who gained or lost
+    leads. bulk_update / bulk_create fire no model signals, and the old
+    assignee's WhatsApp unread badge is per-user — the company counter does
+    not move for a lead edit.
+    """
+    from sync.version import bump_company_slice, bump_user
+
+    bump_company_slice("leads", company_id)
+    for user_id in {uid for uid in user_ids if uid}:
+        bump_user(user_id)
+
+
 def assign_unassigned_clients(company, employee, triggered_by):
     """
     Assign all unassigned clients of *company* to *employee*.
@@ -42,6 +56,7 @@ def assign_unassigned_clients(company, employee, triggered_by):
 
     Client.objects.bulk_update(unassigned, ["assigned_to", "assigned_at"])
     ClientEvent.objects.bulk_create(events)
+    announce_lead_assignment(company.id, [employee.id])
     for client in unassigned:
         notify_lead_assignment_change(
             client=client,
@@ -110,6 +125,11 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
     if changed:
         Client.objects.bulk_update(changed, ["assigned_to", "assigned_at"])
         ClientEvent.objects.bulk_create(events)
+        announce_lead_assignment(
+            company.id,
+            [getattr(target_user, "id", None)]
+            + [getattr(old, "id", None) for _client, old in notification_changes],
+        )
         for client, old_assignee in notification_changes:
             notify_lead_assignment_change(
                 client=client,
@@ -147,6 +167,7 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
     assignee_names = set()
     events = []
     changed = []
+    affected_user_ids = []
 
     picks = plan_bulk_auto_assignments(company, clients)
 
@@ -155,10 +176,13 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
             skipped_count += 1
             continue
 
+        if client.assigned_to_id:
+            affected_user_ids.append(client.assigned_to_id)
         old_name = (
             client.assigned_to.get_full_name() or client.assigned_to.username
         ) if client.assigned_to else "Unassigned"
         new_name = employee.get_full_name() or employee.username
+        affected_user_ids.append(employee.id)
         assignee_names.add(new_name)
 
         client.assigned_to = employee
@@ -191,6 +215,8 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
         Client.objects.bulk_update(changed, ["assigned_to", "assigned_at"])
     if events:
         ClientEvent.objects.bulk_create(events)
+    if changed or events:
+        announce_lead_assignment(company.id, affected_user_ids)
 
     return {
         "assigned_count": assigned_count,

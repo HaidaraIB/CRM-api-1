@@ -14,6 +14,7 @@ from accounts.permissions import (
     IsAdminOrReadOnlyForEmployee,
     IsAdminOrSupervisorSettingsOrReadOnlyForEmployee,
     IsAdminOrSupervisorSettingsOrLeadsReadOnlyForEmployee,
+    IsAdminOrSupervisorSettingsOrDealsReadOnly,
     CanManageSettings,
 )
 from .models import (
@@ -31,6 +32,9 @@ from .models import (
     PlatformOTPIQSettings,
     PlatformWhatsAppSettings,
     BillingSettings,
+    DealPipeline,
+    DealStage,
+    DealLostReason,
 )
 from .serializers import (
     ChannelSerializer,
@@ -53,6 +57,9 @@ from .serializers import (
     SystemAuditLogSerializer,
     SystemSettingsSerializer,
     BillingSettingsSerializer,
+    DealPipelineSerializer,
+    DealStageSerializer,
+    DealLostReasonSerializer,
 )
 from .services import create_database_backup, restore_database_backup, delete_backup
 
@@ -385,11 +392,19 @@ class PlatformWhatsAppSettingsViewSet(viewsets.ModelViewSet):
         phone_raw = (request.data.get("phone") or "").strip()
         phone = normalize_phone_digits(phone_raw)
         if len(phone) < 10 or len(phone) > 15:
-            return error_response(
+            # Keep the specific `invalid_phone` business code (clients may branch on
+            # it) but also add `error.fields.phone` so catalog-aware error handling
+            # (serverFieldErrors/CatalogFormBinding) picks it up like any other
+            # field-shaped error, instead of only the flat `error.details`.
+            response = error_response(
                 "Enter a valid phone number with country code.",
                 code="invalid_phone",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+            response.data["error"]["fields"] = {
+                "phone": [{"code": "validation.invalid_phone", "params": {}, "message": response.data["error"]["message"]}]
+            }
+            return response
 
         if not platform_whatsapp_configured():
             return error_response(
@@ -605,3 +620,123 @@ class BillingSettingsViewSet(viewsets.ModelViewSet):
         instance = BillingSettings.get_settings()
         serializer = self.get_serializer(instance)
         return success_response(data=serializer.data)
+
+
+class DealPipelineViewSet(viewsets.ModelViewSet):
+    queryset = DealPipeline.objects.all()
+    serializer_class = DealPipelineSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrDealsReadOnly]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ["order", "name", "created_at"]
+    ordering = ["-is_default", "order", "name"]
+
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .filter(company=self.request.user.company)
+            .prefetch_related("stages")
+        )
+
+    def perform_create(self, serializer):
+        company = self.request.user.company
+        is_default = serializer.validated_data.get("is_default", False)
+        if is_default or not DealPipeline.objects.filter(company=company, is_default=True).exists():
+            DealPipeline.objects.filter(company=company, is_default=True).update(is_default=False)
+            serializer.save(company=company, is_default=True)
+            return
+        serializer.save(company=company)
+
+    def perform_update(self, serializer):
+        if serializer.validated_data.get("is_default", False):
+            DealPipeline.objects.filter(company=self.request.user.company, is_default=True).exclude(
+                pk=serializer.instance.pk
+            ).update(is_default=False)
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        pipeline = self.get_object()
+        others = DealPipeline.objects.filter(company=request.user.company).exclude(pk=pipeline.pk)
+        if not others.exists():
+            return error_response("Keep at least one pipeline.", status_code=status.HTTP_400_BAD_REQUEST)
+        if pipeline.is_default:
+            replacement = others.order_by("order", "id").first()
+            DealPipeline.objects.filter(pk=pipeline.pk).update(is_default=False)
+            DealPipeline.objects.filter(pk=replacement.pk).update(is_default=True)
+        return super().destroy(request, *args, **kwargs)
+
+
+class DealStageViewSet(viewsets.ModelViewSet):
+    queryset = DealStage.objects.all()
+    serializer_class = DealStageSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrDealsReadOnly]
+    filter_backends = [filters.OrderingFilter]
+    ordering = ["order", "name"]
+
+    def get_queryset(self):
+        qs = super().get_queryset().filter(pipeline__company=self.request.user.company)
+        pipeline = self.request.query_params.get("pipeline")
+        if pipeline:
+            qs = qs.filter(pipeline_id=pipeline)
+        return qs
+
+    def perform_create(self, serializer):
+        pipeline = serializer.validated_data["pipeline"]
+        if pipeline.company_id != self.request.user.company_id:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"pipeline": "Pipeline does not belong to this company."})
+        max_order = DealStage.objects.filter(pipeline=pipeline).aggregate(max_order=models.Max("order"))[
+            "max_order"
+        ]
+        serializer.save(order=(max_order or 0) + 1 if "order" not in serializer.validated_data else serializer.validated_data["order"])
+
+    def destroy(self, request, *args, **kwargs):
+        stage = self.get_object()
+        deal_count = stage.deals.count()
+        if deal_count:
+            from crm.deals.exceptions import DealServiceError
+            from crm.deals.services import DealService
+
+            move_to = request.query_params.get("move_to") or request.data.get("move_to")
+            target = DealStage.objects.filter(
+                pk=move_to, pipeline__company=request.user.company
+            ).select_related("pipeline").first()
+            if target is None:
+                return error_response(
+                    "This stage still has deals. Pass move_to with another stage id.",
+                    details={"deal_count": deal_count},
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                DealService(request.user).rehome_stage(stage, target)
+            except DealServiceError as exc:
+                return error_response(exc.message, status_code=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=["post"])
+    def reorder(self, request):
+        pipeline_id = request.data.get("pipeline")
+        ordered_ids = request.data.get("ordered_ids") or []
+        stages = DealStage.objects.filter(pipeline_id=pipeline_id, pipeline__company=request.user.company)
+        known = {stage.id: stage for stage in stages}
+        if not ordered_ids or any(int(stage_id) not in known for stage_id in ordered_ids):
+            return error_response("ordered_ids must list every stage in the pipeline.", status_code=status.HTTP_400_BAD_REQUEST)
+        if len(ordered_ids) != len(known):
+            return error_response("ordered_ids must list every stage in the pipeline.", status_code=status.HTTP_400_BAD_REQUEST)
+        for index, stage_id in enumerate(ordered_ids):
+            DealStage.objects.filter(pk=stage_id).update(order=index)
+        return Response(DealStageSerializer(self.get_queryset().filter(pipeline_id=pipeline_id), many=True).data)
+
+
+class DealLostReasonViewSet(viewsets.ModelViewSet):
+    queryset = DealLostReason.objects.all()
+    serializer_class = DealLostReasonSerializer
+    permission_classes = [IsAuthenticated, HasActiveSubscription, IsAdminOrSupervisorSettingsOrDealsReadOnly]
+    ordering = ["order", "name"]
+
+    def get_queryset(self):
+        return super().get_queryset().filter(company=self.request.user.company)
+
+    def perform_create(self, serializer):
+        serializer.save(company=self.request.user.company)

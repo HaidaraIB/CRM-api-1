@@ -515,6 +515,10 @@ def _seed_company_settings_rows(company: Company, spec: str) -> None:
     ):
         _ensure_single_default_visit_type(company)
 
+    from settings.deal_pipeline_defaults import seed_company_deal_pipeline
+
+    seed_company_deal_pipeline(company)
+
 
 def seed_company_settings(company: Company) -> None:
     """

@@ -10,6 +10,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
 from crm.models import Deal
+from crm.deals.legacy import open_deals_q
 from notifications.dispatch import claim_dispatch
 from notifications.services import NotificationService
 from notifications.models import NotificationType
@@ -55,8 +56,7 @@ class Command(BaseCommand):
             reminder_date__gte=reminder_start,
             reminder_date__lt=reminder_end,
             employee__isnull=False,
-            stage__in=['in_progress', 'on_hold'],  # Only active deals
-        ).select_related('employee', 'client')
+        ).filter(open_deals_q()).select_related('employee', 'client', 'pipeline_stage')
 
         if not deals.exists():
             self.stdout.write(

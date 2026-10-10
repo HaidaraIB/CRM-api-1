@@ -27,7 +27,7 @@ from django.dispatch import receiver
 
 from accounts.models import SupervisorPermission
 from companies.models import Company
-from crm.models import LeadArrival
+from crm.models import Client, ClientEvent, ClientTask, Deal, LeadArrival
 from subscriptions.models import Subscription
 from integrations.models import (
     LeadWhatsAppMessage,
@@ -194,6 +194,56 @@ def social_conversation_changed(sender, instance, **kwargs):
 
 
 # --- global scope: platform-wide news ------------------------------------------
+
+
+def _company_id_via_client(instance):
+    """Company for a row that only points at a lead (events, tasks)."""
+    client = getattr(instance, "client", None)
+    company_id = getattr(client, "company_id", None)
+    if company_id:
+        return company_id
+    client_id = getattr(instance, "client_id", None)
+    if not client_id:
+        return None
+    return (
+        Client.objects.filter(pk=client_id).values_list("company_id", flat=True).first()
+    )
+
+
+@receiver(post_save, sender=Client)
+@receiver(post_delete, sender=Client)
+def client_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    bump_company_slice("leads", instance.company_id)
+
+
+@receiver(post_save, sender=ClientEvent)
+@receiver(post_delete, sender=ClientEvent)
+def client_event_changed(sender, instance, **kwargs):
+    """
+    Timeline rows change the lead profile without a Client write. bulk_create
+    does not fire this — those paths bump explicitly.
+    """
+    if kwargs.get("raw"):
+        return
+    bump_company_slice("leads", _company_id_via_client(instance))
+
+
+@receiver(post_save, sender=Deal)
+@receiver(post_delete, sender=Deal)
+def deal_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    bump_company_slice("deals", instance.company_id)
+
+
+@receiver(post_save, sender=ClientTask)
+@receiver(post_delete, sender=ClientTask)
+def client_task_changed(sender, instance, **kwargs):
+    if kwargs.get("raw"):
+        return
+    bump_company_slice("todos", _company_id_via_client(instance))
 
 
 @receiver(post_save, sender=NewsPost)

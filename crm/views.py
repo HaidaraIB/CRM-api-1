@@ -2,8 +2,9 @@ from datetime import datetime, time, timedelta
 
 from django.db.models import Count, Q
 from django.utils import timezone
-from rest_framework import mixins, viewsets, filters, status
+from rest_framework import mixins, viewsets, filters, status, serializers as drf_serializers
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import (
@@ -32,11 +33,20 @@ from notifications.models import NotificationType
 from notifications.services import NotificationService
 from settings.models import LeadStatus
 from .client_list_queryset import build_client_list_queryset
+from .deals.exceptions import DealServiceError
+from .deals.selectors import apply_deal_filters, deals_visible_to, pipeline_summary
+from .deals.serializers import (
+    DealDetailSerializer,
+    DealEventSerializer,
+    DealLineItemSerializer,
+    DealLineItemWriteSerializer,
+    DealListSerializer,
+    DealWriteSerializer,
+)
+from .deals.services import DealService
 from .serializers import (
     ClientSerializer,
     ClientListSerializer,
-    DealSerializer,
-    DealListSerializer,
     TaskSerializer,
     TaskListSerializer,
     CampaignSerializer,
@@ -580,6 +590,13 @@ class ClientViewSet(viewsets.ModelViewSet):
 
             Client.objects.bulk_update(changed_clients, ["assigned_to", "assigned_at"])
             ClientEvent.objects.bulk_create(events_to_create)
+            from crm.services import announce_lead_assignment
+
+            announce_lead_assignment(
+                request.user.company_id,
+                [getattr(target_user, "id", None)]
+                + [getattr(old, "id", None) for _client, old in notification_changes],
+            )
             for client, old_assignee in notification_changes:
                 notify_lead_assignment_change(
                     client=client,
@@ -596,60 +613,221 @@ class ClientViewSet(viewsets.ModelViewSet):
 
 
 class DealViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing Deal instances (CRUD)."""
+    """Thin HTTP layer over DealService. Reads go through selectors."""
 
     queryset = Deal.objects.all()
     permission_classes = [
         IsAuthenticated, HasActiveSubscription, DenyDataEntryNonLeadAPI, DenyCallCenterNonLeadAPI, CanAccessDeal,
     ]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["client__name", "stage", "company__name"]
-    ordering_fields = ["created_at", "updated_at", "stage"]
+    search_fields = ["client__name", "title", "description", "stage"]
+    ordering_fields = ["created_at", "updated_at", "stage", "value", "expected_close_date"]
     ordering = ["-created_at"]
 
     def get_queryset(self):
-        user = self.request.user
-        queryset = super().get_queryset().select_related(
-            "client", "company", "employee", "started_by", "closed_by",
-            "unit", "project",
-        )
-
-        if user.is_admin():
-            queryset = queryset.filter(company=user.company)
-        elif user.is_supervisor() and user.supervisor_has_permission("manage_deals"):
-            queryset = queryset.filter(company=user.company)
-        elif user.is_employee():
-            queryset = queryset.filter(employee=user)
-        else:
-            return queryset.none()
-
-        stage = self.request.query_params.get("stage")
-        if stage:
-            queryset = queryset.filter(stage=stage)
-
-        return queryset
+        return apply_deal_filters(deals_visible_to(self.request.user), self.request.query_params)
 
     def get_serializer_class(self):
         if self.action == "list":
             return DealListSerializer
-        return DealSerializer
+        if self.action in ("create", "update", "partial_update"):
+            return DealWriteSerializer
+        return DealDetailSerializer
 
-    def perform_create(self, serializer):
-        user = self.request.user
-        company = getattr(user, "company", None)
-        if company and not user.is_super_admin():
-            from subscriptions.entitlements import require_quota
+    def _service_call(self, fn):
+        try:
+            return fn(DealService(self.request.user))
+        except DealServiceError as exc:
+            if exc.status_code == 404:
+                raise NotFound(exc.message)
+            raise drf_serializers.ValidationError({exc.field: exc.message})
 
-            current_deals = Deal.objects.filter(company=company).count()
-            require_quota(
-                company,
-                "max_deals",
-                current_count=current_deals,
-                requested_delta=1,
-                message="You have reached your plan deals limit. Please upgrade your plan to add more deals.",
-                error_key="plan_quota_max_deals_exceeded",
+    def _detail(self, deal):
+        fresh = (
+            self.get_queryset()
+            .prefetch_related("line_items")
+            .filter(pk=deal.pk)
+            .first()
+        )
+        return DealDetailSerializer(fresh or deal, context=self.get_serializer_context()).data
+
+    def create(self, request, *args, **kwargs):
+        serializer = DealWriteSerializer(data=request.data, context=self.get_serializer_context())
+        serializer.is_valid(raise_exception=True)
+        deal = self._service_call(lambda service: service.create(serializer.validated_data))
+        return Response(self._detail(deal), status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = DealWriteSerializer(
+            instance, data=request.data, partial=partial, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+        deal = self._service_call(lambda service: service.update(instance, serializer.validated_data))
+        return Response(self._detail(deal))
+
+    def retrieve(self, request, *args, **kwargs):
+        deal = self.get_object()
+        return Response(self._detail(deal))
+
+    @action(detail=False, methods=["get"])
+    def summary(self, request):
+        qs = self.filter_queryset(self.get_queryset())
+        return Response(pipeline_summary(qs, request.user.company, request.query_params))
+
+    @action(detail=False, methods=["post"])
+    def bulk(self, request):
+        ids = request.data.get("ids") or []
+        action_name = request.data.get("action")
+        if action_name not in ("assign", "move", "delete"):
+            raise drf_serializers.ValidationError({"action": "Use assign, move, or delete."})
+        deals = list(deals_visible_to(request.user).filter(id__in=ids))
+        found = {deal.id for deal in deals}
+        employee = None
+        stage = None
+        lost_reason = None
+        if action_name == "assign":
+            from accounts.models import User
+
+            employee = User.objects.filter(pk=request.data.get("employee"), company=request.user.company).first()
+            if employee is None:
+                raise drf_serializers.ValidationError({"employee": "Choose an employee in this company."})
+        if action_name == "move":
+            from settings.models import DealLostReason, DealStage
+
+            stage = DealStage.objects.filter(
+                pk=request.data.get("pipeline_stage"), pipeline__company=request.user.company
+            ).select_related("pipeline").first()
+            if stage is None:
+                raise drf_serializers.ValidationError({"pipeline_stage": "Choose a stage in this company."})
+            reason_id = request.data.get("lost_reason")
+            if reason_id:
+                lost_reason = DealLostReason.objects.filter(pk=reason_id, company=request.user.company).first()
+        result = self._service_call(
+            lambda service: service.bulk(
+                deals,
+                action_name,
+                employee=employee,
+                stage=stage,
+                lost_reason=lost_reason,
+                lost_note=request.data.get("lost_note") or "",
             )
-        serializer.save()
+        )
+        missing = [pk for pk in ids if pk not in found]
+        for pk in missing:
+            result["failed"].append({"id": pk, "error": "Not found"})
+        return Response(result)
+
+    @action(detail=True, methods=["post"])
+    def move(self, request, pk=None):
+        from settings.models import DealLostReason, DealStage
+
+        deal = self.get_object()
+        stage = DealStage.objects.filter(
+            pk=request.data.get("pipeline_stage"), pipeline__company=request.user.company
+        ).select_related("pipeline").first()
+        if stage is None:
+            raise drf_serializers.ValidationError({"pipeline_stage": "Choose a stage in this company."})
+        lost_reason = None
+        reason_id = request.data.get("lost_reason")
+        if reason_id:
+            lost_reason = DealLostReason.objects.filter(pk=reason_id, company=request.user.company).first()
+        updated = self._service_call(
+            lambda service: service.move_to_stage(
+                deal,
+                stage,
+                lost_reason=lost_reason,
+                lost_note=request.data.get("lost_note") or "",
+                reason=request.data.get("reason") or "",
+            )
+        )
+        return Response(self._detail(updated))
+
+    @action(detail=True, methods=["post"])
+    def won(self, request, pk=None):
+        deal = self.get_object()
+        stage = self._optional_stage(request)
+        updated = self._service_call(lambda service: service.mark_won(deal, stage=stage))
+        return Response(self._detail(updated))
+
+    @action(detail=True, methods=["post"])
+    def lost(self, request, pk=None):
+        from settings.models import DealLostReason
+
+        deal = self.get_object()
+        lost_reason = DealLostReason.objects.filter(
+            pk=request.data.get("lost_reason"), company=request.user.company
+        ).first()
+        stage = self._optional_stage(request)
+        updated = self._service_call(
+            lambda service: service.mark_lost(
+                deal,
+                lost_reason=lost_reason,
+                lost_note=request.data.get("lost_note") or "",
+                stage=stage,
+            )
+        )
+        return Response(self._detail(updated))
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        deal = self.get_object()
+        stage = self._optional_stage(request)
+        updated = self._service_call(lambda service: service.reopen(deal, stage=stage))
+        return Response(self._detail(updated))
+
+    @action(detail=True, methods=["get"])
+    def timeline(self, request, pk=None):
+        deal = self.get_object()
+        events = deal.events.select_related("created_by").all()
+        return Response(DealEventSerializer(events, many=True).data)
+
+    @action(detail=True, methods=["post"])
+    def notes(self, request, pk=None):
+        deal = self.get_object()
+        text = request.data.get("text") or request.data.get("notes") or ""
+        event = self._service_call(lambda service: service.add_note(deal, text))
+        return Response(DealEventSerializer(event).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get", "post"], url_path="line-items")
+    def line_items(self, request, pk=None):
+        deal = self.get_object()
+        if request.method == "GET":
+            return Response(DealLineItemSerializer(deal.line_items.all(), many=True).data)
+        serializer = DealLineItemWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        item = self._service_call(lambda service: service.add_line_item(deal, serializer.validated_data))
+        return Response(DealLineItemSerializer(item).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["patch", "delete"], url_path=r"line-items/(?P<item_id>[0-9]+)")
+    def line_item_detail(self, request, pk=None, item_id=None):
+        deal = self.get_object()
+        item = deal.line_items.filter(pk=item_id).first()
+        if item is None:
+            raise NotFound("Line item was not found.")
+        if request.method == "DELETE":
+            self._service_call(lambda service: service.delete_line_item(deal, item))
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = DealLineItemWriteSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        updated = self._service_call(
+            lambda service: service.update_line_item(deal, item, serializer.validated_data)
+        )
+        return Response(DealLineItemSerializer(updated).data)
+
+    def _optional_stage(self, request):
+        stage_id = request.data.get("pipeline_stage")
+        if not stage_id:
+            return None
+        from settings.models import DealStage
+
+        stage = DealStage.objects.filter(
+            pk=stage_id, pipeline__company=request.user.company
+        ).select_related("pipeline").first()
+        if stage is None:
+            raise drf_serializers.ValidationError({"pipeline_stage": "Choose a stage in this company."})
+        return stage
 
 
 class TaskViewSet(viewsets.ModelViewSet):
@@ -676,7 +854,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         if user.is_supervisor() and user.supervisor_has_permission("manage_tasks"):
             return queryset.filter(deal__company=user.company)
 
-        if user.is_employee():
+        if user.is_assigned_clinical_staff():
             return queryset.filter(deal__employee=user)
 
         return queryset.none()

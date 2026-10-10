@@ -291,3 +291,29 @@ def test_patient_file_number_assigned_and_returned_in_api(authenticated_admin, c
     assert list_resp.status_code == status.HTTP_200_OK
     row = next(r for r in api_body(list_resp)["results"] if r["id"] == body["id"])
     assert row["patient_file_number"] == client.patient_file_number
+
+
+@pytest.mark.django_db
+def test_doctor_lists_only_deals_assigned_to_them(
+    authenticated_doctor, doctor_user, company, admin_user
+):
+    """Doctors are clinical staff: they see deals where they are the employee."""
+    from crm.models import Client, Deal
+
+    client = Client.objects.create(
+        name="Patient Deal", company=company, priority="low", type="cold"
+    )
+    own = Deal.objects.create(
+        client=client, company=company, employee=doctor_user, stage="in_progress"
+    )
+    Deal.objects.create(
+        client=client, company=company, employee=admin_user, stage="in_progress"
+    )
+
+    response = authenticated_doctor.get("/api/v1/deals/")
+    assert response.status_code == status.HTTP_200_OK
+    ids = [row["id"] for row in api_body(response)["results"]]
+    assert ids == [own.id]
+
+    detail = authenticated_doctor.get(f"/api/v1/deals/{own.id}/")
+    assert detail.status_code == status.HTTP_200_OK

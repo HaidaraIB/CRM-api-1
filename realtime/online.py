@@ -22,9 +22,22 @@ def go_live(user_id: int) -> None:
     minutes. Wrapped in database_sync_to_async because that throttled path can
     touch the database.
     """
-    from accounts.presence import mark_live, touch_last_seen
+    from accounts.presence import connection_opened, touch_last_seen
 
-    mark_live(user_id)
+    connection_opened(user_id)
+    touch_last_seen(user_id, source="web")
+
+
+@database_sync_to_async
+def stay_live(user_id: int) -> None:
+    """
+    Heartbeat path. Refreshes the live marker and the connection counter
+    without counting another socket, so a second device is not dropped when
+    this one beats.
+    """
+    from accounts.presence import connection_heartbeat, touch_last_seen
+
+    connection_heartbeat(user_id)
     touch_last_seen(user_id, source="web")
 
 
@@ -38,6 +51,6 @@ def go_offline(user_id: int) -> None:
     reconnects within a second, and nobody watching should see the green dot
     blink.
     """
-    from accounts.presence import clear_live
+    from accounts.presence import connection_closed
 
-    clear_live(user_id)
+    connection_closed(user_id)

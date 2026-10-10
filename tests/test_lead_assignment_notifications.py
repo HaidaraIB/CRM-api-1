@@ -393,13 +393,16 @@ def test_deal_created_skips_actor_employee(
     )
     Notification.objects.filter(user__in=[owner_user, employee_user]).delete()
 
-    Deal.objects.create(
-        client=lead,
-        company=company,
-        employee=employee_user,
-        started_by=employee_user,
-        stage="in_progress",
-        value=1000,
+    from crm.deals.services import DealService
+
+    DealService(employee_user).create(
+        {
+            "client": lead,
+            "employee": employee_user,
+            "started_by": employee_user,
+            "stage": "in_progress",
+            "value": 1000,
+        }
     )
 
     assert not Notification.objects.filter(
@@ -439,10 +442,9 @@ def test_deal_closed_skips_acting_employee(
     )
     Notification.objects.filter(user__in=[owner_user, employee_user]).delete()
 
-    deal.stage = "won"
-    deal.closed_by = employee_user
-    deal._notification_actor = employee_user
-    deal.save()
+    from crm.deals.services import DealService
+
+    DealService(employee_user).mark_won(deal)
 
     assert not Notification.objects.filter(
         user=employee_user,

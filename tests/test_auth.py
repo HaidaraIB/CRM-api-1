@@ -659,3 +659,20 @@ def test_login_lockout_honors_configured_max_attempts(api_client, high_auth_thro
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
     assert _error_code(response) == "ACCOUNT_LOCKED"
+
+
+@pytest.mark.django_db
+def test_check_availability_returns_coded_fields(api_client):
+    """`error.fields` must carry coded issues alongside the legacy `details.errors`
+    shape, so clients can read it via the same `serverFieldErrors` path used
+    everywhere else instead of matching English error text."""
+    User.objects.create_user(
+        username="existing_user", email="existing@test.com", password="x", phone="19999999"
+    )
+    response = api_client.post(
+        "/api/auth/check-availability/", {"email": "existing@test.com"}, format="json"
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    body = response.json()
+    assert body["error"]["details"]["available"] is False
+    assert body["error"]["fields"]["email"][0]["code"] == "validation.unique"

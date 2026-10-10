@@ -1104,170 +1104,14 @@ class ClientListSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin
         return _serialize_meta_qualification_error(obj)
 
 
-@extend_schema_serializer(component_name="Deal")
-class DealSerializer(CamelToSnakeMixin, serializers.ModelSerializer):
-    client_name = serializers.CharField(source="client.name", read_only=True)
-    company_name = serializers.CharField(source="company.name", read_only=True)
-    employee_username = serializers.CharField(
-        source="employee.username", read_only=True
-    )
-    started_by_username = serializers.CharField(
-        source="started_by.username", read_only=True, allow_null=True
-    )
-    closed_by_username = serializers.CharField(
-        source="closed_by.username", read_only=True, allow_null=True
-    )
-    unit_code = serializers.CharField(
-        source="unit.code", read_only=True, allow_null=True
-    )
-    project_name = serializers.CharField(
-        source="project.name", read_only=True, allow_null=True
-    )
+# Deal read/write serializers live in crm.deals.serializers.
+from crm.deals.serializers import (  # noqa: E402
+    DealDetailSerializer,
+    DealListSerializer,
+    DealSerializer,
+    DealWriteSerializer,
+)
 
-    camel_to_snake_fields = {
-        "startedBy": "started_by",
-        "closedBy": "closed_by",
-        "startDate": "start_date",
-        "closedDate": "closed_date",
-        "paymentMethod": "payment_method",
-    }
-
-    class Meta:
-        model = Deal
-        fields = [
-            "id",
-            "client",
-            "client_name",
-            "company",
-            "company_name",
-            "employee",
-            "employee_username",
-            "stage",
-            "payment_method",
-            "status",
-            "value",
-            "reminder_date",
-            "start_date",
-            "closed_date",
-            "discount_percentage",
-            "discount_amount",
-            "sales_commission_percentage",
-            "sales_commission_amount",
-            "description",
-            "unit",
-            "unit_code",
-            "project",
-            "project_name",
-            "started_by",
-            "started_by_username",
-            "closed_by",
-            "closed_by_username",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = ["id", "created_at", "updated_at"]
-
-    def validate(self, attrs):
-        if "employee" in attrs:
-            emp = attrs.get("employee")
-            if emp:
-                same_as_before = (
-                    self.instance is not None
-                    and self.instance.employee_id is not None
-                    and self.instance.employee_id == emp.pk
-                )
-                if not same_as_before:
-                    reason = assignment_block_reason(emp)
-                    if reason:
-                        raise serializers.ValidationError(
-                            assignment_block_error(reason, field="employee")
-                        )
-        return attrs
-
-    def create(self, validated_data):
-        """Create deal and ensure started_by and closed_by are set"""
-        # If started_by is not provided, set it to the current user
-        request = self.context.get("request")
-        user = request.user if request else None
-        if (
-            "started_by" not in validated_data
-            or validated_data.get("started_by") is None
-        ):
-            if user is not None:
-                validated_data["started_by"] = user
-
-        return super().create(validated_data)
-
-    def update(self, instance, validated_data):
-        """Update deal; stash actor so signals can skip self-notifications."""
-        request = self.context.get("request")
-        user = request.user if request else None
-        if user is not None:
-            instance._notification_actor = user
-        if (
-            validated_data.get("stage") == "won"
-            and instance.stage != "won"
-            and not validated_data.get("closed_by")
-            and user is not None
-        ):
-            validated_data["closed_by"] = user
-        return super().update(instance, validated_data)
-
-
-class DealListSerializer(serializers.ModelSerializer):
-    """Simplified serializer for list views"""
-
-    client_name = serializers.CharField(source="client.name", read_only=True)
-    company_name = serializers.CharField(source="company.name", read_only=True)
-    employee_username = serializers.CharField(
-        source="employee.username", read_only=True, allow_null=True
-    )
-    started_by_username = serializers.CharField(
-        source="started_by.username", read_only=True, allow_null=True
-    )
-    closed_by_username = serializers.CharField(
-        source="closed_by.username", read_only=True, allow_null=True
-    )
-    unit_code = serializers.CharField(
-        source="unit.code", read_only=True, allow_null=True
-    )
-    project_name = serializers.CharField(
-        source="project.name", read_only=True, allow_null=True
-    )
-
-    class Meta:
-        model = Deal
-        fields = [
-            "id",
-            "client",
-            "client_name",
-            "company",
-            "company_name",
-            "employee",
-            "employee_username",
-            "started_by",
-            "started_by_username",
-            "closed_by",
-            "closed_by_username",
-            "stage",
-            "payment_method",
-            "status",
-            "value",
-            "reminder_date",
-            "start_date",
-            "closed_date",
-            "discount_percentage",
-            "discount_amount",
-            "sales_commission_percentage",
-            "sales_commission_amount",
-            "description",
-            "unit",
-            "unit_code",
-            "project",
-            "project_name",
-            "created_at",
-            "updated_at",
-        ]
 
 
 @extend_schema_serializer(component_name="Task")
@@ -1298,6 +1142,25 @@ class TaskSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "completed_at", "created_at", "updated_at"]
+
+    def validate_stage(self, value):
+        """Deal tasks must use a lead stage from the deal's company."""
+        if value is None:
+            return value
+        deal = None
+        if self.instance is not None and self.instance.deal_id:
+            deal = self.instance.deal
+        else:
+            deal_id = None
+            if hasattr(self, "initial_data"):
+                deal_id = self.initial_data.get("deal")
+            if deal_id:
+                from crm.models import Deal
+
+                deal = Deal.objects.filter(pk=deal_id).first()
+        if deal is not None and value.company_id != deal.company_id:
+            raise serializers.ValidationError("Stage must belong to the same company as the deal.")
+        return value
 
 
 class TaskListSerializer(serializers.ModelSerializer):

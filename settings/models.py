@@ -1,4 +1,5 @@
 from django.core.cache import cache
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.conf import settings as django_settings
 from django.utils import timezone
@@ -735,3 +736,112 @@ class BillingSettings(models.Model):
     def get_settings(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class DealStageType(Enum):
+    OPEN = "open"
+    WON = "won"
+    LOST = "lost"
+
+    @classmethod
+    def choices(cls):
+        return [(choice.value, choice.name) for choice in cls]
+
+
+class DealPipeline(models.Model):
+    """Per-tenant sales pipeline. A company can run more than one."""
+
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="deal_pipelines"
+    )
+    name = models.CharField(max_length=255)
+    order = models.IntegerField(default=0)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_deal_pipeline"
+        ordering = ["-is_default", "order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company", "name"], name="uniq_dealpipeline_company_name"
+            ),
+            models.UniqueConstraint(
+                fields=["company"],
+                condition=models.Q(is_default=True),
+                name="uniq_dealpipeline_default_per_company",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class DealStage(models.Model):
+    """Ordered stage inside a pipeline. stage_type drives won/lost behavior."""
+
+    pipeline = models.ForeignKey(
+        DealPipeline, on_delete=models.CASCADE, related_name="stages"
+    )
+    name = models.CharField(max_length=255)
+    color = models.CharField(max_length=7, default="#3B82F6")
+    order = models.IntegerField(default=0)
+    stage_type = models.CharField(
+        max_length=10,
+        choices=DealStageType.choices(),
+        default=DealStageType.OPEN.value,
+    )
+    probability = models.PositiveSmallIntegerField(
+        default=50, validators=[MinValueValidator(0), MaxValueValidator(100)]
+    )
+    system_key = models.CharField(
+        max_length=32,
+        blank=True,
+        null=True,
+        help_text="Stable key for legacy stage mapping (in_progress, on_hold, won, lost, cancelled).",
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_deal_stage"
+        ordering = ["order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["pipeline", "name"], name="uniq_dealstage_pipeline_name"
+            ),
+            models.UniqueConstraint(
+                fields=["pipeline", "system_key"],
+                condition=models.Q(system_key__isnull=False) & ~models.Q(system_key=""),
+                name="uniq_dealstage_pipeline_system_key",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class DealLostReason(models.Model):
+    company = models.ForeignKey(
+        "companies.Company", on_delete=models.CASCADE, related_name="deal_lost_reasons"
+    )
+    name = models.CharField(max_length=255)
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "settings_deal_lost_reason"
+        ordering = ["order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["company", "name"], name="uniq_deallostreason_company_name"
+            ),
+        ]
+
+    def __str__(self):
+        return self.name

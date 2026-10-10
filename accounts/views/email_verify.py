@@ -211,10 +211,21 @@ def check_registration_availability(request):
     if serializer.is_valid():
         return success_response(data={"available": True})
 
-    return error_response(
+    response = error_response(
         "Not available.",
         code="validation_error",
         details={"available": False, "errors": serializer.errors},
         status_code=status.HTTP_400_BAD_REQUEST,
     )
+    # Also add coded `error.fields` (catalogFieldErrors/serverFieldErrors already
+    # expect this shape) alongside the legacy `details.errors`, so callers can
+    # move off English-string matching without a breaking response change.
+    from validation.envelope import coded_from_drf
+
+    fields_map, non_field = coded_from_drf(serializer.errors)
+    if fields_map:
+        response.data["error"]["fields"] = fields_map
+    if non_field:
+        response.data["error"]["non_field"] = non_field
+    return response
 

@@ -392,7 +392,10 @@ def _process_tenant_inbound(wa_account, message, phone_number_id):
                 pass
 
         # Customer replied ⇒ treat recent outbound as read (covers disabled read receipts).
-        LeadWhatsAppMessage.objects.filter(
+        # queryset.update skips post_save, and the inbound row.save() above already
+        # bumped the chat slice *before* these ticks moved, so clients that refetch
+        # on that bump would cache the thread with the old delivery status.
+        marked_read = LeadWhatsAppMessage.objects.filter(
             client=client,
             direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
         ).exclude(
@@ -400,6 +403,10 @@ def _process_tenant_inbound(wa_account, message, phone_number_id):
         ).exclude(
             delivery_status='read',
         ).update(delivery_status='read', delivery_error=None)
+        if marked_read and getattr(client, 'company_id', None):
+            from sync.version import bump_company_slice
+
+            bump_company_slice('chat', client.company_id)
 
         # LeadWhatsAppMessage already drives the lead timeline — skip duplicate
         # ClientEvent rows that stored English notes/stubs and confused RTL UIs.
@@ -498,6 +505,18 @@ def process_whatsapp_status_update(status_obj, phone_number_id=None):
             if phone_number_id and not (msg_row.phone_number_id or '').strip():
                 update_fields['phone_number_id'] = str(phone_number_id)
             updated = qs.filter(pk=msg_row.pk).update(**update_fields)
+            # Delivery ticks are a queryset.update, so no post_save fires. Without
+            # this the blue tick waits for the 30s safety bucket.
+            if updated:
+                company_id = (
+                    LeadWhatsAppMessage.objects.filter(pk=msg_row.pk)
+                    .values_list('client__company_id', flat=True)
+                    .first()
+                )
+                if company_id:
+                    from sync.version import bump_company_slice
+
+                    bump_company_slice('chat', company_id)
         else:
             updated = 0
             if phone_number_id and not (msg_row.phone_number_id or '').strip():

@@ -18,6 +18,7 @@ and the sender's identity is taken from the connection rather than the frame.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -26,7 +27,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from .auth import access_token_exp_unix, authenticate_scope
-from .online import go_live, go_offline
+from .online import go_live, go_offline, stay_live
 from .presence import (
     CONVERSATION_GROUP,
     PRESENCE_EVENT,
@@ -67,6 +68,13 @@ class SyncConsumer(AsyncWebsocketConsumer):
         self.support_conversations: set[int] = set()
         self.access_token_exp = access_token_exp_unix(self.scope)
         self.rate_limiter = RateLimiter()
+        self._token_expiry_handle = None
+
+        # Reject before joining groups when the token is already expired, so a
+        # late reconnect cannot sit in the company group for a frame.
+        if not self._schedule_token_expiry():
+            await self.close(code=CLOSE_UNAUTHORIZED)
+            return
 
         for group in self.group_names:
             await self.channel_layer.group_add(group, self.channel_name)
@@ -78,7 +86,43 @@ class SyncConsumer(AsyncWebsocketConsumer):
 
         await self.accept()
 
+    def _schedule_token_expiry(self) -> bool:
+        """
+        Close with 4401 when the handshake token's ``exp`` passes.
+
+        Heartbeats used to be the only check, and several clients never send
+        one (roles that do not report presence, work-hours-tracked users whose
+        presence goes through the work-session ping). The socket would then
+        outlive the access token. Frames carry no data, but group membership
+        should still end when the credential does.
+
+        Returns False when the token is already expired.
+        """
+        exp = getattr(self, "access_token_exp", None)
+        if exp is None:
+            return True
+        delay = exp - time.time()
+        if delay <= 0:
+            return False
+        loop = asyncio.get_running_loop()
+        self._token_expiry_handle = loop.call_later(delay, self._on_token_expired)
+        return True
+
+    def _on_token_expired(self) -> None:
+        self._token_expiry_handle = None
+        try:
+            asyncio.get_running_loop().create_task(self.close(code=CLOSE_UNAUTHORIZED))
+        except RuntimeError:  # pragma: no cover - loop already stopped
+            pass
+
+    def _cancel_token_expiry(self) -> None:
+        handle = getattr(self, "_token_expiry_handle", None)
+        if handle is not None:
+            handle.cancel()
+            self._token_expiry_handle = None
+
     async def disconnect(self, code):
+        self._cancel_token_expiry()
         if getattr(self, "user_id", None):
             await go_offline(self.user_id)
         for group in getattr(self, "group_names", []):
@@ -130,7 +174,7 @@ class SyncConsumer(AsyncWebsocketConsumer):
             if exp is not None and time.time() >= exp:
                 await self.close(code=CLOSE_UNAUTHORIZED)
                 return
-            await go_live(self.user_id)
+            await stay_live(self.user_id)
             return
 
         conversation_id = payload.get("conversation")

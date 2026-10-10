@@ -48,11 +48,18 @@ def apply_inbound_message_rules(message: LeadWhatsAppMessage) -> None:
 def sweep_expired_snoozes(company) -> int:
     """
     Reopen snoozed conversations whose snoozed_until has passed.
-    Uses queryset.update (skips signals) — caller must bump chat slice if needed.
+    Uses queryset.update (skips signals) and bumps the chat slice itself.
     """
     now = timezone.now()
-    return WhatsAppConversationState.objects.filter(
+    updated = WhatsAppConversationState.objects.filter(
         company=company,
         status=WhatsAppConversationStatus.SNOOZED,
         snoozed_until__lte=now,
     ).update(status=WhatsAppConversationStatus.OPEN, snoozed_until=None)
+    # queryset.update skips signals, so the chat slice has to move here or
+    # open clients keep the thread snoozed until the next safety bucket.
+    if updated and getattr(company, "id", None):
+        from sync.version import bump_company_slice
+
+        bump_company_slice("chat", company.id)
+    return updated

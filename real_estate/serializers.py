@@ -116,10 +116,9 @@ class UnitSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
     def validate_code(self, value):
-        normalized_code = value.strip().upper()
-        if not normalized_code:
-            raise serializers.ValidationError("Code cannot be empty.")
-        return normalized_code
+        # `allow_blank=False` on the field above already rejects a blank/whitespace-only
+        # code; this just normalizes a present one for the uniqueness check in validate().
+        return value.strip().upper()
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

@@ -72,7 +72,7 @@ def scoped_deal_qs(user):
         return qs.filter(company=user.company)
     if user.is_supervisor() and user.supervisor_has_permission("manage_deals"):
         return qs.filter(company=user.company)
-    if user.is_employee():
+    if user.is_assigned_clinical_staff():
         return qs.filter(employee=user)
     return qs.none()
 
@@ -84,7 +84,7 @@ def scoped_task_qs(user):
         return qs.filter(deal__company=user.company)
     if user.is_supervisor() and user.supervisor_has_permission("manage_tasks"):
         return qs.filter(deal__company=user.company)
-    if user.is_employee():
+    if user.is_assigned_clinical_staff():
         return qs.filter(deal__employee=user)
     return qs.none()
 
@@ -341,13 +341,21 @@ def build_dashboard_summary(
 
     deal_qs = scoped_deal_qs(user)
     total_deals = deal_qs.count()
-    won_q = Q(stage__iexact="won") | Q(status__iexact="won")
+    from crm.deals.legacy import open_deals_q, won_deals_q
+    from crm.deals.selectors import weighted_value as deal_weighted_value
+
+    won_q = won_deals_q()
     completed_deals = deal_qs.filter(won_q).count()
-    open_agg = deal_qs.exclude(won_q).aggregate(
+    open_deal_qs = deal_qs.filter(open_deals_q())
+    open_agg = open_deal_qs.aggregate(
         pipeline=Coalesce(Sum("value"), Value(Decimal("0"))),
         open_count=Count("id"),
     )
     pipeline_sum = open_agg["pipeline"] or Decimal("0")
+    weighted_sum = sum(
+        (deal_weighted_value(deal) for deal in open_deal_qs.select_related("pipeline_stage")),
+        Decimal("0"),
+    )
     value_agg = deal_qs.aggregate(
         total_value=Coalesce(Sum("value"), Value(Decimal("0"))),
     )
@@ -368,6 +376,8 @@ def build_dashboard_summary(
         "completed_deals": completed_deals,
         "pipeline_value": _format_pipeline_value(pipeline_sum),
         "pipeline_value_raw": float(pipeline_sum),
+        "weighted_pipeline_value": _format_pipeline_value(weighted_sum),
+        "weighted_pipeline_value_raw": float(weighted_sum),
         "win_rate": win_rate,
         "average_deal_size": avg_deal_size,
         "unassigned_leads": mission_bar["unassigned_leads"],

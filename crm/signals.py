@@ -11,7 +11,6 @@ from .models import (
     ClientEvent,
     ClientVisit,
     ClientFieldVisit,
-    Deal,
 )
 from accounts.models import User, Role
 from notifications.services import NotificationService
@@ -399,86 +398,6 @@ def notify_lead_updated(sender, instance, created, **kwargs):
     #         )
     #     except Exception as e:
     #         logger.error(f"Error sending update notification: {e}")
-
-
-@receiver(post_save, sender=Deal)
-def notify_deal_created(sender, instance, created, **kwargs):
-    """Send notification when a deal is created"""
-    if not created:
-        return
-    
-    try:
-        actor = getattr(instance, "_notification_actor", None) or instance.started_by
-        actor_id = actor.pk if actor is not None else None
-        deal_title = f'{instance.client.name} - {instance.value or 0}'
-        payload = {
-            'deal_id': instance.id,
-            'deal_title': deal_title,
-            'invalidate': 'crm:deals',
-        }
-
-        recipients = []
-        if instance.employee:
-            recipients.append(instance.employee)
-        owner = getattr(instance.company, "owner", None) if instance.company else None
-        if owner and (not instance.employee or owner.pk != instance.employee.pk):
-            recipients.append(owner)
-
-        for recipient in recipients:
-            if actor_id is not None and recipient.pk == actor_id:
-                continue
-            NotificationService.send_notification_on_commit(
-                user=recipient,
-                notification_type=NotificationType.DEAL_CREATED,
-                data=payload,
-            )
-    except Exception as e:
-        logger.error(f"Error sending deal created notification: {e}")
-
-
-@receiver(pre_save, sender=Deal)
-def notify_deal_closed(sender, instance, **kwargs):
-    """Send notification when a deal is closed"""
-    if instance.pk:  # Only for existing instances
-        try:
-            old_instance = Deal.objects.get(pk=instance.pk)
-            if old_instance.stage != instance.stage and instance.stage == 'won':
-                actor = (
-                    getattr(instance, "_notification_actor", None)
-                    or instance.closed_by
-                )
-                actor_id = actor.pk if actor is not None else None
-                # Deal closed/won — skip the acting user
-                if instance.employee and instance.employee.pk != actor_id:
-                    try:
-                        NotificationService.send_notification_on_commit(
-                            user=instance.employee,
-                            notification_type=NotificationType.DEAL_CLOSED,
-                            data={
-                                'deal_id': instance.id,
-                                'deal_title': f'{instance.client.name} - {instance.value or 0}',
-                                'value': str(instance.value or 0),
-                                'invalidate': 'crm:deals',
-                            }
-                        )
-                    except Exception as e:
-                        logger.error(f"Error sending deal closed notification: {e}")
-                # Prefer the acting user for owner team-activity; fall back to deal employee.
-                team_actor = actor or instance.employee
-                notify_owner_team_activity(
-                    team_actor,
-                    instance.company,
-                    action="deal_won",
-                    deal_id=instance.id,
-                    deal_title=f"{instance.client.name} - {instance.value or 0}",
-                    lead_id=instance.client_id,
-                    lead_name=instance.client.name,
-                    value=str(instance.value or 0),
-                )
-        except Deal.DoesNotExist:
-            pass
-        except Exception as e:
-            logger.error(f"Error in notify_deal_closed: {e}")
 
 
 @receiver(post_save, sender=Client)

@@ -174,9 +174,8 @@ def whatsapp_conversations_list(request):
         return success_response(data={'deleted': deleted_count})
 
     # Expire snoozes before minting the token so a stale token cannot hide reopens.
-    unsnoozed = sweep_expired_snoozes(company)
-    if unsnoozed:
-        bump_company_slice("chat", company.id)
+    # The sweep bumps the chat slice itself when it reopens anything.
+    sweep_expired_snoozes(company)
 
     # Variant is the whole query string so a filter switch cannot 304 with the
     # previous filter's rows (same pattern as whatsapp_calls_list).

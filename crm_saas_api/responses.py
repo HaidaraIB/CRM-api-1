@@ -77,9 +77,20 @@ def validation_error_response(
     status_code=http_status.HTTP_400_BAD_REQUEST,
 ):
     """DRF serializer / field validation errors in the unified envelope."""
-    return error_response(
+    response = error_response(
         "Validation failed.",
         code="validation_error",
         details=errors,
         status_code=status_code,
     )
+    try:
+        from validation.envelope import coded_from_drf
+
+        fields_map, non_field = coded_from_drf(errors)
+    except Exception:
+        fields_map, non_field = {}, []
+    if fields_map:
+        response.data["error"]["fields"] = fields_map
+    if non_field:
+        response.data["error"]["non_field"] = non_field
+    return response

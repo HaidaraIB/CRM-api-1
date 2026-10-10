@@ -213,16 +213,23 @@ def _worked_seconds_by_user(
     }
 
 
+def _deal_is_won(deal) -> bool:
+    from crm.deals.legacy import is_won_deal
+
+    return is_won_deal(deal)
+
+
 def _build_deals_by_assignee(company, clients: list[Client]) -> dict[int, list[Deal]]:
+    """Group deals by the deal owner (deal.employee), not the lead assignee."""
     client_ids = [client.id for client in clients]
-    assignee_by_client = {client.id: client.assigned_to_id for client in clients}
-    deals = Deal.objects.filter(company=company, client_id__in=client_ids)
+    deals = Deal.objects.filter(company=company, client_id__in=client_ids).select_related(
+        "pipeline_stage"
+    )
     grouped: dict[int, list[Deal]] = {}
     for deal in deals:
-        assignee_id = assignee_by_client.get(deal.client_id)
-        if not assignee_id:
+        if not deal.employee_id:
             continue
-        grouped.setdefault(assignee_id, []).append(deal)
+        grouped.setdefault(deal.employee_id, []).append(deal)
     return grouped
 
 
@@ -308,7 +315,7 @@ def build_employee_or_team_rows(
             "answered_calls": answered,
             "not_answered_calls": missed,
             "total_deals": len(user_deals),
-            "won_deals": sum(1 for deal in user_deals if (deal.stage or "").lower() == "won"),
+            "won_deals": sum(1 for deal in user_deals if _deal_is_won(deal)),
             "total_client_calls": len(user_calls),
             "total_activities": len(user_calls),
             "worked_seconds": worked_seconds_by_user.get(user.id, 0),

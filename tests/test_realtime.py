@@ -770,3 +770,214 @@ def test_access_token_exp_unix_reads_jwt_exp(admin_user):
     scope = {"query_string": urlencode({"token": token}).encode("utf-8")}
     exp = access_token_exp_unix(scope)
     assert exp == int(AccessToken(token)["exp"])
+
+
+@pytest.mark.django_db
+class TestRealtimeSlicesAndCoalescing:
+    """Lead/deal/todo slices, and one frame per slice per transaction."""
+
+    def test_lead_edit_publishes_leads_without_rotating_badge_cache(
+        self, company, admin_user
+    ):
+        from unittest.mock import patch
+
+        from crm.models import Client
+        from sync.version import badge_token, digest_token
+
+        client = Client.objects.create(
+            name="Lead", company=company, priority="low", type="cold"
+        )
+
+        with override_settings(**REALTIME_SETTINGS):
+            badges_before = badge_token(admin_user)
+            digest_before = digest_token(admin_user)
+            with patch("realtime.publish._send") as send:
+                client.name = "Renamed"
+                client.save(update_fields=["name"])
+
+        scopes = [call.args[1] for call in send.call_args_list]
+        assert scopes.count("company:leads") == 1
+        assert badge_token(admin_user) == badges_before
+        assert digest_token(admin_user) != digest_before
+
+    def test_deal_and_task_publish_their_slices(self, company, admin_user):
+        from unittest.mock import patch
+
+        from crm.models import Client, ClientTask, Deal
+
+        client = Client.objects.create(
+            name="Lead", company=company, priority="low", type="cold"
+        )
+
+        with override_settings(**REALTIME_SETTINGS):
+            with patch("realtime.publish._send") as send:
+                Deal.objects.create(client=client, company=company)
+                ClientTask.objects.create(client=client, notes="call back")
+
+        scopes = [call.args[1] for call in send.call_args_list]
+        assert "company:deals" in scopes
+        assert "company:todos" in scopes
+
+    @pytest.mark.django_db(transaction=True)
+    @pytest.mark.real_on_commit
+    def test_bulk_creates_in_one_transaction_publish_once(self, company):
+        from unittest.mock import patch
+
+        from django.db import transaction
+
+        from crm.models import Client
+
+        with override_settings(**REALTIME_SETTINGS):
+            with patch("realtime.publish._send") as send:
+                with transaction.atomic():
+                    for i in range(4):
+                        Client.objects.create(
+                            name=f"Lead {i}",
+                            company=company,
+                            priority="low",
+                            type="cold",
+                        )
+
+        lead_frames = [
+            call for call in send.call_args_list if call.args[1] == "company:leads"
+        ]
+        assert len(lead_frames) == 1
+
+    def test_inbox_contact_rename_bumps_inbox(
+        self, authenticated_admin, admin_user, company
+    ):
+        from unittest.mock import patch
+
+        from integrations.models import (
+            MetaInboxConnection,
+            SocialChannel,
+            SocialContact,
+            SocialConversation,
+        )
+
+        connection = MetaInboxConnection.objects.create(
+            company=company,
+            page_id="page-rename-1",
+            page_name="Page",
+        )
+        contact = SocialContact.objects.create(
+            company=company,
+            connection=connection,
+            channel=SocialChannel.INSTAGRAM,
+            external_id="ig-rename-1",
+            name="Old",
+        )
+        SocialConversation.objects.create(
+            company=company,
+            connection=connection,
+            contact=contact,
+            channel=SocialChannel.INSTAGRAM,
+        )
+
+        with override_settings(**REALTIME_SETTINGS):
+            with patch("realtime.publish._send") as send:
+                response = authenticated_admin.patch(
+                    f"/api/v1/integrations/inbox/contacts/{contact.id}/",
+                    {"name": "New name"},
+                    format="json",
+                )
+
+        assert response.status_code == 200, response.content
+        contact.refresh_from_db()
+        assert contact.name == "New name"
+        scopes = [call.args[1] for call in send.call_args_list]
+        assert "company:inbox" in scopes
+
+    def test_whatsapp_delivery_status_publishes_chat(self, company):
+        from unittest.mock import patch
+
+        from crm.models import Client
+        from integrations.models import LeadWhatsAppMessage
+        from integrations.whatsapp_webhook import process_whatsapp_status_update
+
+        client = Client.objects.create(
+            name="Lead", company=company, priority="low", type="cold"
+        )
+        LeadWhatsAppMessage.objects.create(
+            client=client,
+            phone_number="9647000000000",
+            body="out",
+            direction=LeadWhatsAppMessage.DIRECTION_OUTBOUND,
+            whatsapp_message_id="wamid.status.1",
+            delivery_status="sent",
+            is_read=True,
+        )
+
+        with override_settings(**REALTIME_SETTINGS):
+            with patch("realtime.publish._send") as send:
+                process_whatsapp_status_update(
+                    {
+                        "id": "wamid.status.1",
+                        "status": "delivered",
+                        "recipient_id": "9647000000000",
+                    }
+                )
+
+        scopes = [call.args[1] for call in send.call_args_list]
+        assert "company:chat" in scopes
+
+
+@pytest.mark.django_db
+class TestPresenceRefcount:
+    def test_one_disconnect_does_not_drop_another_socket(self, admin_user):
+        from unittest.mock import patch
+
+        from django.core.cache import cache
+
+        from accounts.presence import (
+            _conn_key,
+            _live_key,
+            connection_closed,
+            connection_heartbeat,
+            connection_opened,
+        )
+
+        cache.delete(_live_key(admin_user.id))
+        cache.delete(_conn_key(admin_user.id))
+        try:
+            with patch(
+                "integrations.services.inbox_assignment.on_agent_became_ready"
+            ) as ready:
+                connection_opened(admin_user.id)
+                connection_opened(admin_user.id)
+                assert ready.call_count == 1
+
+                connection_closed(admin_user.id)
+                assert cache.get(_live_key(admin_user.id)) == 1
+                assert ready.call_count == 1
+
+                connection_heartbeat(admin_user.id)
+                assert ready.call_count == 1
+
+                connection_closed(admin_user.id)
+                assert cache.get(_live_key(admin_user.id)) is None
+        finally:
+            cache.delete(_live_key(admin_user.id))
+            cache.delete(_conn_key(admin_user.id))
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("realtime_settings")
+class TestTokenExpiryClose:
+    async def test_socket_closes_when_the_access_token_expires(self, admin_user):
+        from datetime import timedelta
+
+        from asgiref.sync import sync_to_async
+        from rest_framework_simplejwt.tokens import AccessToken
+
+        access = await sync_to_async(AccessToken.for_user)(admin_user)
+        # Long enough that a slow test machine still finishes the handshake,
+        # short enough that the server's scheduled close fires inside the wait.
+        access.set_exp(lifetime=timedelta(seconds=2))
+        communicator, connected = await _connect(str(access))
+        assert connected is True
+
+        response = await communicator.receive_output(timeout=6)
+        assert response["type"] == "websocket.close"
+        assert response.get("code") == 4401

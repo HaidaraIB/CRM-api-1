@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+from rest_framework.exceptions import ErrorDetail
 
 from subscriptions.plan_constraints import validate_single_free_trial_and_free_forever_plans
 
@@ -72,10 +73,9 @@ class PlanSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
     def validate_name(self, value):
-        name = (value or "").strip()
-        if not name:
-            raise serializers.ValidationError("This field may not be blank.")
-        return name
+        # Required/max_length enforced by the `plan.upsert` catalog form
+        # (validation/schemas/subscriptions.py) via CatalogValidatedSerializerMixin.
+        return (value or "").strip()
 
     def validate_name_ar(self, value):
         return (value or "").strip()
@@ -670,24 +670,20 @@ class TrialCodeCreateSerializer(serializers.ModelSerializer):
         ]
 
     def validate_code(self, value):
-        from .services.trial_codes import TrialCodeError, generate_unique_code
+        # A blank code means "auto-generate one" — business logic, not something the
+        # catalog DSL can express. Format (`trial_code.create`'s `code` pattern rule)
+        # and the uniqueness check below run after this; a non-blank code's format is
+        # enforced by that catalog rule once CatalogValidatedSerializerMixin runs.
+        from .services.trial_codes import generate_unique_code
 
         raw = normalize_trial_code(value or "")
         if not raw:
             return generate_unique_code()
-        try:
-            validate_trial_code_format(raw)
-        except TrialCodeError as exc:
-            raise serializers.ValidationError(exc.message)
         if TrialCode.objects.filter(code=raw).exists():
-            raise serializers.ValidationError("This code already exists.")
+            raise serializers.ValidationError(
+                ErrorDetail("This code already exists.", code="unique")
+            )
         return raw
-
-    def validate_trial_days(self, value):
-        days = int(value or 0)
-        if days < 1 or days > 365:
-            raise serializers.ValidationError("Trial days must be between 1 and 365.")
-        return days
 
     def validate_max_redemptions(self, value):
         n = int(value or 0)

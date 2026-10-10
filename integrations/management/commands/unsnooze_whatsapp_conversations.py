@@ -10,7 +10,6 @@ from django.core.management.base import BaseCommand
 from companies.models import Company
 from integrations.models import WhatsAppConversationState, WhatsAppConversationStatus
 from integrations.whatsapp_conversation_state import sweep_expired_snoozes
-from sync.version import bump_company_slice
 
 
 class Command(BaseCommand):
@@ -36,6 +35,5 @@ class Command(BaseCommand):
                 continue
             n = sweep_expired_snoozes(company)
             if n:
-                bump_company_slice("chat", company_id)
                 total += n
         self.stdout.write(self.style.SUCCESS(f"Unsnoozed {total} conversation(s)"))

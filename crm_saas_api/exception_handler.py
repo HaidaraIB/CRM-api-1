@@ -25,6 +25,7 @@ from django.core.exceptions import PermissionDenied
 from crm_saas_api.responses import error_response
 from accounts.exceptions import AccountLocked, LoginVerificationRequired
 from accounts.services import get_client_ip
+from validation.envelope import SKIP_KEYS as _META_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +40,6 @@ STATUS_CODE_MAP = {
     429: "throttled",
     500: "server_error",
 }
-
-# Keys that carry a business code / metadata, not field validation errors
-_META_KEYS = frozenset(
-    {
-        "error",
-        "message",
-        "detail",
-        "code",
-        "error_key",
-        "subscriptionId",
-        "subscription_id",
-        "paymentToken",
-    }
-)
 
 
 def _unwrap_value(value):
@@ -273,5 +260,23 @@ def custom_exception_handler(exc, context):
 
     if details:
         response.data["error"]["details"] = details
+
+    fields_map = None
+    non_field = None
+    catalog_issues = getattr(exc, "catalog_issues", None)
+    if catalog_issues:
+        from validation.envelope import split_catalog_issues
+
+        fields_map, non_field = split_catalog_issues(catalog_issues)
+    elif isinstance(data, (dict, list)) and (
+        isinstance(data, list) or (isinstance(details, dict) and message == "Validation failed.")
+    ):
+        from validation.envelope import coded_from_drf
+
+        fields_map, non_field = coded_from_drf(data if isinstance(data, list) else details)
+    if fields_map:
+        response.data["error"]["fields"] = fields_map
+    if non_field:
+        response.data["error"]["non_field"] = non_field
 
     return response

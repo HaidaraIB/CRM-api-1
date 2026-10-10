@@ -98,11 +98,12 @@ class Command(BaseCommand):
             ).count()
 
             # Count deals won today
+            from crm.deals.legacy import won_deals_q
+
             deals_count = Deal.objects.filter(
                 company=company,
                 created_at__date=report_date,
-                stage='won'
-            ).count()
+            ).filter(won_deals_q()).count()
 
             if dry_run:
                 self.stdout.write(

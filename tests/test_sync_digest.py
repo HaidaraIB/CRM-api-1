@@ -284,6 +284,9 @@ class TestSyncDigestSliceVersions:
         "support_chat",
         "inbox",
         "account",
+        "leads",
+        "deals",
+        "todos",
     }
 
     def _versions(self, client):

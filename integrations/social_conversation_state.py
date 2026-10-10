@@ -33,8 +33,15 @@ def sweep_expired_snoozes(company) -> int:
         snoozed_until__isnull=False,
         snoozed_until__lte=now,
     )
-    return expired.update(
+    updated = expired.update(
         status=WhatsAppConversationStatus.OPEN,
         snoozed_until=None,
         status_changed_at=now,
     )
+    # queryset.update skips signals. Bump here so every caller (the list view
+    # and any future cron) publishes the reopen.
+    if updated and getattr(company, "id", None):
+        from sync.version import bump_company_slice
+
+        bump_company_slice("inbox", company.id)
+    return updated

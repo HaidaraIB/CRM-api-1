@@ -100,11 +100,12 @@ class Command(BaseCommand):
             ).count()
 
             # Count deals won in the last week
+            from crm.deals.legacy import won_deals_q
+
             deals_count = Deal.objects.filter(
                 company=company,
                 created_at__gte=week_start,
-                stage='won'
-            ).count()
+            ).filter(won_deals_q()).count()
 
             week_str = week_start.strftime('%Y-W%W')
 
