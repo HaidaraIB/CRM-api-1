@@ -106,6 +106,52 @@ def seed_company_deal_pipeline(company):
     return pipeline
 
 
+def localize_existing_deal_seed_names(company) -> int:
+    """Rename untouched English pipeline, stage, and lost-reason seed names."""
+    from settings.models import DealLostReason, DealPipeline, DealStage
+    from settings.seed_i18n import seed_language_for_company
+
+    if not company or not getattr(company, "pk", None):
+        return 0
+    if seed_language_for_company(company) != "ar":
+        return 0
+
+    updated = 0
+    pipeline = (
+        DealPipeline.objects.filter(company=company, is_default=True).order_by("id").first()
+    )
+    if pipeline is not None and pipeline.name == DEFAULT_PIPELINE_NAME[0]:
+        arabic_pipeline = DEFAULT_PIPELINE_NAME[1]
+        taken = DealPipeline.objects.filter(company=company, name=arabic_pipeline).exists()
+        if not taken:
+            pipeline.name = arabic_pipeline
+            pipeline.save(update_fields=["name", "updated_at"])
+            updated += 1
+
+    if pipeline is not None:
+        for row in DEFAULT_STAGES:
+            en_name, ar_name = row["name"]
+            if pipeline.stages.filter(name=ar_name).exists():
+                continue
+            stage = pipeline.stages.filter(system_key=row["system_key"], name=en_name).first()
+            if stage is None:
+                continue
+            stage.name = ar_name
+            stage.save(update_fields=["name", "updated_at"])
+            updated += 1
+
+    for en_name, ar_name in DEFAULT_LOST_REASONS:
+        if DealLostReason.objects.filter(company=company, name=ar_name).exists():
+            continue
+        reason = DealLostReason.objects.filter(company=company, name=en_name).first()
+        if reason is None:
+            continue
+        reason.name = ar_name
+        reason.save(update_fields=["name", "updated_at"])
+        updated += 1
+    return updated
+
+
 def map_company_legacy_deals(company):
     """Point deals that have no pipeline stage at the seeded system stage."""
     from crm.deals.legacy import legacy_stage_for

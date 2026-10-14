@@ -138,3 +138,68 @@ def test_seed_follows_owner_language(owner_user, other_owner_user):
     ar_pipeline = DealPipeline.objects.get(company=arabic, is_default=True)
     assert ar_pipeline.name == "المبيعات"
     assert DealStage.objects.get(pipeline=ar_pipeline, system_key="won").name == "رابحة"
+
+
+@pytest.mark.django_db
+def test_localize_untouched_english_seed_names(owner_user):
+    from settings.company_defaults import localize_existing_seed_names
+    from settings.models import DealLostReason, DealPipeline, DealStage, LeadStage
+
+    owner_user.language = "en"
+    owner_user.save(update_fields=["language"])
+    company = Company.objects.create(
+        name="Backfill Co",
+        domain="backfill-seed.example.com",
+        owner=owner_user,
+        specialization=Specialization.REAL_ESTATE.value,
+    )
+    LeadStatus.objects.create(
+        company=company, name="VIP", category="active", color="#111111"
+    )
+    LeadStage.objects.filter(company=company, name="New inquiry").update(name="Custom stage")
+
+    owner_user.language = "ar"
+    owner_user.save(update_fields=["language"])
+    assert localize_existing_seed_names(company) > 0
+
+    assert Channel.objects.filter(company=company, name="الهاتف").exists()
+    assert not Channel.objects.filter(company=company, name="Phone").exists()
+    assert LeadStatus.objects.filter(company=company, name="عميل جديد", is_default=True).exists()
+    assert LeadStatus.objects.filter(company=company, name="تمت الزيارة").exists()
+    assert LeadStatus.objects.filter(company=company, name="VIP").exists()
+    assert LeadStage.objects.filter(company=company, name="Custom stage").exists()
+    assert not LeadStage.objects.filter(company=company, name="استفسار جديد").exists()
+    assert LeadStage.objects.filter(company=company, name="تأهيل").exists()
+
+    pipeline = DealPipeline.objects.get(company=company, is_default=True)
+    assert pipeline.name == "المبيعات"
+    assert DealStage.objects.get(pipeline=pipeline, system_key="on_hold").name == "معلّقة"
+    assert DealLostReason.objects.filter(company=company, name="السعر").exists()
+    assert not DealLostReason.objects.filter(company=company, name="Price").exists()
+
+    assert localize_existing_seed_names(company) == 0
+
+
+@pytest.mark.django_db
+def test_localize_skips_english_owner_and_taken_names(owner_user):
+    from settings.company_defaults import localize_existing_seed_names
+
+    owner_user.language = "en"
+    owner_user.save(update_fields=["language"])
+    company = Company.objects.create(
+        name="Keep EN Co",
+        domain="keep-en-seed.example.com",
+        owner=owner_user,
+        specialization=Specialization.SERVICES.value,
+    )
+    assert localize_existing_seed_names(company) == 0
+    assert Channel.objects.filter(company=company, name="Phone").exists()
+
+    owner_user.language = "ar"
+    owner_user.save(update_fields=["language"])
+    Channel.objects.create(
+        company=company, name="الهاتف", type="Phone", priority="high", is_active=True
+    )
+    localize_existing_seed_names(company)
+    assert Channel.objects.filter(company=company, name="Phone").exists()
+    assert LeadStatus.objects.filter(company=company, name="عميل جديد").exists()

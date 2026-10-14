@@ -527,6 +527,64 @@ def _seed_company_settings_rows(company: Company, spec: str) -> None:
     seed_company_deal_pipeline(company)
 
 
+def _seed_name_pairs(spec: str, builder) -> list[tuple[str, str]]:
+    english = builder(spec, "en")
+    arabic = builder(spec, "ar")
+    return [
+        (en_row["name"], ar_row["name"])
+        for en_row, ar_row in zip(english, arabic)
+        if en_row["name"] != ar_row["name"]
+    ]
+
+
+def _rename_exact_names(model, company, pairs: list[tuple[str, str]]) -> int:
+    updated = 0
+    for en_name, ar_name in pairs:
+        if model.objects.filter(company=company, name=ar_name).exists():
+            continue
+        for row in model.objects.filter(company=company, name=en_name):
+            row.name = ar_name
+            row.save(update_fields=["name", "updated_at"])
+            updated += 1
+    return updated
+
+
+def localize_existing_seed_names(company: Company) -> int:
+    """Rename untouched English starter rows to the owner's language.
+
+    Only a name that still equals the original English seed for this
+    specialization is changed. Edited names are left alone, and a rename is
+    skipped when the Arabic name is already in use.
+    """
+    if not company or not company.pk:
+        return 0
+    if seed_language_for_company(company) != "ar":
+        return 0
+
+    spec = company.specialization or Specialization.REAL_ESTATE.value
+    updated = 0
+    updated += _rename_exact_names(
+        Channel, company, _seed_name_pairs(spec, _channels_for_spec)
+    )
+    updated += _rename_exact_names(
+        LeadStage, company, _seed_name_pairs(spec, _stages_for_spec)
+    )
+    updated += _rename_exact_names(
+        LeadStatus, company, _seed_name_pairs(spec, _statuses_for_spec)
+    )
+    updated += _rename_exact_names(
+        CallMethod, company, _seed_name_pairs(spec, _call_methods_for_spec)
+    )
+    updated += _rename_exact_names(
+        VisitType, company, _seed_name_pairs(spec, _visit_types_for_spec)
+    )
+
+    from settings.deal_pipeline_defaults import localize_existing_deal_seed_names
+
+    updated += localize_existing_deal_seed_names(company)
+    return updated
+
+
 def seed_company_settings(company: Company) -> None:
     """
     Create starter settings rows for this company if missing (idempotent).
