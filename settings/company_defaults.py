@@ -2,10 +2,9 @@
 Idempotent default rows for per-company CRM settings (channels, stages, statuses,
 call methods, visit types), keyed by company.specialization.
 
-Display names follow the company owner's language (Arabic when unset). Enum
-fields such as channel type stay in their stored keys. Existing rows are not
-renamed: get_or_create matches the localized name, so a later call only fills
-names that are still missing.
+Stored names are always the English seed keys. The UI translates those keys
+for the current language. Enum fields such as channel type stay in their
+stored keys.
 """
 
 from __future__ import annotations
@@ -441,7 +440,8 @@ def _mark_default_stage(company, name: str) -> None:
 
 
 def _seed_company_settings_rows(company: Company, spec: str) -> None:
-    lang = seed_language_for_company(company)
+    # English keys stay in the database so the UI can translate them either way.
+    lang = "en"
     for row in _channels_for_spec(spec, lang):
         Channel.objects.get_or_create(
             company=company,
@@ -546,6 +546,28 @@ def _rename_exact_names(model, company, pairs: list[tuple[str, str]]) -> int:
             row.name = ar_name
             row.save(update_fields=["name", "updated_at"])
             updated += 1
+    return updated
+
+
+def restore_canonical_seed_names(company: Company) -> int:
+    """Put untouched Arabic seed labels back to their English keys."""
+    if not company or not company.pk:
+        return 0
+    spec = company.specialization or Specialization.REAL_ESTATE.value
+    updated = 0
+    for builder, model in (
+        (_channels_for_spec, Channel),
+        (_stages_for_spec, LeadStage),
+        (_statuses_for_spec, LeadStatus),
+        (_call_methods_for_spec, CallMethod),
+        (_visit_types_for_spec, VisitType),
+    ):
+        pairs = [(ar, en) for en, ar in _seed_name_pairs(spec, builder)]
+        updated += _rename_exact_names(model, company, pairs)
+
+    from settings.deal_pipeline_defaults import restore_canonical_deal_seed_names
+
+    updated += restore_canonical_deal_seed_names(company)
     return updated
 
 

@@ -35,7 +35,7 @@ def test_seed_on_company_create_real_estate(owner_user):
         company=company, automation_key=VISITED_AUTOMATION_KEY
     ).first()
     assert visited is not None
-    assert visited.name == "تمت الزيارة"
+    assert visited.name == "Visited"
 
     assert CallMethod.objects.filter(company=company).count() >= 3
     assert CallMethod.objects.filter(company=company, is_default=True).count() == 1
@@ -107,7 +107,7 @@ def test_seed_idempotent(owner_user):
 
 
 @pytest.mark.django_db
-def test_seed_follows_owner_language(owner_user, other_owner_user):
+def test_seed_stores_english_keys_for_either_owner_language(owner_user, other_owner_user):
     from settings.models import DealPipeline, DealStage
 
     owner_user.language = "en"
@@ -132,12 +132,12 @@ def test_seed_follows_owner_language(owner_user, other_owner_user):
         owner=other_owner_user,
         specialization=Specialization.PRODUCTS.value,
     )
-    assert LeadStatus.objects.get(company=arabic, is_default=True).name == "عميل جديد"
-    assert Channel.objects.filter(company=arabic, name="الهاتف").exists()
-    assert LeadStage.objects.filter(company=arabic, name="تم إرسال العرض").exists()
+    assert LeadStatus.objects.get(company=arabic, is_default=True).name == "New lead"
+    assert Channel.objects.filter(company=arabic, name="Phone").exists()
+    assert LeadStage.objects.filter(company=arabic, name="Quote sent").exists()
     ar_pipeline = DealPipeline.objects.get(company=arabic, is_default=True)
-    assert ar_pipeline.name == "المبيعات"
-    assert DealStage.objects.get(pipeline=ar_pipeline, system_key="won").name == "رابحة"
+    assert ar_pipeline.name == "Sales"
+    assert DealStage.objects.get(pipeline=ar_pipeline, system_key="won").name == "Won"
 
 
 @pytest.mark.django_db
@@ -178,6 +178,17 @@ def test_localize_untouched_english_seed_names(owner_user):
     assert not DealLostReason.objects.filter(company=company, name="Price").exists()
 
     assert localize_existing_seed_names(company) == 0
+
+    from settings.company_defaults import restore_canonical_seed_names
+
+    assert restore_canonical_seed_names(company) > 0
+    assert Channel.objects.filter(company=company, name="Phone").exists()
+    assert not Channel.objects.filter(company=company, name="الهاتف").exists()
+    assert LeadStatus.objects.filter(company=company, name="New lead", is_default=True).exists()
+    assert LeadStatus.objects.filter(company=company, name="VIP").exists()
+    assert LeadStage.objects.filter(company=company, name="Custom stage").exists()
+    assert DealPipeline.objects.get(company=company, is_default=True).name == "Sales"
+    assert restore_canonical_seed_names(company) == 0
 
 
 @pytest.mark.django_db

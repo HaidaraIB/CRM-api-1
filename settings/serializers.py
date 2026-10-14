@@ -23,10 +23,22 @@ from integrations.policy import (
     apply_integration_policy_side_effects,
 )
 from .feature_policy import normalize_feature_policies
+from .seed_i18n import canonical_seed_name
+
+
+class SeedNameWriteMixin:
+    """If an edit submits the Arabic label of a seed row, keep the English key."""
+
+    def validate_name(self, value):
+        instance = getattr(self, "instance", None)
+        stored = getattr(instance, "name", None) if instance is not None else None
+        if stored:
+            return canonical_seed_name(value, stored)
+        return value
 
 
 @extend_schema_serializer(component_name="Channel")
-class ChannelSerializer(serializers.ModelSerializer):
+class ChannelSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
 
     class Meta:
@@ -46,7 +58,7 @@ class ChannelSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class ChannelListSerializer(serializers.ModelSerializer):
+class ChannelListSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     """Simplified serializer for list views"""
     company_name = serializers.CharField(source="company.name", read_only=True)
 
@@ -66,7 +78,7 @@ class ChannelListSerializer(serializers.ModelSerializer):
 
 
 @extend_schema_serializer(component_name="LeadStage")
-class LeadStageSerializer(serializers.ModelSerializer):
+class LeadStageSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
 
     class Meta:
@@ -89,7 +101,7 @@ class LeadStageSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class LeadStageListSerializer(serializers.ModelSerializer):
+class LeadStageListSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     """Simplified serializer for list views"""
     company_name = serializers.CharField(source="company.name", read_only=True)
 
@@ -112,7 +124,7 @@ class LeadStageListSerializer(serializers.ModelSerializer):
 
 
 @extend_schema_serializer(component_name="LeadStatus")
-class LeadStatusSerializer(serializers.ModelSerializer):
+class LeadStatusSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
 
     class Meta:
@@ -142,7 +154,7 @@ class LeadStatusSerializer(serializers.ModelSerializer):
         return value
 
 
-class LeadStatusListSerializer(serializers.ModelSerializer):
+class LeadStatusListSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     """Simplified serializer for list views"""
     company_name = serializers.CharField(source="company.name", read_only=True)
 
@@ -173,7 +185,7 @@ class LeadStatusListSerializer(serializers.ModelSerializer):
 
 
 @extend_schema_serializer(component_name="CallMethod")
-class CallMethodSerializer(serializers.ModelSerializer):
+class CallMethodSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
 
     class Meta:
@@ -193,7 +205,7 @@ class CallMethodSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class CallMethodListSerializer(serializers.ModelSerializer):
+class CallMethodListSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     """Simplified serializer for list views"""
     company_name = serializers.CharField(source="company.name", read_only=True)
 
@@ -213,7 +225,7 @@ class CallMethodListSerializer(serializers.ModelSerializer):
 
 
 @extend_schema_serializer(component_name="VisitType")
-class VisitTypeSerializer(serializers.ModelSerializer):
+class VisitTypeSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
 
     class Meta:
@@ -233,7 +245,7 @@ class VisitTypeSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
-class VisitTypeListSerializer(serializers.ModelSerializer):
+class VisitTypeListSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
 
     class Meta:
@@ -704,7 +716,7 @@ class BillingSettingsSerializer(serializers.ModelSerializer):
         return url
 
 
-class DealPipelineSerializer(serializers.ModelSerializer):
+class DealPipelineSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
     stages = serializers.SerializerMethodField()
 
@@ -731,7 +743,7 @@ class DealPipelineSerializer(serializers.ModelSerializer):
         return DealStageSerializer(stages, many=True).data
 
 
-class DealStageSerializer(serializers.ModelSerializer):
+class DealStageSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     class Meta:
         from .models import DealStage
 
@@ -755,7 +767,7 @@ class DealStageSerializer(serializers.ModelSerializer):
     # catalog form (validation/schemas/settings.py) via CatalogValidatedSerializerMixin.
 
 
-class DealLostReasonSerializer(serializers.ModelSerializer):
+class DealLostReasonSerializer(SeedNameWriteMixin, serializers.ModelSerializer):
     class Meta:
         from .models import DealLostReason
 

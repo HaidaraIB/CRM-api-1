@@ -61,16 +61,16 @@ LEGACY_STAGE_KEYS = ("in_progress", "on_hold", "won", "lost", "cancelled")
 def seed_company_deal_pipeline(company):
     """Create the default pipeline, system stages, and lost reasons if missing.
 
-    Names follow the owner's language. Stages are matched by system_key, so a
+    Names are the English seed keys. Stages are matched by system_key, so a
     later call does not rename stages a company already has.
     """
     from settings.models import DealLostReason, DealPipeline, DealStage
-    from settings.seed_i18n import seed_label, seed_language_for_company
+    from settings.seed_i18n import seed_label
 
     if not company or not getattr(company, "pk", None):
         return None
 
-    lang = seed_language_for_company(company)
+    lang = "en"
     pipeline = (
         DealPipeline.objects.filter(company=company, is_default=True).order_by("id").first()
     )
@@ -104,6 +104,49 @@ def seed_company_deal_pipeline(company):
             defaults={"order": index, "is_active": True},
         )
     return pipeline
+
+
+def restore_canonical_deal_seed_names(company) -> int:
+    """Rename untouched Arabic pipeline seed labels back to English keys."""
+    from settings.models import DealLostReason, DealPipeline
+
+    if not company or not getattr(company, "pk", None):
+        return 0
+
+    updated = 0
+    pipeline = (
+        DealPipeline.objects.filter(company=company, is_default=True).order_by("id").first()
+    )
+    english_pipeline, arabic_pipeline = DEFAULT_PIPELINE_NAME
+    if pipeline is not None and pipeline.name == arabic_pipeline:
+        taken = DealPipeline.objects.filter(company=company, name=english_pipeline).exists()
+        if not taken:
+            pipeline.name = english_pipeline
+            pipeline.save(update_fields=["name", "updated_at"])
+            updated += 1
+
+    if pipeline is not None:
+        for row in DEFAULT_STAGES:
+            en_name, ar_name = row["name"]
+            if pipeline.stages.filter(name=en_name).exists():
+                continue
+            stage = pipeline.stages.filter(system_key=row["system_key"], name=ar_name).first()
+            if stage is None:
+                continue
+            stage.name = en_name
+            stage.save(update_fields=["name", "updated_at"])
+            updated += 1
+
+    for en_name, ar_name in DEFAULT_LOST_REASONS:
+        if DealLostReason.objects.filter(company=company, name=en_name).exists():
+            continue
+        reason = DealLostReason.objects.filter(company=company, name=ar_name).first()
+        if reason is None:
+            continue
+        reason.name = en_name
+        reason.save(update_fields=["name", "updated_at"])
+        updated += 1
+    return updated
 
 
 def localize_existing_deal_seed_names(company) -> int:
