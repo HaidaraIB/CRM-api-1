@@ -89,8 +89,8 @@ NOTIFICATION_TRANSLATIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
     'customer_arrival_acknowledged': {
         'ar': {
-            'title': 'تم استلام إشعار الوصول',
-            'body': 'تم استلام إشعار وصول العميل {lead_name}'
+            'title': 'تم استلام إشعار الاستقبال',
+            'body': 'تم استلام إشعار استقبال العميل {lead_name}'
         },
         'en': {
             'title': 'Arrival Acknowledged',

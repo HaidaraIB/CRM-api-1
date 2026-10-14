@@ -23,7 +23,10 @@ def test_legacy_stage_write_and_filters(authenticated_admin, company, admin_user
     assert created.status_code == status.HTTP_201_CREATED
     body = api_body(created)
     assert body["stage"] == "on_hold"
-    assert body["pipeline_stage_name"] == "On hold"
+    from settings.models import DealStage
+
+    on_hold = DealStage.objects.get(pipeline__company=company, system_key="on_hold")
+    assert body["pipeline_stage_name"] == on_hold.name
     assert body["lead_id"] == lead.id
     assert body["deal_client_name"] == "Filter Lead"
 

@@ -35,7 +35,7 @@ def test_seed_on_company_create_real_estate(owner_user):
         company=company, automation_key=VISITED_AUTOMATION_KEY
     ).first()
     assert visited is not None
-    assert visited.name == "Visited"
+    assert visited.name == "تمت الزيارة"
 
     assert CallMethod.objects.filter(company=company).count() >= 3
     assert CallMethod.objects.filter(company=company, is_default=True).count() == 1
@@ -104,3 +104,37 @@ def test_seed_idempotent(owner_user):
     seed_company_settings(company)
     n2 = Channel.objects.filter(company=company).count()
     assert n1 == n2
+
+
+@pytest.mark.django_db
+def test_seed_follows_owner_language(owner_user, other_owner_user):
+    from settings.models import DealPipeline, DealStage
+
+    owner_user.language = "en"
+    owner_user.save(update_fields=["language"])
+    english = Company.objects.create(
+        name="EN Co",
+        domain="en-seed.example.com",
+        owner=owner_user,
+        specialization=Specialization.REAL_ESTATE.value,
+    )
+    assert LeadStatus.objects.get(company=english, is_default=True).name == "New lead"
+    assert Channel.objects.filter(company=english, name="Phone").exists()
+    pipeline = DealPipeline.objects.get(company=english, is_default=True)
+    assert pipeline.name == "Sales"
+    assert DealStage.objects.get(pipeline=pipeline, system_key="on_hold").name == "On hold"
+
+    other_owner_user.language = "ar"
+    other_owner_user.save(update_fields=["language"])
+    arabic = Company.objects.create(
+        name="AR Co",
+        domain="ar-seed.example.com",
+        owner=other_owner_user,
+        specialization=Specialization.PRODUCTS.value,
+    )
+    assert LeadStatus.objects.get(company=arabic, is_default=True).name == "عميل جديد"
+    assert Channel.objects.filter(company=arabic, name="الهاتف").exists()
+    assert LeadStage.objects.filter(company=arabic, name="تم إرسال العرض").exists()
+    ar_pipeline = DealPipeline.objects.get(company=arabic, is_default=True)
+    assert ar_pipeline.name == "المبيعات"
+    assert DealStage.objects.get(pipeline=ar_pipeline, system_key="won").name == "رابحة"

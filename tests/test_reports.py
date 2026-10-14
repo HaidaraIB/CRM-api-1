@@ -35,10 +35,16 @@ def report_data(report_company, report_users, report_campaign):
     from settings.models import LeadStatus
 
     employee = report_users["employee"]
-    statuses = {
-        row.name: row
-        for row in LeadStatus.objects.filter(company=report_company, is_active=True)
-    }
+    statuses = list(
+        LeadStatus.objects.filter(company=report_company, is_active=True)
+    )
+    status_new = next(row for row in statuses if row.is_default)
+    status_follow = next(row for row in statuses if row.category == "follow_up")
+    status_qualified = next(
+        row
+        for row in statuses
+        if row.category == "active" and not row.is_default and not row.automation_key
+    )
 
     lead_new = Client.objects.create(
         name="Lead New",
@@ -47,7 +53,7 @@ def report_data(report_company, report_users, report_campaign):
         campaign=report_campaign,
         type="fresh",
         priority="low",
-        status=statuses["New lead"],
+        status=status_new,
     )
     lead_follow = Client.objects.create(
         name="Lead Follow",
@@ -56,7 +62,7 @@ def report_data(report_company, report_users, report_campaign):
         campaign=report_campaign,
         type="fresh",
         priority="low",
-        status=statuses["Follow up"],
+        status=status_follow,
     )
     lead_other_campaign = Client.objects.create(
         name="Lead Other",
@@ -64,7 +70,7 @@ def report_data(report_company, report_users, report_campaign):
         assigned_to=employee,
         type="fresh",
         priority="low",
-        status=statuses["Qualified"],
+        status=status_qualified,
     )
 
     Deal.objects.create(

@@ -1191,14 +1191,17 @@ class RegisterCompanySerializer(serializers.Serializer):
             login_two_factor_enabled=False,
         )
         owner.phone_verified = True
+        from settings.seed_i18n import ui_language_from_request
+
+        owner.language = ui_language_from_request(self.context.get("request"))
         from .email_registration_policy import effective_registration_email_verification_required
         if effective_registration_email_verification_required():
             owner.email_verified = True
-            owner.save(update_fields=["phone_verified", "email_verified"])
+            owner.save(update_fields=["phone_verified", "email_verified", "language"])
         else:
-            owner.save(update_fields=["phone_verified"])
+            owner.save(update_fields=["phone_verified", "language"])
 
-        # Create company
+        # Create company. The post_save seed reads owner.language for starter names.
         company = Company.objects.create(
             name=company_data['name'],
             domain=company_data['domain'],

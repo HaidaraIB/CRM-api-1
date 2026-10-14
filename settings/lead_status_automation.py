@@ -16,12 +16,13 @@ def ensure_visited_lead_status(company):
         return None
 
     from .models import LeadStatus, StatusCategory
+    from .seed_i18n import seed_label, seed_language_for_company
 
     status, _ = LeadStatus.objects.get_or_create(
         company=company,
         automation_key=VISITED_AUTOMATION_KEY,
         defaults={
-            "name": "Visited",
+            "name": seed_label(seed_language_for_company(company), "Visited", "تمت الزيارة"),
             "category": StatusCategory.ACTIVE.value,
             "color": "#6366f1",
             "is_default": False,

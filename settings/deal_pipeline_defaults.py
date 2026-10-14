@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-DEFAULT_PIPELINE_NAME = "Sales"
+DEFAULT_PIPELINE_NAME = ("Sales", "المبيعات")
 
 DEFAULT_STAGES = (
     {
-        "name": "In progress",
+        "name": ("In progress", "قيد التنفيذ"),
         "system_key": "in_progress",
         "stage_type": "open",
         "probability": 50,
@@ -14,7 +14,7 @@ DEFAULT_STAGES = (
         "order": 0,
     },
     {
-        "name": "On hold",
+        "name": ("On hold", "معلّقة"),
         "system_key": "on_hold",
         "stage_type": "open",
         "probability": 20,
@@ -22,7 +22,7 @@ DEFAULT_STAGES = (
         "order": 1,
     },
     {
-        "name": "Won",
+        "name": ("Won", "رابحة"),
         "system_key": "won",
         "stage_type": "won",
         "probability": 100,
@@ -30,7 +30,7 @@ DEFAULT_STAGES = (
         "order": 2,
     },
     {
-        "name": "Lost",
+        "name": ("Lost", "خاسرة"),
         "system_key": "lost",
         "stage_type": "lost",
         "probability": 0,
@@ -38,7 +38,7 @@ DEFAULT_STAGES = (
         "order": 3,
     },
     {
-        "name": "Cancelled",
+        "name": ("Cancelled", "ملغاة"),
         "system_key": "cancelled",
         "stage_type": "lost",
         "probability": 0,
@@ -48,30 +48,36 @@ DEFAULT_STAGES = (
 )
 
 DEFAULT_LOST_REASONS = (
-    "Price",
-    "Competitor",
-    "No response",
-    "Not a fit",
-    "Other",
+    ("Price", "السعر"),
+    ("Competitor", "منافس"),
+    ("No response", "لا يوجد رد"),
+    ("Not a fit", "غير مناسب"),
+    ("Other", "أخرى"),
 )
 
 LEGACY_STAGE_KEYS = ("in_progress", "on_hold", "won", "lost", "cancelled")
 
 
 def seed_company_deal_pipeline(company):
-    """Create the default pipeline, system stages, and lost reasons if missing."""
+    """Create the default pipeline, system stages, and lost reasons if missing.
+
+    Names follow the owner's language. Stages are matched by system_key, so a
+    later call does not rename stages a company already has.
+    """
     from settings.models import DealLostReason, DealPipeline, DealStage
+    from settings.seed_i18n import seed_label, seed_language_for_company
 
     if not company or not getattr(company, "pk", None):
         return None
 
+    lang = seed_language_for_company(company)
     pipeline = (
         DealPipeline.objects.filter(company=company, is_default=True).order_by("id").first()
     )
     if pipeline is None:
         pipeline = DealPipeline.objects.create(
             company=company,
-            name=DEFAULT_PIPELINE_NAME,
+            name=seed_label(lang, *DEFAULT_PIPELINE_NAME),
             order=0,
             is_default=True,
             is_active=True,
@@ -82,7 +88,7 @@ def seed_company_deal_pipeline(company):
             pipeline=pipeline,
             system_key=row["system_key"],
             defaults={
-                "name": row["name"],
+                "name": seed_label(lang, *row["name"]),
                 "stage_type": row["stage_type"],
                 "probability": row["probability"],
                 "color": row["color"],
@@ -91,10 +97,10 @@ def seed_company_deal_pipeline(company):
             },
         )
 
-    for index, name in enumerate(DEFAULT_LOST_REASONS):
+    for index, names in enumerate(DEFAULT_LOST_REASONS):
         DealLostReason.objects.get_or_create(
             company=company,
-            name=name,
+            name=seed_label(lang, *names),
             defaults={"order": index, "is_active": True},
         )
     return pipeline

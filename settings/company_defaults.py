@@ -1,6 +1,11 @@
 """
 Idempotent default rows for per-company CRM settings (channels, stages, statuses,
 call methods, visit types), keyed by company.specialization.
+
+Display names follow the company owner's language (Arabic when unset). Enum
+fields such as channel type stay in their stored keys. Existing rows are not
+renamed: get_or_create matches the localized name, so a later call only fills
+names that are still missing.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from companies.models import Company, Specialization
 from crm_saas_api.db_sequences import reset_pk_sequences
 
 from .lead_status_automation import VISITED_AUTOMATION_KEY
+from .seed_i18n import seed_label, seed_language_for_company
 from .models import (
     CallMethod,
     Channel,
@@ -76,38 +82,38 @@ def _ensure_single_default_visit_type(company) -> None:
     VisitType.objects.filter(pk=first.pk).update(is_default=True)
 
 
-def _channels_for_spec(spec: str) -> list[dict]:
+def _channels_for_spec(spec: str, lang: str) -> list[dict]:
     # Same starter set; default channel fixed in _ensure_single_default_channel
-    # (prefers first created: WhatsApp first in list)
+    # (prefers first created: WhatsApp first in list). `type` stays the enum key.
     return [
         {
-            "name": "WhatsApp",
+            "name": seed_label(lang, "WhatsApp", "واتساب"),
             "type": "WhatsApp",
             "priority": ChannelPriority.MEDIUM.value,
         },
         {
-            "name": "Phone",
+            "name": seed_label(lang, "Phone", "الهاتف"),
             "type": "Phone",
             "priority": ChannelPriority.HIGH.value,
         },
         {
-            "name": "Website",
+            "name": seed_label(lang, "Website", "الموقع الإلكتروني"),
             "type": "Web",
             "priority": ChannelPriority.MEDIUM.value,
         },
         {
-            "name": "Social media",
+            "name": seed_label(lang, "Social media", "وسائل التواصل"),
             "type": "Social",
             "priority": ChannelPriority.LOW.value,
         },
     ]
 
 
-def _stages_for_spec(spec: str) -> list[dict]:
+def _stages_for_spec(spec: str, lang: str) -> list[dict]:
     if spec == Specialization.REAL_ESTATE.value:
         return [
             {
-                "name": "New inquiry",
+                "name": seed_label(lang, "New inquiry", "استفسار جديد"),
                 "description": "",
                 "color": "#3b82f6",
                 "required": False,
@@ -115,7 +121,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 0,
             },
             {
-                "name": "Qualification",
+                "name": seed_label(lang, "Qualification", "تأهيل"),
                 "description": "",
                 "color": "#8b5cf6",
                 "required": False,
@@ -123,7 +129,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 1,
             },
             {
-                "name": "Viewing scheduled",
+                "name": seed_label(lang, "Viewing scheduled", "معاينة مجدولة"),
                 "description": "",
                 "color": "#f59e0b",
                 "required": False,
@@ -131,7 +137,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 2,
             },
             {
-                "name": "Negotiation",
+                "name": seed_label(lang, "Negotiation", "تفاوض"),
                 "description": "",
                 "color": "#ec4899",
                 "required": False,
@@ -139,7 +145,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 3,
             },
             {
-                "name": "Closed",
+                "name": seed_label(lang, "Closed", "مغلق"),
                 "description": "",
                 "color": "#22c55e",
                 "required": False,
@@ -151,7 +157,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
         if spec == Specialization.MEDICAL.value:
             return [
                 {
-                    "name": "New patient",
+                    "name": seed_label(lang, "New patient", "مريض جديد"),
                     "description": "",
                     "color": "#3b82f6",
                     "required": False,
@@ -159,7 +165,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                     "order": 0,
                 },
                 {
-                    "name": "Registered",
+                    "name": seed_label(lang, "Registered", "مسجّل"),
                     "description": "",
                     "color": "#8b5cf6",
                     "required": False,
@@ -167,7 +173,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                     "order": 1,
                 },
                 {
-                    "name": "With doctor",
+                    "name": seed_label(lang, "With doctor", "عند الطبيب"),
                     "description": "",
                     "color": "#f59e0b",
                     "required": False,
@@ -175,7 +181,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                     "order": 2,
                 },
                 {
-                    "name": "Follow-up",
+                    "name": seed_label(lang, "Follow-up", "متابعة"),
                     "description": "",
                     "color": "#ec4899",
                     "required": False,
@@ -183,7 +189,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                     "order": 3,
                 },
                 {
-                    "name": "Completed",
+                    "name": seed_label(lang, "Completed", "مكتمل"),
                     "description": "",
                     "color": "#22c55e",
                     "required": False,
@@ -193,7 +199,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
             ]
         return [
             {
-                "name": "New lead",
+                "name": seed_label(lang, "New lead", "عميل جديد"),
                 "description": "",
                 "color": "#3b82f6",
                 "required": False,
@@ -201,7 +207,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 0,
             },
             {
-                "name": "Discovery",
+                "name": seed_label(lang, "Discovery", "استكشاف"),
                 "description": "",
                 "color": "#8b5cf6",
                 "required": False,
@@ -209,7 +215,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 1,
             },
             {
-                "name": "Proposal",
+                "name": seed_label(lang, "Proposal", "عرض سعر"),
                 "description": "",
                 "color": "#f59e0b",
                 "required": False,
@@ -217,7 +223,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 2,
             },
             {
-                "name": "On-site appointment",
+                "name": seed_label(lang, "On-site appointment", "موعد ميداني"),
                 "description": "",
                 "color": "#ec4899",
                 "required": False,
@@ -225,7 +231,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
                 "order": 3,
             },
             {
-                "name": "Completed",
+                "name": seed_label(lang, "Completed", "مكتمل"),
                 "description": "",
                 "color": "#22c55e",
                 "required": False,
@@ -236,7 +242,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
     # products
     return [
         {
-            "name": "New inquiry",
+            "name": seed_label(lang, "New inquiry", "استفسار جديد"),
             "description": "",
             "color": "#3b82f6",
             "required": False,
@@ -244,7 +250,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
             "order": 0,
         },
         {
-            "name": "Quote sent",
+            "name": seed_label(lang, "Quote sent", "تم إرسال العرض"),
             "description": "",
             "color": "#8b5cf6",
             "required": False,
@@ -252,7 +258,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
             "order": 1,
         },
         {
-            "name": "Order placed",
+            "name": seed_label(lang, "Order placed", "تم الطلب"),
             "description": "",
             "color": "#f59e0b",
             "required": False,
@@ -260,7 +266,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
             "order": 2,
         },
         {
-            "name": "Fulfillment",
+            "name": seed_label(lang, "Fulfillment", "تجهيز الطلب"),
             "description": "",
             "color": "#ec4899",
             "required": False,
@@ -268,7 +274,7 @@ def _stages_for_spec(spec: str) -> list[dict]:
             "order": 3,
         },
         {
-            "name": "Closed",
+            "name": seed_label(lang, "Closed", "مغلق"),
             "description": "",
             "color": "#22c55e",
             "required": False,
@@ -278,10 +284,10 @@ def _stages_for_spec(spec: str) -> list[dict]:
     ]
 
 
-def _statuses_for_spec(spec: str) -> list[dict]:
+def _statuses_for_spec(spec: str, lang: str) -> list[dict]:
     base = [
         {
-            "name": "New lead",
+            "name": seed_label(lang, "New lead", "عميل جديد"),
             "category": StatusCategory.ACTIVE.value,
             "color": "#3b82f6",
             "is_default": True,
@@ -289,7 +295,7 @@ def _statuses_for_spec(spec: str) -> list[dict]:
             "automation_key": None,
         },
         {
-            "name": "Contacted",
+            "name": seed_label(lang, "Contacted", "تم التواصل"),
             "category": StatusCategory.ACTIVE.value,
             "color": "#6366f1",
             "is_default": False,
@@ -297,7 +303,7 @@ def _statuses_for_spec(spec: str) -> list[dict]:
             "automation_key": None,
         },
         {
-            "name": "Qualified",
+            "name": seed_label(lang, "Qualified", "مؤهل"),
             "category": StatusCategory.ACTIVE.value,
             "color": "#8b5cf6",
             "is_default": False,
@@ -305,7 +311,7 @@ def _statuses_for_spec(spec: str) -> list[dict]:
             "automation_key": None,
         },
         {
-            "name": "Follow up",
+            "name": seed_label(lang, "Follow up", "متابعة"),
             "category": StatusCategory.FOLLOW_UP.value,
             "color": "#f59e0b",
             "is_default": False,
@@ -313,7 +319,7 @@ def _statuses_for_spec(spec: str) -> list[dict]:
             "automation_key": None,
         },
         {
-            "name": "Closed won",
+            "name": seed_label(lang, "Closed won", "مغلق رابح"),
             "category": StatusCategory.CLOSED.value,
             "color": "#22c55e",
             "is_default": False,
@@ -321,7 +327,7 @@ def _statuses_for_spec(spec: str) -> list[dict]:
             "automation_key": None,
         },
         {
-            "name": "Closed lost",
+            "name": seed_label(lang, "Closed lost", "مغلق خاسر"),
             "category": StatusCategory.CLOSED.value,
             "color": "#64748b",
             "is_default": False,
@@ -335,7 +341,7 @@ def _statuses_for_spec(spec: str) -> list[dict]:
         Specialization.MEDICAL.value,
     ):
         visited = {
-            "name": "Visited",
+            "name": seed_label(lang, "Visited", "تمت الزيارة"),
             "category": StatusCategory.ACTIVE.value,
             "color": "#6366f1",
             "is_default": False,
@@ -348,41 +354,41 @@ def _statuses_for_spec(spec: str) -> list[dict]:
     return base
 
 
-def _call_methods_for_spec(spec: str) -> list[dict]:
+def _call_methods_for_spec(spec: str, lang: str) -> list[dict]:
     return [
         {
-            "name": "Phone call",
+            "name": seed_label(lang, "Phone call", "مكالمة هاتفية"),
             "description": "",
             "color": "#3b82f6",
         },
         {
-            "name": "WhatsApp",
+            "name": seed_label(lang, "WhatsApp", "واتساب"),
             "description": "",
             "color": "#22c55e",
         },
         {
-            "name": "Video call",
+            "name": seed_label(lang, "Video call", "مكالمة فيديو"),
             "description": "",
             "color": "#8b5cf6",
         },
     ]
 
 
-def _visit_types_for_spec(spec: str) -> list[dict]:
+def _visit_types_for_spec(spec: str, lang: str) -> list[dict]:
     if spec == Specialization.REAL_ESTATE.value:
         return [
             {
-                "name": "Property viewing",
+                "name": seed_label(lang, "Property viewing", "معاينة عقار"),
                 "description": "",
                 "color": "#3b82f6",
             },
             {
-                "name": "Office consultation",
+                "name": seed_label(lang, "Office consultation", "استشارة في المكتب"),
                 "description": "",
                 "color": "#8b5cf6",
             },
             {
-                "name": "Virtual tour",
+                "name": seed_label(lang, "Virtual tour", "جولة افتراضية"),
                 "description": "",
                 "color": "#f59e0b",
             },
@@ -391,34 +397,34 @@ def _visit_types_for_spec(spec: str) -> list[dict]:
         if spec == Specialization.MEDICAL.value:
             return [
                 {
-                    "name": "First consultation",
+                    "name": seed_label(lang, "First consultation", "استشارة أولى"),
                     "description": "",
                     "color": "#3b82f6",
                 },
                 {
-                    "name": "Follow-up visit",
+                    "name": seed_label(lang, "Follow-up visit", "زيارة متابعة"),
                     "description": "",
                     "color": "#8b5cf6",
                 },
                 {
-                    "name": "Procedure / treatment",
+                    "name": seed_label(lang, "Procedure / treatment", "إجراء أو علاج"),
                     "description": "",
                     "color": "#f59e0b",
                 },
             ]
         return [
             {
-                "name": "On-site service",
+                "name": seed_label(lang, "On-site service", "خدمة ميدانية"),
                 "description": "",
                 "color": "#3b82f6",
             },
             {
-                "name": "Office appointment",
+                "name": seed_label(lang, "Office appointment", "موعد في المكتب"),
                 "description": "",
                 "color": "#8b5cf6",
             },
             {
-                "name": "Remote consultation",
+                "name": seed_label(lang, "Remote consultation", "استشارة عن بعد"),
                 "description": "",
                 "color": "#f59e0b",
             },
@@ -435,7 +441,8 @@ def _mark_default_stage(company, name: str) -> None:
 
 
 def _seed_company_settings_rows(company: Company, spec: str) -> None:
-    for row in _channels_for_spec(spec):
+    lang = seed_language_for_company(company)
+    for row in _channels_for_spec(spec, lang):
         Channel.objects.get_or_create(
             company=company,
             name=row["name"],
@@ -448,8 +455,8 @@ def _seed_company_settings_rows(company: Company, spec: str) -> None:
         )
     _ensure_single_default_channel(company)
 
-    default_stage_name = _stages_for_spec(spec)[0]["name"]
-    for row in _stages_for_spec(spec):
+    default_stage_name = _stages_for_spec(spec, lang)[0]["name"]
+    for row in _stages_for_spec(spec, lang):
         LeadStage.objects.get_or_create(
             company=company,
             name=row["name"],
@@ -466,7 +473,7 @@ def _seed_company_settings_rows(company: Company, spec: str) -> None:
     _ensure_single_default_stage(company)
     _mark_default_stage(company, default_stage_name)
 
-    for row in _statuses_for_spec(spec):
+    for row in _statuses_for_spec(spec, lang):
         automation_key = row.get("automation_key")
         defaults = {
             "description": "",
@@ -485,7 +492,7 @@ def _seed_company_settings_rows(company: Company, spec: str) -> None:
         )
     _ensure_single_default_status(company)
 
-    for row in _call_methods_for_spec(spec):
+    for row in _call_methods_for_spec(spec, lang):
         CallMethod.objects.get_or_create(
             company=company,
             name=row["name"],
@@ -498,7 +505,7 @@ def _seed_company_settings_rows(company: Company, spec: str) -> None:
         )
     _ensure_single_default_call_method(company)
 
-    for row in _visit_types_for_spec(spec):
+    for row in _visit_types_for_spec(spec, lang):
         VisitType.objects.get_or_create(
             company=company,
             name=row["name"],
