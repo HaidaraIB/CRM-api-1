@@ -131,3 +131,99 @@ def test_get_connected_clears_orphans_when_integration_disconnected(company, pla
     orphan.refresh_from_db()
     assert orphan.status == "disconnected"
     assert orphan.get_access_token() is None
+
+
+@pytest.mark.django_db
+def test_resolve_crm_sender_does_not_disconnect_inbox_number(company, plan, subscription):
+    """Inbox-only companies hit CRM sender resolution from Calls and templates."""
+    from integrations.models import WhatsAppPurpose
+    from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
+
+    plan.features = {**(plan.features or {}), "integration_whatsapp": True}
+    plan.save(update_fields=["features"])
+    inbox_account = IntegrationAccount.objects.create(
+        company=company,
+        platform="whatsapp_inbox",
+        name="Inbox only",
+        status="connected",
+    )
+    inbox = WhatsAppAccount.objects.create(
+        company=company,
+        waba_id="waba-inbox-keep",
+        phone_number_id="inbox-keep-1",
+        display_phone_number="9647700001111",
+        status="connected",
+        purpose=WhatsAppPurpose.INBOX,
+        integration_account=inbox_account,
+    )
+    inbox.set_access_token("inbox-token")
+    inbox.save(update_fields=["access_token"])
+
+    wa, err = resolve_whatsapp_account_for_api(company)
+    assert wa is None
+    assert err == "no_connected_whatsapp_number"
+    inbox.refresh_from_db()
+    assert inbox.status == "connected"
+    assert inbox.integration_account_id == inbox_account.id
+    assert inbox.get_access_token() == "inbox-token"
+
+
+@pytest.mark.django_db
+def test_expired_crm_integration_does_not_disconnect_numbers(company, plan, subscription):
+    from integrations.models import WhatsAppPurpose
+    from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
+
+    plan.features = {**(plan.features or {}), "integration_whatsapp": True}
+    plan.save(update_fields=["features"])
+    crm_account = IntegrationAccount.objects.create(
+        company=company,
+        platform="whatsapp",
+        name="CRM expired",
+        status="expired",
+    )
+    crm_account.set_access_token("crm-token")
+    crm_account.save(update_fields=["access_token"])
+    crm = WhatsAppAccount.objects.create(
+        company=company,
+        waba_id="waba-crm-exp",
+        phone_number_id="crm-exp-1",
+        display_phone_number="9647700002222",
+        status="connected",
+        purpose=WhatsAppPurpose.CRM,
+        integration_account=crm_account,
+    )
+    crm.set_access_token("crm-row-token")
+    crm.save(update_fields=["access_token"])
+    inbox = WhatsAppAccount.objects.create(
+        company=company,
+        waba_id="waba-inbox-exp",
+        phone_number_id="inbox-exp-1",
+        display_phone_number="9647700003333",
+        status="connected",
+        purpose=WhatsAppPurpose.INBOX,
+    )
+    inbox.set_access_token("inbox-row-token")
+    inbox.save(update_fields=["access_token"])
+
+    resolve_whatsapp_account_for_api(company)
+    crm.refresh_from_db()
+    inbox.refresh_from_db()
+    assert crm.status == "connected"
+    assert crm.get_access_token() == "crm-row-token"
+    assert inbox.status == "connected"
+    assert inbox.get_access_token() == "inbox-row-token"
+
+
+@pytest.mark.django_db
+def test_account_update_without_waba_id_does_not_disconnect(company):
+    from integrations.whatsapp_webhook import process_account_update
+
+    wa = WhatsAppAccount.objects.create(
+        company=company,
+        waba_id="waba-keep",
+        phone_number_id="phone-keep-partner",
+        status="connected",
+    )
+    process_account_update({"event": "PARTNER_REMOVED"}, waba_id=None)
+    wa.refresh_from_db()
+    assert wa.status == "connected"

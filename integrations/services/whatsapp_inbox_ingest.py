@@ -56,23 +56,76 @@ def inbox_allowed(company) -> bool:
     return True
 
 
-def get_or_create_contact(inbox_number: WhatsAppAccount, wa_id: str) -> SocialContact:
+def get_or_create_contact(
+    inbox_number: WhatsAppAccount, wa_id: str, wa_user_id: str | None = None
+) -> SocialContact:
+    """
+    Match a WhatsApp sender to one contact.
+
+    ``wa_user_id`` (BSUID) is checked first, then the phone. A later message that
+    carries both fills the missing id so a username-only thread and a phone
+    thread do not split into two people.
+    """
     wa_id = str(wa_id or '').strip()
-    try:
-        with transaction.atomic():
-            contact, _ = SocialContact.objects.get_or_create(
-                company=inbox_number.company,
-                channel=SocialChannel.WHATSAPP,
-                external_id=wa_id,
-                defaults={'wa_inbox_number': inbox_number},
-            )
-            return contact
-    except IntegrityError:
-        return SocialContact.objects.get(
-            company=inbox_number.company,
+    wa_user_id = str(wa_user_id or '').strip()
+    company = inbox_number.company
+    contact = None
+    if wa_user_id:
+        contact = SocialContact.objects.filter(
+            company=company,
+            channel=SocialChannel.WHATSAPP,
+            wa_user_id=wa_user_id,
+        ).first()
+    if contact is None and wa_id:
+        contact = SocialContact.objects.filter(
+            company=company,
             channel=SocialChannel.WHATSAPP,
             external_id=wa_id,
-        )
+        ).first()
+    if contact is None:
+        external = wa_id or wa_user_id
+        if not external:
+            raise ValueError('WhatsApp contact needs a phone or user id')
+        try:
+            with transaction.atomic():
+                contact, _created = SocialContact.objects.get_or_create(
+                    company=company,
+                    channel=SocialChannel.WHATSAPP,
+                    external_id=external,
+                    defaults={
+                        'wa_inbox_number': inbox_number,
+                        'wa_user_id': wa_user_id,
+                    },
+                )
+        except IntegrityError:
+            contact = SocialContact.objects.get(
+                company=company,
+                channel=SocialChannel.WHATSAPP,
+                external_id=external,
+            )
+    updates: list[str] = []
+    if wa_user_id and contact.wa_user_id != wa_user_id:
+        taken = SocialContact.objects.filter(
+            company=company,
+            channel=SocialChannel.WHATSAPP,
+            wa_user_id=wa_user_id,
+        ).exclude(pk=contact.pk).exists()
+        if not taken:
+            contact.wa_user_id = wa_user_id
+            updates.append('wa_user_id')
+    if wa_id and contact.external_id != wa_id:
+        taken = SocialContact.objects.filter(
+            company=company,
+            channel=SocialChannel.WHATSAPP,
+            external_id=wa_id,
+        ).exclude(pk=contact.pk).exists()
+        if not taken:
+            contact.external_id = wa_id
+            updates.append('external_id')
+    if updates:
+        updates.append('updated_at')
+        contact.save(update_fields=updates)
+    return contact
 
 
 def get_or_create_conversation(
@@ -110,8 +163,9 @@ def process_whatsapp_inbox_message(
         return
 
     from_number = str(message.get('from') or '').strip()
+    user_id = str(message.get('from_user_id') or '').strip()
     message_id = str(message.get('id') or '').strip()
-    if not from_number:
+    if not from_number and not user_id:
         return
 
     message_type = message.get('type') or 'text'
@@ -122,7 +176,7 @@ def process_whatsapp_inbox_message(
 
         text_body = media_body_from_meta_message(message) or f"[{message_type}]"
 
-    contact = get_or_create_contact(inbox_number, from_number)
+    contact = get_or_create_contact(inbox_number, from_number, wa_user_id=user_id)
     # Webhook contacts[].profile.name only — never stamp the phone as name
     # (that permanently shadows display_name's +E.164 formatting).
     # Respect agent overrides (name_manually_set).

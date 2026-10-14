@@ -427,6 +427,49 @@ class WhatsAppAccount(WhatsAppCallingConfig):
             self.access_token = None
 
 
+class WhatsAppUnroutedReason(models.TextChoices):
+    NO_OWNER = "no_owner", "No owner"
+    NO_SENDER_PHONE = "no_sender_phone", "No sender phone"
+    PROCESSING_ERROR = "processing_error", "Processing error"
+
+
+class WhatsAppUnroutedMessage(models.Model):
+    """
+    Inbound Cloud API message we could not deliver into a thread.
+
+    Meta does not retry a webhook we already answered with 200, so a message
+    that arrives while the number is disconnected (or before username senders
+    can become a CRM lead) is kept here and replayed once the number is connected.
+    """
+
+    phone_number_id = models.CharField(max_length=64, db_index=True)
+    waba_id = models.CharField(max_length=64, blank=True, default="")
+    external_message_id = models.CharField(max_length=128, blank=True, default="", db_index=True)
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="whatsapp_unrouted_messages",
+    )
+    reason = models.CharField(max_length=32, choices=WhatsAppUnroutedReason.choices)
+    message = models.JSONField(default=dict, blank=True)
+    contacts = models.JSONField(default=list, blank=True)
+    received_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    replayed_at = models.DateTimeField(null=True, blank=True)
+    replay_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        db_table = "whatsapp_unrouted_messages"
+        ordering = ["received_at"]
+        indexes = [
+            models.Index(fields=["phone_number_id", "replayed_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.phone_number_id} {self.reason} {self.external_message_id or self.pk}"
+
+
 class SmsProvider(models.TextChoices):
     TWILIO = 'twilio', 'Twilio'
     OTPIQ = 'otpiq', 'OTPIQ'
@@ -1573,6 +1616,17 @@ class MetaInboxConnection(models.Model):
             self.page_access_token = None
 
 
+def _whatsapp_phone_label(value: str) -> str:
+    """E.164 display for a phone. Empty when the value is a BSUID or username."""
+    raw = (value or "").strip()
+    if not raw or not set(raw) <= set("0123456789+ "):
+        return ""
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) < 7:
+        return ""
+    return raw if raw.startswith("+") else f"+{digits}"
+
+
 class SocialContact(models.Model):
     """
     A person who messaged the business on Instagram or Messenger.
@@ -1606,7 +1660,14 @@ class SocialContact(models.Model):
     channel = models.CharField(max_length=16, choices=SocialChannel.choices)
     external_id = models.CharField(
         max_length=64,
-        help_text="IGSID (Instagram) or PSID (Messenger) — app-scoped",
+        help_text="IGSID (Instagram), PSID (Messenger), WhatsApp phone, or BSUID",
+    )
+    wa_user_id = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="WhatsApp business-scoped user id when the sender has a username.",
     )
 
     name = models.CharField(
@@ -1656,6 +1717,11 @@ class SocialContact(models.Model):
                 fields=['company', 'channel', 'external_id'],
                 name='uniq_social_contact_company_channel_ext',
             ),
+            models.UniqueConstraint(
+                fields=['company', 'channel', 'wa_user_id'],
+                condition=models.Q(wa_user_id__gt=""),
+                name='uniq_social_contact_wa_user_id',
+            ),
             models.CheckConstraint(
                 check=(
                     models.Q(connection__isnull=False, wa_inbox_number__isnull=True)
@@ -1681,14 +1747,12 @@ class SocialContact(models.Model):
                 name_digits = "".join(ch for ch in self.name if ch.isdigit())
                 ext_digits = "".join(ch for ch in self.external_id if ch.isdigit())
                 if name_digits and name_digits == ext_digits:
-                    raw = self.external_id.strip()
-                    return raw if raw.startswith("+") else f"+{raw}"
+                    return _whatsapp_phone_label(self.external_id) or self.name
             return self.name
         if self.username:
             return f"@{self.username.lstrip('@')}"
         if self.channel == SocialChannel.WHATSAPP and self.external_id:
-            raw = self.external_id.strip()
-            return raw if raw.startswith("+") else f"+{raw}"
+            return _whatsapp_phone_label(self.external_id) or self.external_id.strip()
         ext = (self.external_id or "").strip()
         suffix = ext[-4:] if len(ext) >= 4 else ext
         if self.channel == SocialChannel.INSTAGRAM:

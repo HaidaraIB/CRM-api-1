@@ -158,12 +158,18 @@ def whatsapp_webhook(request):
                                         len(messages),
                                     )
                                     names = _contact_names(value)
+                                    contacts = value.get("contacts") or []
                                     for message in messages:
                                         try:
+                                            sender_key = str(
+                                                message.get("from") or message.get("from_user_id") or ""
+                                            )
                                             process_whatsapp_message(
                                                 message,
                                                 phone_number_id,
-                                                profile_name=names.get(str(message.get("from") or "")),
+                                                profile_name=names.get(sender_key),
+                                                contacts=contacts,
+                                                waba_id=waba_id,
                                             )
                                         except Exception as e:
                                             logger.error(
@@ -258,18 +264,37 @@ def _contact_names(value) -> dict:
         if not isinstance(row, dict):
             continue
         wa_id = str(row.get("wa_id") or "").strip()
+        user_id = str(row.get("user_id") or "").strip()
         name = str((row.get("profile") or {}).get("name") or "").strip()
-        if wa_id and name:
+        if not name:
+            continue
+        if wa_id:
             names[wa_id] = name
+        if user_id:
+            names[user_id] = name
     return names
 
 
-def process_whatsapp_message(message, phone_number_id, profile_name=None):
+def _hold_unrouted(message, phone_number_id, reason, *, waba_id=None, contacts=None, company=None):
+    from integrations.services.whatsapp_unrouted import hold_unrouted_message
+
+    hold_unrouted_message(
+        message=message,
+        phone_number_id=phone_number_id,
+        reason=reason,
+        waba_id=waba_id,
+        contacts=contacts,
+        company=company,
+    )
+
+
+def process_whatsapp_message(message, phone_number_id, profile_name=None, contacts=None, waba_id=None):
     """
     معالجة رسالة WhatsApp واردة.
     Multi-tenant: phone_number_id → its owner (platform / company CRM / company inbox).
     One owner per number — see services/whatsapp_number_ownership.py.
     """
+    from integrations.models import WhatsAppUnroutedReason
     from integrations.services.whatsapp_inbox_ingest import process_whatsapp_inbox_message
     from integrations.services.whatsapp_number_ownership import (
         OWNER_INBOX,
@@ -277,19 +302,71 @@ def process_whatsapp_message(message, phone_number_id, profile_name=None):
         resolve_inbound_owner,
     )
 
-    if not message.get('from'):
+    from_number = str(message.get("from") or "").strip()
+    user_id = str(message.get("from_user_id") or "").strip()
+    if not from_number and not user_id:
         logger.warning("No 'from' number in WhatsApp message")
+        _hold_unrouted(
+            message,
+            phone_number_id,
+            WhatsAppUnroutedReason.NO_SENDER_PHONE,
+            waba_id=waba_id,
+            contacts=contacts,
+        )
         return
 
     owner = resolve_inbound_owner(phone_number_id)
     if owner is None:
-        logger.warning(
-            "No WhatsAppAccount found for phone_number_id=%s. "
-            "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "
-            "Meta dashboard 'Test' events often use a sample ID (e.g. 123456123) — send a real message to your business "
-            "number instead, or compare with phone_number_id in your successful outbound send logs / "
-            "python manage.py whatsapp_debug_check",
+        disconnected = (
+            WhatsAppAccount.objects.filter(phone_number_id=str(phone_number_id or "").strip())
+            .select_related("company")
+            .first()
+        )
+        if disconnected is not None:
+            logger.error(
+                "WhatsApp inbound not stored: phone_number_id=%s company_id=%s is not connected. "
+                "Message held for replay after the number is reconnected.",
+                phone_number_id,
+                disconnected.company_id,
+            )
+        else:
+            logger.warning(
+                "No WhatsAppAccount found for phone_number_id=%s. "
+                "This ID must equal whatsapp_accounts.phone_number_id for your connected number. "
+                "Meta dashboard 'Test' events often use a sample ID (e.g. 123456123) — send a real message to your business "
+                "number instead, or compare with phone_number_id in your successful outbound send logs / "
+                "python manage.py whatsapp_debug_check",
+                phone_number_id,
+            )
+        _hold_unrouted(
+            message,
             phone_number_id,
+            WhatsAppUnroutedReason.NO_OWNER,
+            waba_id=waba_id,
+            contacts=contacts,
+            company=disconnected.company if disconnected is not None else None,
+        )
+        return
+    # Username-only senders omit `from`. Inbox threads can key on the BSUID.
+    # CRM leads are phone-keyed, so those messages stay held until a phone appears.
+    if not from_number:
+        if owner.kind == OWNER_INBOX:
+            process_whatsapp_inbox_message(
+                owner.inbox_number, message, profile_name=profile_name
+            )
+            return
+        logger.info(
+            "WhatsApp inbound has no phone number (user_id=%s phone_number_id=%s); held",
+            user_id,
+            phone_number_id,
+        )
+        _hold_unrouted(
+            message,
+            phone_number_id,
+            WhatsAppUnroutedReason.NO_SENDER_PHONE,
+            waba_id=waba_id,
+            contacts=contacts,
+            company=getattr(owner.wa_account, "company", None),
         )
         return
     if owner.kind == OWNER_PLATFORM:
@@ -300,7 +377,18 @@ def process_whatsapp_message(message, phone_number_id, profile_name=None):
             owner.inbox_number, message, profile_name=profile_name
         )
         return
-    _process_tenant_inbound(owner.wa_account, message, phone_number_id)
+    try:
+        _process_tenant_inbound(owner.wa_account, message, phone_number_id)
+    except Exception:
+        _hold_unrouted(
+            message,
+            phone_number_id,
+            WhatsAppUnroutedReason.PROCESSING_ERROR,
+            waba_id=waba_id,
+            contacts=contacts,
+            company=owner.wa_account.company,
+        )
+        raise
 
 
 def _process_tenant_inbound(wa_account, message, phone_number_id):
@@ -959,9 +1047,14 @@ def process_account_update(value, waba_id=None):
     disconnection_info = value.get('disconnection_info') or {}
 
     if event in ('PARTNER_REMOVED', 'ACCOUNT_OFFBOARDED'):
-        qs = WhatsAppAccount.objects.filter(status='connected')
-        if waba_id:
-            qs = qs.filter(waba_id=str(waba_id))
+        # Without a WABA id this query is every connected number on the platform.
+        if not str(waba_id or '').strip():
+            logger.warning(
+                "account_update %s ignored: missing waba_id",
+                event,
+            )
+            return
+        qs = WhatsAppAccount.objects.filter(status='connected', waba_id=str(waba_id))
         updated = 0
         for wa in qs.select_related('integration_account'):
             wa.status = 'disconnected'

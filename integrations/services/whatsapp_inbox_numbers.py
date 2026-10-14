@@ -122,6 +122,9 @@ def upsert_inbox_number_from_embedded_signup(
         access_token=None,
     )
 
+    from .whatsapp_unrouted import replay_after_connect
+
+    replay_after_connect(phone_number_id)
     return row
 
 

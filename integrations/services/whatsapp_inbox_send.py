@@ -90,6 +90,26 @@ def _send_result(ok: bool, data: dict) -> dict:
     }
 
 
+def graph_address_fields(contact) -> dict:
+    """
+    Cloud API addressing.
+
+    A phone uses ``to``. A username-only sender (BSUID, no phone) uses
+    ``recipient`` and must not also send ``to``.
+    """
+    external = str(getattr(contact, 'external_id', '') or '').strip()
+    user_id = str(getattr(contact, 'wa_user_id', '') or '').strip()
+    digits = ''.join(ch for ch in external if ch.isdigit())
+    looks_like_phone = bool(digits) and len(digits) >= 7 and set(external) <= set('0123456789+ ')
+    if looks_like_phone:
+        return {'to': digits}
+    if user_id:
+        return {'recipient': user_id}
+    if external:
+        return {'to': external}
+    return {}
+
+
 def _inbox_send_guard(conversation):
     from ..models import SocialChannel
 
@@ -128,9 +148,17 @@ def _inbox_send_guard(conversation):
             'error_message': 'Reconnect the WhatsApp inbox number in Integrations.',
             'raw': {},
         }
-    to = conversation.contact.external_id
+    address = graph_address_fields(conversation.contact)
+    if not address:
+        return None, {
+            'ok': False,
+            'mid': None,
+            'error_key': 'bad_request',
+            'error_message': 'This conversation has no WhatsApp recipient.',
+            'raw': {},
+        }
     url = f"{META_GRAPH_API_BASE_URL}/{inbox_number.phone_number_id}/messages"
-    return (inbox_number, token, to, url), None
+    return (inbox_number, token, address, url), None
 
 
 def send_whatsapp_inbox_message(
@@ -144,7 +172,7 @@ def send_whatsapp_inbox_message(
     ctx, err = _inbox_send_guard(conversation)
     if err:
         return err
-    inbox_number, token, to, url = ctx
+    inbox_number, token, address, url = ctx
 
     if attachment_file is not None:
         from integrations.services import whatsapp_media as wa_media
@@ -206,18 +234,18 @@ def send_whatsapp_inbox_message(
         payload = {
             'messaging_product': 'whatsapp',
             'recipient_type': 'individual',
-            'to': to,
             'type': kind,
             kind: media_part,
+            **address,
         }
         ok, data = _graph_json_post(url, token, payload, timeout=60)
         return _send_result(ok, data)
 
     payload = {
         'messaging_product': 'whatsapp',
-        'to': to,
         'type': 'text',
         'text': {'body': text or ''},
+        **address,
     }
     ok, data = _graph_json_post(url, token, payload)
     return _send_result(ok, data)
@@ -234,7 +262,7 @@ def send_whatsapp_inbox_location(
     ctx, err = _inbox_send_guard(conversation)
     if err:
         return err
-    _inbox_number, token, to, url = ctx
+    _inbox_number, token, address, url = ctx
     location_obj = {
         'latitude': float(latitude),
         'longitude': float(longitude),
@@ -246,9 +274,9 @@ def send_whatsapp_inbox_location(
     payload = {
         'messaging_product': 'whatsapp',
         'recipient_type': 'individual',
-        'to': to,
         'type': 'location',
         'location': location_obj,
+        **address,
     }
     ok, data = _graph_json_post(url, token, payload)
     return _send_result(ok, data)

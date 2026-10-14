@@ -48,6 +48,7 @@ def send_approved_whatsapp_template(
     persist_message: bool = True,
     sender_access_token: Optional[str] = None,
     body_parameters: Optional[list[str]] = None,
+    recipient: Optional[str] = None,
 ) -> tuple[bool, Optional[str], Optional[str], Optional[dict]]:
     """
     Send an APPROVED WhatsApp template via Graph API.
@@ -55,9 +56,13 @@ def send_approved_whatsapp_template(
     Returns (ok, wam_id, error_key, graph_data_or_error).
     Does not enforce plan quotas — callers must check usage before calling.
     """
-    to = normalize_whatsapp_to_digits(to_phone)
-    if not to or not to.isdigit():
-        return False, None, "invalid_phone", None
+    # Username-only inbox contacts are addressed by BSUID (`recipient`), not `to`.
+    recipient = (recipient or "").strip()
+    to = ""
+    if not recipient:
+        to = normalize_whatsapp_to_digits(to_phone)
+        if not to or not to.isdigit():
+            return False, None, "invalid_phone", None
 
     ch = (template.channel_type or "").lower()
     if ch not in ("whatsapp", "whatsapp_api"):
@@ -126,10 +131,13 @@ def send_approved_whatsapp_template(
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": to,
         "type": "template",
         "template": template_block,
     }
+    if recipient:
+        payload["recipient"] = recipient
+    else:
+        payload["to"] = to
 
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
@@ -137,7 +145,7 @@ def send_approved_whatsapp_template(
         logger.warning(
             "WhatsApp template send request error: phone_number_id=%s to=%s error=%s",
             send_phone_number_id,
-            to[-4:] if len(to) > 4 else to,
+            (recipient or to)[-4:] if len(recipient or to) > 4 else (recipient or to),
             e,
         )
         return False, None, "whatsapp_api_request_failed", {"error": str(e)}

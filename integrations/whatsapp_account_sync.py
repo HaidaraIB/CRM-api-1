@@ -230,6 +230,9 @@ def upsert_whatsapp_account_from_embedded_signup(
         account.name = display
 
     disconnect_extra_whatsapp_phones_for_integration(account, phone_number_id)
+    from .services.whatsapp_unrouted import replay_after_connect
+
+    replay_after_connect(phone_number_id)
     return wa_account
 
 
@@ -354,6 +357,9 @@ def sync_whatsapp_accounts_from_integration(
     account.save(update_fields=['metadata', 'name', 'updated_at'])
 
     disconnect_extra_whatsapp_phones_for_integration(account, preferred_pid)
+    from .services.whatsapp_unrouted import replay_after_connect
+
+    replay_after_connect(preferred_pid)
     return 1
 
 
@@ -439,11 +445,25 @@ def get_connected_whatsapp_account(company, phone_number_id=None) -> Optional[Wh
             return real
         return qs.order_by('-updated_at').first()
 
-    # No connected IntegrationAccount → clear orphan phone rows left by DELETE + SET_NULL
-    # so outbound send cannot succeed while the UI shows Disconnected.
+    # No connected CRM IntegrationAccount → clear orphan CRM phone rows left by
+    # DELETE + SET_NULL so outbound send cannot succeed while the UI shows
+    # Disconnected.
+    #
+    # Inbox numbers are a different integration (platform=whatsapp_inbox). Wiping
+    # every connected row here disconnected them whenever Calls, templates, or a
+    # lead-created template resolved the CRM sender for a company that has no
+    # connected CRM WhatsApp — and inbound routing then dropped their messages.
+    # A CRM row whose integration is expired or in error stays connected too:
+    # inbound delivery does not need a live token, and the owner can still reconnect.
     if not has_connected_whatsapp_integration(company):
         orphans = list(
-            WhatsAppAccount.objects.filter(company=company, status='connected')
+            WhatsAppAccount.objects.crm().filter(
+                company=company,
+                status='connected',
+            ).filter(
+                Q(integration_account__isnull=True)
+                | Q(integration_account__status='disconnected')
+            )
         )
         for wa in orphans:
             wa.set_access_token(None)

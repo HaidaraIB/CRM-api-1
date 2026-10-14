@@ -166,6 +166,10 @@
 #    - يتحقق debug_token ويُعلّم الحساب منتهياً + يرسل إيميل للمالك عند الحاجة
 43 7,19 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py refresh_integration_tokens >> /var/log/crm-api-integration-tokens.log 2>&1
 
+# 19b. إعادة توجيه رسائل واتساب المحفوظة ثم حذف ما مضى عليه 30 يوماً - يومياً في 4:12 صباحاً
+#    - الصفوف تُعاد أيضاً عند إعادة ربط الرقم؛ هذا يلتقط ما بقي ويحذف القديم
+12 4 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py replay_whatsapp_unrouted --purge-older-than-days 30 --apply >> /var/log/crm-api-whatsapp-unrouted.log 2>&1
+
 # ============================================
 # صندوق الرسائل الموحّد (Instagram DM / Messenger)
 # ============================================

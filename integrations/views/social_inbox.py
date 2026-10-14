@@ -1253,10 +1253,18 @@ def social_send_template(request):
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
+    from integrations.services.whatsapp_inbox_send import graph_address_fields
     from integrations.services.whatsapp_template_send import send_approved_whatsapp_template
 
     client = conversation.client
-    to_phone = conversation.contact.external_id
+    address = graph_address_fields(conversation.contact)
+    if not address:
+        return error_response(
+            'This conversation has no WhatsApp recipient.',
+            code='bad_request',
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    to_phone = address.get('to') or ''
     body_parameters = data.get('body_parameters')
     if body_parameters is not None and not isinstance(body_parameters, list):
         return error_response(
@@ -1275,6 +1283,7 @@ def social_send_template(request):
         created_by=request.user,
         persist_message=False,
         body_parameters=body_parameters,
+        recipient=address.get('recipient'),
     )
     if not ok:
         return error_response(

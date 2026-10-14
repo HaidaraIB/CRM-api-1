@@ -37,6 +37,46 @@ def _collect_phones_for_uniqueness_check(attrs, initial_data, instance=None) -> 
     return phones
 
 
+_PHONE_ROW_KEYS = ("phone_number", "phone_type", "is_primary", "notes")
+
+
+def _dedupe_phone_rows(rows):
+    """
+    One row per canonical number.
+
+    A client save that posts the same number twice hits unique_client_phone_number
+    and used to surface as a 500. The first row is kept; is_primary is kept if any
+    copy asked for it. Unknown keys are dropped so a client id cannot be injected.
+    """
+    if not rows:
+        return []
+    from integrations.services.phone_match import canonical_phone_key
+
+    seen: dict[str, dict] = {}
+    order: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw = str(row.get("phone_number") or "").strip()
+        if not raw:
+            continue
+        key = canonical_phone_key(raw) or raw
+        if key in seen:
+            if row.get("is_primary"):
+                seen[key]["is_primary"] = True
+            continue
+        cleaned = {field: row[field] for field in _PHONE_ROW_KEYS if field in row and field != "phone_number"}
+        cleaned["phone_number"] = raw
+        seen[key] = cleaned
+        order.append(key)
+    return [seen[key] for key in order]
+
+
+def _phone_integrity_is_duplicate(exc) -> bool:
+    text = str(exc)
+    return "uniq_company_phone_normalized" in text or "unique_client_phone_number" in text
+
+
 def _duplicate_lead_phone_error():
     return serializers.ValidationError(
         {
@@ -793,7 +833,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
 
                 # Create phone numbers if provided
                 if phone_numbers_data:
-                    for phone_data in phone_numbers_data:
+                    for phone_data in _dedupe_phone_rows(phone_numbers_data):
                         ClientPhoneNumber.objects.create(client=client, **phone_data)
                 elif validated_data.get("phone_number"):
                     # If old phone_number field is provided, create a primary phone number
@@ -804,7 +844,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                         is_primary=True,
                     )
         except IntegrityError as exc:
-            if "uniq_company_phone_normalized" in str(exc):
+            if _phone_integrity_is_duplicate(exc):
                 raise _duplicate_lead_phone_error() from exc
             raise
 
@@ -986,7 +1026,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                     # Delete existing phone numbers
                     instance.phone_numbers.all().delete()
                     # Create new phone numbers
-                    for phone_data in phone_numbers_data:
+                    for phone_data in _dedupe_phone_rows(phone_numbers_data):
                         ClientPhoneNumber.objects.create(client=instance, **phone_data)
                 elif validated_data.get("phone_number") and not instance.phone_numbers.exists():
                     # If old phone_number field is provided and no phone numbers exist, create one
@@ -997,7 +1037,7 @@ class ClientSerializer(ClientActivitySummaryMixin, ClientCreatorDisplayMixin, se
                         is_primary=True,
                     )
         except IntegrityError as exc:
-            if "uniq_company_phone_normalized" in str(exc):
+            if _phone_integrity_is_duplicate(exc):
                 raise _duplicate_lead_phone_error() from exc
             raise
 
