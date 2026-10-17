@@ -244,6 +244,7 @@ INSTALLED_APPS = [
     "sync",
     "validation",
     "realtime",
+    "reports",
     "drf_spectacular",
     "drf_spectacular_sidecar",
     "django_q",

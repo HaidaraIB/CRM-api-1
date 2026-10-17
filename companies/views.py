@@ -176,7 +176,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
             "no_follow_up_digest_hour": 9,
             "timezone": "Asia/Baghdad",
             "work_hours_tracking_enabled": true/false,
-            "work_hours_idle_timeout_minutes": 10
+            "work_hours_idle_timeout_minutes": 10,
+            "response_sla_minutes": 15,
+            "business_hours": {"0": {"open": "09:00", "close": "17:00"}, "4": null}
         }
         """
         from zoneinfo import ZoneInfo
@@ -314,6 +316,30 @@ class CompanyViewSet(viewsets.ModelViewSet):
                     code="invalid_work_hours_idle_timeout_minutes",
                 )
 
+        response_sla_minutes = request.data.get('response_sla_minutes')
+        if response_sla_minutes is not None:
+            try:
+                minutes = int(response_sla_minutes)
+                if minutes < 1 or minutes > 10080:
+                    return error_response(
+                        "response_sla_minutes must be between 1 and 10080.",
+                        code="invalid_response_sla_minutes",
+                    )
+                company.response_sla_minutes = minutes
+            except (ValueError, TypeError):
+                return error_response(
+                    "response_sla_minutes must be a valid integer.",
+                    code="invalid_response_sla_minutes",
+                )
+
+        if 'business_hours' in request.data:
+            from reports.business_time import validate_business_hours
+
+            try:
+                company.business_hours = validate_business_hours(request.data.get('business_hours'))
+            except ValueError as exc:
+                return error_response(str(exc), code="invalid_business_hours")
+
         update_fields = [
             'auto_assign_enabled',
             'auto_assign_algorithm',
@@ -327,6 +353,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
             'arrival_escalation_minutes',
             'work_hours_tracking_enabled',
             'work_hours_idle_timeout_minutes',
+            'response_sla_minutes',
+            'business_hours',
         ]
         company.save(update_fields=update_fields)
         

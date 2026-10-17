@@ -114,6 +114,19 @@ class Company(models.Model):
         help_text="Minutes of no activity before tracking pauses and the user is alerted (1-120).",
     )
 
+    # Company-wide opening hours used for "business time" in reports when an
+    # employee has no personal shift. {"0": {"open": "09:00", "close": "17:00"}, "6": null, ...}
+    # keyed by weekday (Mon=0..Sun=6); a missing or null day means closed. Empty = not configured.
+    business_hours = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Weekday -> {open, close} in company timezone; used for business-time response metrics.",
+    )
+    response_sla_minutes = models.PositiveIntegerField(
+        default=15,
+        help_text="Target first-response time in minutes for the 'within SLA' report metric.",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

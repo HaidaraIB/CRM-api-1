@@ -66,7 +66,9 @@ class Command(BaseCommand):
 
         week_start = timezone.now() - timedelta(days=days)
 
-        companies = Company.objects.filter(is_active=True).select_related('owner')
+        companies = Company.objects.filter(
+            subscriptions__is_active=True, subscriptions__end_date__gt=timezone.now()
+        ).distinct().select_related('owner')
         if company_id:
             companies = companies.filter(id=company_id)
 

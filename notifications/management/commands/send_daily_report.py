@@ -19,6 +19,7 @@ from notifications.dispatch import claim_dispatch, due_local_slot, local_now, ma
 from notifications.services import NotificationService
 from notifications.models import NotificationType
 import logging
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,9 @@ class Command(BaseCommand):
                 )
                 return
 
-        companies = Company.objects.filter(is_active=True).select_related('owner')
+        companies = Company.objects.filter(
+            subscriptions__is_active=True, subscriptions__end_date__gt=timezone.now()
+        ).distinct().select_related('owner')
         if company_id:
             companies = companies.filter(id=company_id)
 

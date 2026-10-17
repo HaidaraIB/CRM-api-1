@@ -392,6 +392,8 @@ class UserSerializer(serializers.ModelSerializer):
             "work_hours_idle_timeout_minutes": getattr(
                 company, "work_hours_idle_timeout_minutes", 10
             ),
+            "business_hours": getattr(company, "business_hours", None) or {},
+            "response_sla_minutes": getattr(company, "response_sla_minutes", 15),
         }
 
         try:

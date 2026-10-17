@@ -590,6 +590,9 @@ class ClientViewSet(viewsets.ModelViewSet):
 
             Client.objects.bulk_update(changed_clients, ["assigned_to", "assigned_at"])
             ClientEvent.objects.bulk_create(events_to_create)
+            from reports.recorder import record_bulk_assignments
+
+            record_bulk_assignments(changed_clients, by=request.user, source="bulk", at=now)
             from crm.services import announce_lead_assignment
 
             announce_lead_assignment(

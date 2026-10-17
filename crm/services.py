@@ -56,6 +56,9 @@ def assign_unassigned_clients(company, employee, triggered_by):
 
     Client.objects.bulk_update(unassigned, ["assigned_to", "assigned_at"])
     ClientEvent.objects.bulk_create(events)
+    from reports.recorder import record_bulk_assignments
+
+    record_bulk_assignments(unassigned, by=triggered_by, source="system", at=now)
     announce_lead_assignment(company.id, [employee.id])
     for client in unassigned:
         notify_lead_assignment_change(
@@ -125,6 +128,9 @@ def bulk_assign_clients(client_ids, company, target_user, triggered_by):
     if changed:
         Client.objects.bulk_update(changed, ["assigned_to", "assigned_at"])
         ClientEvent.objects.bulk_create(events)
+        from reports.recorder import record_bulk_assignments
+
+        record_bulk_assignments(changed, by=triggered_by, source="bulk", at=now)
         announce_lead_assignment(
             company.id,
             [getattr(target_user, "id", None)]
@@ -213,6 +219,9 @@ def distribute_clients_to_least_busy(company, clients, triggered_by, *, event_no
 
     if changed:
         Client.objects.bulk_update(changed, ["assigned_to", "assigned_at"])
+        from reports.recorder import record_bulk_assignments
+
+        record_bulk_assignments(changed, by=triggered_by, source="system")
     if events:
         ClientEvent.objects.bulk_create(events)
     if changed or events:

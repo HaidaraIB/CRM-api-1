@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from accounts.models import Role, User, WorkDaySummary
 from crm.models import Campaign, Client, ClientCall, Deal
+from crm.availability import zone_for_company
 from settings.models import LeadStatus, StatusCategory
 
 UNTOUCHED_SLUGS = {"untouched", "new_lead", "new", "newlead"}
@@ -48,11 +49,13 @@ def _parse_date(value: str | None):
         return None
 
 
-def _date_bounds(from_date: str | None, to_date: str | None):
+def _date_bounds(from_date: str | None, to_date: str | None, company=None):
+    """Day bounds in the company's timezone (server timezone only when no company is given)."""
+    tz = zone_for_company(company) if company is not None else timezone.get_current_timezone()
     start = _parse_date(from_date)
     end = _parse_date(to_date)
-    start_dt = timezone.make_aware(datetime.combine(start, time.min)) if start else None
-    end_dt = timezone.make_aware(datetime.combine(end, time.max)) if end else None
+    start_dt = datetime.combine(start, time.min, tzinfo=tz) if start else None
+    end_dt = datetime.combine(end, time.max, tzinfo=tz) if end else None
     return start_dt, end_dt
 
 
@@ -66,7 +69,7 @@ def _filter_clients(
     campaign_id: int | None = None,
 ) -> QuerySet[Client]:
     qs = Client.objects.filter(company=company).select_related("status", "assigned_to")
-    start_dt, end_dt = _date_bounds(from_date, to_date)
+    start_dt, end_dt = _date_bounds(from_date, to_date, company)
     if start_dt:
         qs = qs.filter(created_at__gte=start_dt)
     if end_dt:
@@ -190,11 +193,8 @@ def _worked_seconds_by_user(
     """
     Measured CRM usage seconds per user for the range, as one grouped aggregate.
 
-    Filters on the raw parsed dates rather than :func:`_date_bounds`, because
-    ``work_date`` is already a company-local calendar date while ``_date_bounds``
-    builds aware datetimes in the Django server timezone. Company-local days are the
-    right semantics for "hours worked on 2026-08-20"; note this can diverge by up to
-    a day from the lead/call windows for tenants whose timezone isn't the server's.
+    Filters on the raw parsed dates because ``work_date`` is already a company-local
+    calendar date (the lead/call windows from :func:`_date_bounds` are company-local too).
     """
     qs = WorkDaySummary.objects.filter(company=company)
     start = _parse_date(from_date)
@@ -251,7 +251,7 @@ def build_employee_or_team_rows(
             user_id=user_id,
         )
     )
-    start_dt, end_dt = _date_bounds(from_date, to_date)
+    start_dt, end_dt = _date_bounds(from_date, to_date, company)
     calls = list(_filter_calls(company, start_dt, end_dt))
     deals_by_assignee = _build_deals_by_assignee(company, clients)
     worked_seconds_by_user = _worked_seconds_by_user(
@@ -488,7 +488,7 @@ def build_call_report(
     to_date: str | None = None,
     user_id: int | None = None,
 ):
-    start_dt, end_dt = _date_bounds(from_date, to_date)
+    start_dt, end_dt = _date_bounds(from_date, to_date, company)
     calls_qs = _filter_calls(company, start_dt, end_dt).select_related(
         "client", "call_method", "created_by"
     )

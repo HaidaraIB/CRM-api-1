@@ -309,8 +309,9 @@ def build_dashboard_summary(
     # --- Stats ---
     total_leads = overview["total"]
     today_clients = client_qs.filter(created_at__gte=today_start, created_at__lt=today_end)
-    today_touched = today_clients.exclude(status__name="Untouched").count()
-    today_untouched = today_clients.filter(status__name="Untouched").count()
+    untouched_q = Q(status__name="Untouched") | Q(status__is_default=True)
+    today_touched = today_clients.exclude(untouched_q).count()
+    today_untouched = today_clients.filter(untouched_q).count()
 
     # Parity with FE: unassigned, created before (today-3), no client-task on/after lead calendar day.
     delayed_candidates = list(
@@ -428,7 +429,7 @@ def build_dashboard_summary(
         contact_series.append(contact_by_day.get(d, 0))
 
     # --- Funnel ---
-    touched = client_qs.exclude(status__name__iexact="untouched").count()
+    touched = client_qs.exclude(untouched_q).count()
     meeting = (
         scoped_client_task_qs(user)
         .filter(Q(stage__name__icontains="meeting"))

@@ -209,10 +209,14 @@ def on_client_visit_post_save(sender, instance, created, **kwargs):
     visited = get_visited_lead_status(company) or ensure_visited_lead_status(company)
     if visited:
         now = timezone.now()
+        previous_status = client.status
         Client.objects.filter(pk=client.pk).update(
             status_id=visited.pk,
             status_entered_at=now,
         )
+        from reports.recorder import record_status_transition
+
+        record_status_transition(client, previous_status, visited, by=None, source="automation", at=now)
 
 
 @receiver(post_save, sender=ClientFieldVisit)

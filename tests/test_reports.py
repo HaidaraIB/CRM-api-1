@@ -185,3 +185,20 @@ class TestCallReportAPI:
     def test_call_report_denied_for_employee(self, authenticated_employee, report_data):
         response = authenticated_employee.get("/api/v1/reports/calls/")
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestLegacyReportTimezone:
+    def test_call_report_day_bounds_use_company_timezone(self, authenticated_admin, report_company, report_data):
+        from datetime import datetime, timezone as dt_tz
+
+        report_company.timezone = "Asia/Baghdad"  # UTC+3
+        report_company.save(update_fields=["timezone"])
+        call = ClientCall.objects.filter(created_by=report_data["employee"]).first()
+        # 21:30 UTC on Oct 5 is already Oct 6 in Baghdad.
+        ClientCall.objects.filter(pk=call.pk).update(created_at=datetime(2026, 10, 5, 21, 30, tzinfo=dt_tz.utc))
+        ClientCall.objects.exclude(pk=call.pk).update(created_at=datetime(2026, 1, 1, tzinfo=dt_tz.utc))
+        in_day = authenticated_admin.get("/api/v1/reports/calls/?from=2026-10-06&to=2026-10-06")
+        out_day = authenticated_admin.get("/api/v1/reports/calls/?from=2026-10-05&to=2026-10-05")
+        assert api_body(in_day)["crm"]["summary"]["total"] == 1
+        assert api_body(out_day)["crm"]["summary"]["total"] == 0

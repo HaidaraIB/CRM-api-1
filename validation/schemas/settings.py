@@ -74,6 +74,21 @@ def _load():
         aliases={"reAssignHours": "re_assign_hours", "noFollowUpHours": "no_follow_up_hours", "noFollowUpDigestHour": "no_follow_up_digest_hour"},
     )
     register_form(
+        # Client-side only, like company_assignment_settings.update: the server check lives in
+        # reports.business_time.validate_business_hours via update_assignment_settings.
+        "company_business_hours.update",
+        {
+            "response_sla_minutes": integer_field(
+                "responseSlaMinutes",
+                rule("integer"),
+                rule("number_range", {"min": 1, "max": 10080}),
+                ui_key="responseSlaMinutes",
+                sample=15,
+            ),
+        },
+        aliases={"responseSlaMinutes": "response_sla_minutes"},
+    )
+    register_form(
         "system_settings.update",
         {
             "login_max_failed_attempts": integer_field(

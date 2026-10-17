@@ -36,10 +36,14 @@ class CompanySerializer(serializers.ModelSerializer):
             "arrival_escalation_minutes",
             "work_hours_tracking_enabled",
             "work_hours_idle_timeout_minutes",
+            "business_hours",
+            "response_sla_minutes",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        # business_hours / response_sla_minutes are written only through update_assignment_settings,
+        # which validates them.
+        read_only_fields = ["id", "created_at", "updated_at", "business_hours", "response_sla_minutes"]
 
     def validate_timezone(self, value):
         if not value or not str(value).strip():

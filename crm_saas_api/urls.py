@@ -464,6 +464,7 @@ v1_patterns = [
     path("reports/marketing/", MarketingReportView.as_view(), name="reports_marketing"),
     path("reports/calls/", CallReportView.as_view(), name="reports_calls"),
     path("work-sessions/ping/", WorkSessionPingView.as_view(), name="work_session_ping"),
+    path("reports/v2/", include("reports.urls")),
     path("work-sessions/today/", WorkSessionTodayView.as_view(), name="work_session_today"),
     path("work-sessions/summary/", WorkSessionSummaryView.as_view(), name="work_session_summary"),
     path("", include("notifications.urls")),
