@@ -85,6 +85,26 @@ worse failure mode than a slow run for anyone who does not know the flag is on.
    Development mode with role-added test users, so engineering is not blocked —
    only production launch is.
 
+4. **Messenger display names need a separate feature.** Approving `pages_messaging`
+   is **not** enough for `GET /{PSID}?fields=first_name,last_name,profile_pic`.
+   Meta also requires Advanced Access for the feature **Business Asset User
+   Profile Access** (App Dashboard → App Review → Permissions and Features).
+   Without it, production PSIDs fail with capability errors (`(#3) Application
+   does not have the capability…`) while Instagram names can still work via
+   `name`/`username`. The inbox then shows the local fallback
+   `Messenger user · ####` (`SocialContact.display_name` when `name` is empty).
+
+   After that feature is Advanced Access:
+   1. Reconnect the Instagram & Messenger Page (fresh Page token).
+   2. Force-enrich existing contacts:
+      ```sh
+      .\.venv\Scripts\python.exe manage.py backfill_social_contact_profiles --force
+      ```
+   3. Spot-check: open the inbox (list refresh forces missing name/avatar) or
+      DEBUG `GET .../internal/debug/profile/messenger/<psid>/` and confirm
+      `first_name`/`last_name` in the Graph JSON. Logs:
+      `Meta Inbox: profile lookup error ... code=...`.
+
 ### Meta app state (already done by the user)
 App created with use cases *"Engage with customers on Messenger from Meta"* and
 *"Manage messaging & content on Instagram"* (**not** WhatsApp — it lives on the
@@ -92,7 +112,8 @@ other app). Facebook Login for Business configuration created with assets
 **Pages (required) + Instagram accounts (optional)** and six permissions:
 `pages_messaging`, `pages_manage_metadata`, `pages_show_list`, `instagram_basic`,
 `instagram_manage_messages`, `pages_read_engagement` (the last auto-added as a
-dependency of `instagram_basic`).
+dependency of `instagram_basic`). Also confirm **Business Asset User Profile
+Access** is Advanced Access if Messenger names must show for non-test users.
 
 > Gotcha already hit: the permission picker only offers the Messenger four until
 > you set the Instagram use case to **"API setup with Facebook Login"** and click
