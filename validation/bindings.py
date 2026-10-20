@@ -71,6 +71,22 @@ def install() -> None:
         TrialCodeCreateSerializer,
     )
     from support.serializers import SupportTicketSerializer
+    from telephony.serializers import (
+        PbxBusinessHoursSerializer,
+        PbxExtensionSerializer,
+        PbxGatewayCreateSerializer,
+        PbxInboundRouteSerializer,
+        PbxIvrMenuSerializer,
+        PbxNumberSerializer,
+        PbxOutboundRouteSerializer,
+        PbxQueueSerializer,
+        AdminTenantUpdateSerializer,
+        PbxNodeSerializer,
+        PbxSoundSerializer,
+        PbxSoundUploadSerializer,
+        PbxTrunkSerializer,
+        TelephonySettingsSerializer,
+    )
 
     pairs = [
         (UserSerializer, "user.upsert"),
@@ -124,6 +140,20 @@ def install() -> None:
         (MessageTemplateSerializer, "whatsapp_template.upsert"),
         (OpenAISettingsSerializer, "openai_settings.update"),
         (DemoBookingCreateSerializer, "demo_booking.create"),
+        (PbxExtensionSerializer, "pbx_extension.upsert"),
+        (PbxTrunkSerializer, "pbx_trunk.upsert"),
+        (PbxGatewayCreateSerializer, "pbx_gateway.create"),
+        (PbxNumberSerializer, "pbx_number.upsert"),
+        (PbxInboundRouteSerializer, "pbx_inbound_route.upsert"),
+        (PbxOutboundRouteSerializer, "pbx_outbound_route.upsert"),
+        (TelephonySettingsSerializer, "pbx_settings.update"),
+        (PbxBusinessHoursSerializer, "pbx_business_hours.upsert"),
+        (PbxIvrMenuSerializer, "pbx_ivr.upsert"),
+        (PbxQueueSerializer, "pbx_queue.upsert"),
+        (PbxSoundSerializer, "pbx_sound.update"),
+        (PbxSoundUploadSerializer, "pbx_sound.upload"),
+        (PbxNodeSerializer, "pbx_node.upsert"),
+        (AdminTenantUpdateSerializer, "pbx_tenant.admin_update"),
     ]
     for cls, form_id in pairs:
         _bind(cls, form_id)

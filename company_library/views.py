@@ -1,5 +1,4 @@
 from django.db.models import Sum
-from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -10,6 +9,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import HasActiveSubscription
 from crm_saas_api.responses import validation_error_response
+from object_storage.serving import field_file_response
 from subscriptions.entitlements import (
     build_company_entitlements,
     require_quota,
@@ -170,12 +170,13 @@ class CompanyLibraryFileDownloadView(APIView):
         if not obj.file:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
-        stream = obj.file.open("rb")
-        resp = FileResponse(
-            stream,
-            as_attachment=True,
-            filename=obj.original_filename or "file",
-            content_type=obj.mime_type or "application/octet-stream",
-        )
-        resp["Cache-Control"] = "private, max-age=3600"
-        return resp
+        try:
+            # Object storage: a redirect to a presigned GET (attachment); local: streamed.
+            return field_file_response(
+                obj.file,
+                filename=obj.original_filename or "file",
+                content_type=obj.mime_type or "application/octet-stream",
+                as_attachment=True,
+            )
+        except FileNotFoundError:
+            return Response(status=status.HTTP_404_NOT_FOUND)

@@ -1344,8 +1344,58 @@ class ClientTaskListSerializer(serializers.ModelSerializer):
         ]
 
 
+class PbxCallFieldsMixin(serializers.Serializer):
+    """
+    Loop Cloud PBX call details for ``source == "pbx"`` timeline entries (typed,
+    so web and mobile localize them; ``notes`` stays an English fallback).
+    The recording plays through POST /telephony/recordings/<id>/access/, which
+    re-checks visibility and audit-logs each access, so no URL is embedded here.
+    """
+
+    pbx_call_id = serializers.SerializerMethodField(read_only=True)
+    pbx_direction = serializers.SerializerMethodField(read_only=True)
+    pbx_call_status = serializers.SerializerMethodField(read_only=True)
+    pbx_duration_sec = serializers.SerializerMethodField(read_only=True)
+    pbx_recording_id = serializers.SerializerMethodField(read_only=True)
+    pbx_recording_status = serializers.SerializerMethodField(read_only=True)
+
+    PBX_FIELDS = [
+        "pbx_call_id", "pbx_direction", "pbx_call_status", "pbx_duration_sec", "pbx_recording_id",
+        "pbx_recording_status",
+    ]
+
+    @staticmethod
+    def _pbx(obj):
+        return getattr(obj, "pbx_call", None) if getattr(obj, "pbx_call_id", None) else None
+
+    def get_pbx_call_id(self, obj):
+        return str(obj.pbx_call_id) if getattr(obj, "pbx_call_id", None) else None
+
+    def get_pbx_direction(self, obj):
+        call = self._pbx(obj)
+        return call.direction if call else None
+
+    def get_pbx_call_status(self, obj):
+        call = self._pbx(obj)
+        return call.status if call else None
+
+    def get_pbx_duration_sec(self, obj):
+        call = self._pbx(obj)
+        return call.billsec_s if call else None
+
+    def get_pbx_recording_id(self, obj):
+        call = self._pbx(obj)
+        if call is None:
+            return None
+        rec = call.recordings.order_by("started_at").first()
+        return str(rec.pk) if rec else None
+
+    def get_pbx_recording_status(self, obj):
+        return (obj.recording_status or None) if getattr(obj, "pbx_call_id", None) else None
+
+
 @extend_schema_serializer(component_name="ClientCall")
-class ClientCallSerializer(serializers.ModelSerializer):
+class ClientCallSerializer(PbxCallFieldsMixin, serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True)
     created_by_username = serializers.CharField(
         source="created_by.username", read_only=True
@@ -1371,6 +1421,7 @@ class ClientCallSerializer(serializers.ModelSerializer):
             "whatsapp_duration_sec",
             "whatsapp_recording_url",
             "whatsapp_recording_status",
+            *PbxCallFieldsMixin.PBX_FIELDS,
             "notes",
             "call_datetime",
             "follow_up_date",
@@ -1720,7 +1771,7 @@ class ClientVisitListSerializer(serializers.ModelSerializer):
         ]
 
 
-class ClientCallListSerializer(serializers.ModelSerializer):
+class ClientCallListSerializer(PbxCallFieldsMixin, serializers.ModelSerializer):
     """Simplified serializer for list views"""
 
     client_name = serializers.CharField(source="client.name", read_only=True)
@@ -1748,6 +1799,7 @@ class ClientCallListSerializer(serializers.ModelSerializer):
             "whatsapp_duration_sec",
             "whatsapp_recording_url",
             "whatsapp_recording_status",
+            *PbxCallFieldsMixin.PBX_FIELDS,
             "notes",
             "call_datetime",
             "follow_up_date",

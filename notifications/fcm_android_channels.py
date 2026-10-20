@@ -184,6 +184,7 @@ def android_notification_channel_id(
         "task_completed",
         "task_reminder",
         "call_reminder",
+        "pbx_call_missed",
         "visit_reminder",
         "reception_visit_reminder",
         "field_visit_reminder",
@@ -206,6 +207,9 @@ def android_notification_channel_id(
         "subscription_expiring",
         "payment_failed",
         "subscription_expired",
+        "pbx_trunk_down",
+        "pbx_trunk_recovered",
+        "pbx_emergency_call",
     }:
         return "system"
 

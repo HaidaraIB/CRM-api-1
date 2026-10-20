@@ -53,6 +53,8 @@ CONVERSATION_EVENT_TYPE = "conversation.event"
 SUPPORT_CONVERSATION_EVENT_TYPE = "support_conversation.event"
 # Maps to SyncConsumer.presence_event — one peer's ephemeral activity.
 PRESENCE_EVENT_TYPE = "presence.event"
+# Maps to SyncConsumer.telephony_event — a PBX call moved for this agent.
+TELEPHONY_EVENT_TYPE = "telephony.event"
 
 
 def realtime_enabled() -> bool:
@@ -269,6 +271,21 @@ def publish_presence(conversation_id, user_id, state: str) -> None:
             "state": state,
         },
     )
+
+
+def publish_telephony_event(user_id, event_type: str, call_id) -> None:
+    """
+    Tell one agent that a PBX call involving them moved (ringing, answered, ended).
+
+    Carries the event type and call id only — the same "never carry data" rule as
+    every other frame: the client reads GET /telephony/calls/{id}, which applies
+    the visibility rules. Sent after commit so the read sees the new state.
+    """
+    if not user_id or not call_id or not realtime_enabled():
+        return
+    group = USER_GROUP.format(user_id)
+    payload = {"type": TELEPHONY_EVENT_TYPE, "event": str(event_type), "call_id": str(call_id)}
+    transaction.on_commit(lambda: _safe_build(lambda: _send_payload(group, payload)))
 
 
 def on_counter_changed(kind: str, **details) -> None:

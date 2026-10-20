@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from django.http import FileResponse, HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -24,7 +24,9 @@ from ..serializers import (
     SupportMessageSerializer,
 )
 from ..services import conversations as chat_services
-from ..services.attachments import chat_storage, message_has_stored_attachment
+from object_storage.serving import field_file_response
+
+from ..services.attachments import message_has_stored_attachment
 
 logger = logging.getLogger(__name__)
 
@@ -243,12 +245,10 @@ class SupportChatAdminMessageAttachmentView(APIView):
                 code="no_attachment",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
-        key = (msg.attachment_object_key or "").strip()
-        if key and chat_storage.is_supabase_chat_storage():
-            return HttpResponseRedirect(chat_storage.create_signed_url(key))
         if msg.attachment:
-            return FileResponse(
-                msg.attachment.open("rb"),
+            return field_file_response(
+                msg.attachment,
+                filename=msg.original_filename or "attachment",
                 content_type=msg.attachment_mime or "application/octet-stream",
             )
         return error_response(

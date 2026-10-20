@@ -26,6 +26,8 @@ INTEGRATION_POLICY_PLATFORMS = (
     "mujeb",
     "meta_inbox",
     "whatsapp_inbox",
+    # Loop Cloud PBX: global / per-company emergency kill switch.
+    "telephony",
 )
 PLAN_INTEGRATION_FEATURE_MAP = {
     "meta": "integration_meta",
@@ -38,6 +40,7 @@ PLAN_INTEGRATION_FEATURE_MAP = {
     "mujeb": "integration_mujeb",
     "meta_inbox": "integration_meta_inbox",
     "whatsapp_inbox": "integration_meta_inbox",
+    "telephony": "telephony",
 }
 SMS_INTEGRATION_PLATFORMS = ("twilio", "otpiq")
 INTEGRATION_POLICY_DEFAULTS = {

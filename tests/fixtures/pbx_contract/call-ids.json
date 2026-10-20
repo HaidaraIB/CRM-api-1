@@ -1,0 +1,20 @@
+{
+  "algorithm": "uuid(sha1(\"loop-call:\" + tenant_tag + \":\" + linkedid).hex[:32])",
+  "cases": [
+    {
+      "realm_key": "dev4test",
+      "linkedid": "1760433300.42",
+      "call_id": "8fb28c56-e547-a4a3-16df-aa5ec7cdb9b5"
+    },
+    {
+      "realm_key": "acme2pbx",
+      "linkedid": "1760433300.42",
+      "call_id": "944a48a1-9d43-2753-cc7e-1289160ad887"
+    },
+    {
+      "realm_key": "dev4test",
+      "linkedid": "1760433301.43",
+      "call_id": "a47b78dc-2d88-80cd-1c39-f3b4d06b0328"
+    }
+  ]
+}

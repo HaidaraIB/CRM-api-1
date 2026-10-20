@@ -1,0 +1,131 @@
+{
+  "inputs": {
+    "trunk_id": "1a2b3c4d-0000-4000-8000-000000000001",
+    "queue_id": "9f8e7d6c-5b4a-4321-8fed-cba987654321",
+    "ivr_id": "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d",
+    "sound_id": "5e1f0a2b-6c7d-4e8f-9a0b-1c2d3e4f5a6b"
+  },
+  "valid": [
+    {
+      "realm_key": "dev4test",
+      "tenant_tag": "tdev4test",
+      "extension_endpoint_100": "tdev4test_100",
+      "extension_auth_100": "tdev4test_100-auth",
+      "agent_device_100": "Stasis:tdev4test_100-agent",
+      "trunk_endpoint": "tdev4test_trk_1a2b3c4d",
+      "context_internal": "tdev4test-internal",
+      "context_from_agent": "tdev4test-from-agent",
+      "context_from_trunk": "tdev4test-from-trunk",
+      "context_ivr": "tdev4test-ivr-0a1b2c3d",
+      "queue_name": "tdev4test_q_9f8e7d6c",
+      "context_queue": "tdev4test-queue-9f8e7d6c",
+      "context_agent": "tdev4test-agent",
+      "pjsip_file": "pjsip_tdev4test.conf",
+      "extensions_file": "extensions_tdev4test.conf",
+      "kamailio_file": "kamailio_tdev4test.json",
+      "sound_file": "sound_tdev4test_5e1f0a2b.alaw",
+      "sound_path": "/etc/asterisk/loop/active/sound_tdev4test_5e1f0a2b",
+      "outbound_block_device": "Stasis:tdev4test-outbound"
+    },
+    {
+      "realm_key": "acme2pbx",
+      "tenant_tag": "tacme2pbx",
+      "extension_endpoint_100": "tacme2pbx_100",
+      "extension_auth_100": "tacme2pbx_100-auth",
+      "agent_device_100": "Stasis:tacme2pbx_100-agent",
+      "trunk_endpoint": "tacme2pbx_trk_1a2b3c4d",
+      "context_internal": "tacme2pbx-internal",
+      "context_from_agent": "tacme2pbx-from-agent",
+      "context_from_trunk": "tacme2pbx-from-trunk",
+      "context_ivr": "tacme2pbx-ivr-0a1b2c3d",
+      "queue_name": "tacme2pbx_q_9f8e7d6c",
+      "context_queue": "tacme2pbx-queue-9f8e7d6c",
+      "context_agent": "tacme2pbx-agent",
+      "pjsip_file": "pjsip_tacme2pbx.conf",
+      "extensions_file": "extensions_tacme2pbx.conf",
+      "kamailio_file": "kamailio_tacme2pbx.json",
+      "sound_file": "sound_tacme2pbx_5e1f0a2b.alaw",
+      "sound_path": "/etc/asterisk/loop/active/sound_tacme2pbx_5e1f0a2b",
+      "outbound_block_device": "Stasis:tacme2pbx-outbound"
+    },
+    {
+      "realm_key": "a2a2a2a2",
+      "tenant_tag": "ta2a2a2a2",
+      "extension_endpoint_100": "ta2a2a2a2_100",
+      "extension_auth_100": "ta2a2a2a2_100-auth",
+      "agent_device_100": "Stasis:ta2a2a2a2_100-agent",
+      "trunk_endpoint": "ta2a2a2a2_trk_1a2b3c4d",
+      "context_internal": "ta2a2a2a2-internal",
+      "context_from_agent": "ta2a2a2a2-from-agent",
+      "context_from_trunk": "ta2a2a2a2-from-trunk",
+      "context_ivr": "ta2a2a2a2-ivr-0a1b2c3d",
+      "queue_name": "ta2a2a2a2_q_9f8e7d6c",
+      "context_queue": "ta2a2a2a2-queue-9f8e7d6c",
+      "context_agent": "ta2a2a2a2-agent",
+      "pjsip_file": "pjsip_ta2a2a2a2.conf",
+      "extensions_file": "extensions_ta2a2a2a2.conf",
+      "kamailio_file": "kamailio_ta2a2a2a2.json",
+      "sound_file": "sound_ta2a2a2a2_5e1f0a2b.alaw",
+      "sound_path": "/etc/asterisk/loop/active/sound_ta2a2a2a2_5e1f0a2b",
+      "outbound_block_device": "Stasis:ta2a2a2a2-outbound"
+    }
+  ],
+  "invalid_realm_keys": [
+    "abcdefgh",
+    "ABCD2345",
+    "abc2345",
+    "abcd23456",
+    "abcd0123",
+    "abcd-234",
+    ""
+  ],
+  "invalid_extensions": [
+    "0",
+    "1",
+    "0100",
+    "1234567",
+    "10a",
+    "+100",
+    ""
+  ],
+  "owner_resolution": [
+    {
+      "name": "tdev4test-internal",
+      "realm_key": "dev4test"
+    },
+    {
+      "name": "tdev4test_trk_1a2b3c4d",
+      "realm_key": "dev4test"
+    },
+    {
+      "name": "transport-udp",
+      "realm_key": null
+    },
+    {
+      "name": "default",
+      "realm_key": null
+    },
+    {
+      "name": "tdev4testx-internal",
+      "realm_key": null
+    }
+  ],
+  "channel_resolution": [
+    {
+      "channel": "PJSIP/tdev4test_100-0000002a",
+      "realm_key": "dev4test"
+    },
+    {
+      "channel": "PJSIP/tdev4test_trk_1a2b3c4d-0000002b",
+      "realm_key": "dev4test"
+    },
+    {
+      "channel": "Local/100@tdev4test-internal-00000001;2",
+      "realm_key": null
+    },
+    {
+      "channel": "PJSIP/anonymous-00000001",
+      "realm_key": null
+    }
+  ]
+}

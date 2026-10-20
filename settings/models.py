@@ -5,6 +5,7 @@ from django.conf import settings as django_settings
 from django.utils import timezone
 from enum import Enum
 import uuid
+from object_storage.backends import backup_storage
 
 
 class ChannelPriority(Enum):
@@ -194,7 +195,7 @@ class SystemBackup(models.Model):
         SCHEDULED = "scheduled", "Scheduled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    file = models.FileField(upload_to="backups/", blank=True, null=True)
+    file = models.FileField(upload_to="backups/", storage=backup_storage, blank=True, null=True)
     file_size = models.BigIntegerField(default=0)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.IN_PROGRESS
@@ -715,7 +716,7 @@ class BillingSettings(models.Model):
     issuer_tax_id = models.CharField(max_length=64, blank=True, default="")
     footer_text = models.TextField(blank=True, default="")
     payment_instructions = models.TextField(blank=True, default="")
-    logo = models.ImageField(upload_to="billing/", blank=True, null=True)
+    logo = models.ImageField(upload_to="platform/billing/", blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

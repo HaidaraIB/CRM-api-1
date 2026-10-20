@@ -68,12 +68,15 @@ COMPANY_SLICE_PREFIXES = {
     "leads": "sync_seq_company_leads_v1",  # Client + ClientEvent
     "deals": "sync_seq_company_deals_v1",  # Deal
     "todos": "sync_seq_company_todos_v1",  # ClientTask
+    "telephony": "sync_seq_company_telephony_v1",  # PbxCall / extension presence (Loop Cloud PBX)
 }
 
 # These slices rotate the digest ETag (clients refetch the list) but must not
 # rotate the badge cache. A lead edit is common; rebuilding tenant_chat_unread
 # for every user in the company on each one is not.
-DATA_ONLY_SLICES = frozenset({"leads", "deals", "todos"})
+# telephony: call-state changes arrive in node batches (about one per second per
+# busy tenant) and drive no sidebar badge.
+DATA_ONLY_SLICES = frozenset({"leads", "deals", "todos", "telephony"})
 COMPANY_DATA_SEQ_PREFIX = "sync_seq_company_data_v1"
 
 USER_ACCESS_SEQ_PREFIX = "sync_seq_user_access_v1"

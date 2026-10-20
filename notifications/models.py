@@ -33,6 +33,10 @@ class NotificationType(models.TextChoices):
 
     # WhatsApp Notifications
     WHATSAPP_CALL_INCOMING = 'whatsapp_call_incoming', 'WhatsApp Call Incoming'
+    PBX_CALL_MISSED = 'pbx_call_missed', 'Missed Phone Call'
+    PBX_TRUNK_DOWN = 'pbx_trunk_down', 'Phone Line Down'
+    PBX_TRUNK_RECOVERED = 'pbx_trunk_recovered', 'Phone Line Recovered'
+    PBX_EMERGENCY_CALL = 'pbx_emergency_call', 'Emergency Call'
     WHATSAPP_MESSAGE_RECEIVED = 'whatsapp_message_received', 'WhatsApp Message Received'
     WHATSAPP_TEMPLATE_SENT = 'whatsapp_template_sent', 'WhatsApp Template Sent'
     WHATSAPP_SEND_FAILED = 'whatsapp_send_failed', 'WhatsApp Send Failed'

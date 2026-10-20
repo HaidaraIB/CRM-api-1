@@ -2,7 +2,7 @@ import logging
 
 from django.db import transaction
 from django.db.models import Prefetch, Q
-from django.http import FileResponse, HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -20,7 +20,8 @@ from sync.cache import invalidate_badges
 from sync.conditional import conditional_token, not_modified, tag
 from sync.version import conversation_token, normalize_etag
 
-from . import supabase_storage as chat_storage
+from object_storage.serving import field_file_response
+
 from .attachments import (
     KIND_IMAGE,
     copy_chat_attachment_from_source,
@@ -459,22 +460,11 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                 )
             forwarded_from = src
 
-        if chat_storage.is_supabase_mode_requested() and not chat_storage.is_configured():
-            if uploaded_file or (
-                forwarded_from and (getattr(forwarded_from, "attachment_object_key", None) or "").strip()
-            ):
-                return error_response(
-                    "Team chat storage is set to Supabase but required settings are missing.",
-                    code="supabase_storage_misconfigured",
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-
         body = ser.validated_data["body"]
         processed = None
         mime_final = ""
         size_final = 0
         kind = None
-        name_hint = ""
         attachment_width = None
         attachment_height = None
         if uploaded_file:
@@ -497,9 +487,6 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                             attachment_width, attachment_height = dims
                 except ValueError as e:
                     return error_response(str(e), code="invalid_file_type")
-            name_hint = (
-                processed.name if processed is not None else safe_original_filename(uploaded_file.name)
-            )
 
         try:
             with transaction.atomic():
@@ -517,26 +504,13 @@ class TenantChatConversationViewSet(viewsets.ModelViewSet):
                         attachment_height=attachment_height,
                         original_filename=safe_original_filename(uploaded_file.name),
                     )
-                    if chat_storage.is_supabase_chat_storage():
-                        key = chat_storage.build_object_key(
-                            conversation.company_id, msg.id, name_hint
-                        )
-                        if processed is not None:
-                            payload = processed.read()
-                        else:
-                            uploaded_file.seek(0)
-                            payload = uploaded_file.read()
-                        chat_storage.upload_bytes(key, payload, mime_final)
-                        msg.attachment_object_key = key
-                        msg.save(update_fields=["attachment_object_key"])
+                    if processed is not None:
+                        msg.attachment.save(processed.name, processed, save=True)
                     else:
-                        if processed is not None:
-                            msg.attachment.save(processed.name, processed, save=True)
-                        else:
-                            uploaded_file.seek(0)
-                            msg.attachment.save(
-                                safe_original_filename(uploaded_file.name), uploaded_file, save=True
-                            )
+                        uploaded_file.seek(0)
+                        msg.attachment.save(
+                            safe_original_filename(uploaded_file.name), uploaded_file, save=True
+                        )
                 else:
                     msg = ChatMessage.objects.create(
                         conversation=conversation,
@@ -652,30 +626,17 @@ class TenantChatMessageAttachmentView(APIView):
         if not user_participates_in_conversation(request.user, msg.conversation):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
-        key = (getattr(msg, "attachment_object_key", None) or "").strip()
-        if key:
-            if not chat_storage.is_supabase_chat_storage():
-                return Response(status=status.HTTP_404_NOT_FOUND)
-            try:
-                signed = chat_storage.create_signed_url(key)
-            except Exception:
-                logger.exception("tenant chat signed URL failed for message %s", pk)
-                return Response(status=status.HTTP_503_SERVICE_UNAVAILABLE)
-            return HttpResponseRedirect(signed)
-
         if not msg.attachment:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
-        filename = msg.original_filename or "attachment"
-        stream = msg.attachment.open("rb")
-        resp = FileResponse(
-            stream,
-            as_attachment=False,
-            filename=filename,
-            content_type=msg.attachment_mime or "application/octet-stream",
-        )
-        resp["Cache-Control"] = "private, max-age=3600"
-        return resp
+        try:
+            return field_file_response(
+                msg.attachment,
+                filename=msg.original_filename or "attachment",
+                content_type=msg.attachment_mime or "application/octet-stream",
+            )
+        except FileNotFoundError:
+            return Response(status=status.HTTP_404_NOT_FOUND)
 
 
 def _notify_recipient_chat_message(sender: User, recipient: User, message: ChatMessage):

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.db import models
 
 from companies.models import Company
+from object_storage.paths import TenantUploadTo
 
 
 class AttachmentFieldsMixin(models.Model):
@@ -14,7 +15,7 @@ class AttachmentFieldsMixin(models.Model):
         DOCUMENT = "document", "Document"
 
     attachment = models.FileField(
-        upload_to="support_chat/%Y/%m/%d/",
+        upload_to=TenantUploadTo("support_chat/%Y/%m/%d", company="conversation.company_id"),
         max_length=500,
         null=True,
         blank=True,

@@ -2,6 +2,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 from enum import Enum
+from object_storage.paths import TenantUploadTo
 
 # Create your models here.
 
@@ -819,6 +820,7 @@ class ClientTask(models.Model):
 class ClientCallSource(models.TextChoices):
     MANUAL = "manual", "Manual"
     WHATSAPP = "whatsapp", "WhatsApp"
+    PBX = "pbx", "Phone system"
 
 
 class ClientCall(models.Model):
@@ -849,6 +851,14 @@ class ClientCall(models.Model):
     recording_storage_key = models.CharField(max_length=512, blank=True, default="")
     recording_status = models.CharField(max_length=16, blank=True, default="")
     recording_duration_sec = models.PositiveIntegerField(blank=True, null=True)
+    # Loop Cloud PBX call this entry was created from (source=pbx); one entry per call.
+    pbx_call = models.OneToOneField(
+        "telephony.PbxCall",
+        on_delete=models.SET_NULL,
+        related_name="client_call",
+        blank=True,
+        null=True,
+    )
     notes = models.TextField(blank=True, null=True)
     call_datetime = models.DateTimeField(blank=True, null=True, help_text="Date and time when the call happened")
     follow_up_date = models.DateTimeField(blank=True, null=True, help_text="Next call date or follow up date")
@@ -985,7 +995,7 @@ class ClientFieldVisit(models.Model):
         help_text="Employee GPS longitude at submit time",
     )
     client_location_photo = models.ImageField(
-        upload_to="field_visit_location_photos/",
+        upload_to=TenantUploadTo("field_visit_location_photos", company="client.company_id"),
         blank=True,
         null=True,
         help_text="Optional photo of the client location at visit time.",

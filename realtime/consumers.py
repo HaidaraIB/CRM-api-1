@@ -305,6 +305,17 @@ class SyncConsumer(AsyncWebsocketConsumer):
             )
         )
 
+    async def telephony_event(self, event):
+        """
+        Handler for ``telephony.event`` (realtime/publish.py): a PBX call involving
+        this user moved. Type and id only; the client re-reads the call over REST.
+        """
+        await self.send(
+            text_data=json.dumps(
+                {"scope": "telephony", "event": event.get("event"), "call_id": event.get("call_id")}
+            )
+        )
+
     async def sync_event(self, event):
         """Handler for the ``sync.event`` type sent by realtime/publish.py."""
         await self.send(

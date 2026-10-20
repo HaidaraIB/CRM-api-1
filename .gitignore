@@ -147,3 +147,5 @@ staticfiles
 firebase-credentials.json
 
 .cursor
+
+graphify-out

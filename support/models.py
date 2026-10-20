@@ -1,4 +1,5 @@
 from django.db import models
+from object_storage.paths import TenantUploadTo
 
 
 class TicketStatus(models.TextChoices):
@@ -43,7 +44,7 @@ class SupportTicketAttachment(models.Model):
         related_name="attachments",
     )
     file = models.ImageField(
-        upload_to="support_tickets/%Y/%m/%d/",
+        upload_to=TenantUploadTo("support_tickets/%Y/%m/%d", company="ticket.company_id"),
         max_length=500,
     )
     created_at = models.DateTimeField(auto_now_add=True)

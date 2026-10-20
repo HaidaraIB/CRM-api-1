@@ -9,6 +9,104 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 
+def pytest_configure(config):
+    """
+    Use a fast password hasher in tests.
+
+    The production hasher (PBKDF2, 1,000,000 iterations) costs ~0.75s per
+    ``create_user``, and most fixtures create two users, so it dominated the
+    whole suite's runtime. Django's docs recommend MD5 for test runs; login and
+    check_password behave the same, just without the deliberate slowness.
+    """
+    from django.conf import settings
+
+    settings.PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
+
+@pytest.fixture(autouse=True)
+def _pin_sync_time_bucket(request, monkeypatch):
+    """
+    Pin the 30s safety bucket that sync.version / sync.conditional fold into
+    every version token and ETag.
+
+    Without this, any test that fetches an ETag and replays it fails whenever the
+    two requests straddle a bucket boundary — rare in a quiet sequential run,
+    common under parallel workers. Only those two modules see the pinned clock;
+    everything else keeps real time. Opt out with @pytest.mark.real_time_bucket.
+    """
+    if request.node.get_closest_marker("real_time_bucket"):
+        return
+    import time as real_time
+
+    import sync.conditional
+    import sync.version
+
+    class _PinnedClock:
+        def __getattr__(self, name):
+            return getattr(real_time, name)
+
+        @staticmethod
+        def time():
+            return 1_800_000_015.0  # mid-bucket for SAFETY_BUCKET_SECONDS = 30
+
+    monkeypatch.setattr(sync.conditional, "time", _PinnedClock())
+    monkeypatch.setattr(sync.version, "time", _PinnedClock())
+
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "testserver"}
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(request, monkeypatch):
+    """
+    Tests never reach the internet. Some code paths call Meta Graph, Twilio,
+    OTPIQ or FCM with fake credentials and only survive because the error is
+    handled; on a slow network each such test waited seconds (and sent real
+    requests to those providers). Loopback stays allowed (live_server, Redis,
+    the PBX dev stack). Opt out with @pytest.mark.allow_network.
+    """
+    if request.node.get_closest_marker("allow_network"):
+        return
+    import ipaddress
+    import socket
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _is_local(host) -> bool:
+        if host is None:
+            return True
+        host = host.decode() if isinstance(host, bytes) else str(host)
+        if host in _LOOPBACK_HOSTS:
+            return True
+        try:
+            return ipaddress.ip_address(host.strip("[]")).is_loopback
+        except ValueError:
+            return False
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if not _is_local(host):
+            raise socket.gaierror(socket.EAI_NONAME, f"outbound network disabled in tests: {host}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+
+
+@pytest.fixture(autouse=True)
+def _realtime_off_by_default(settings):
+    """
+    Realtime publishing is off unless a test turns it on (test_realtime and
+    friends set REALTIME_ENABLED=True themselves).
+
+    A local .env usually enables it, and then every model save that bumps a sync
+    counter publishes through async_to_sync, which builds a fresh asyncio event
+    loop. On Windows each new loop opens a loopback socketpair; with parallel
+    workers doing that thousands of times, socketpair's accept() occasionally
+    never returns and the worker hangs (observed: whole runs stalling for 15+
+    minutes). CI has no .env, so this also makes local runs match CI.
+    """
+    settings.REALTIME_ENABLED = False
+
+
 @pytest.fixture(autouse=True)
 def _tests_skip_api_key_gate(settings):
     """

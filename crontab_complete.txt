@@ -186,3 +186,16 @@
 #    - المدة من META_INBOX_MEDIA_RETENTION_DAYS (افتراضياً 90 يوماً)
 #    - صفوف الرسائل ونصوصها تبقى؛ تُحذف البايتات فقط
 56 3 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py purge_social_media >> /var/log/crm-api-purge-social-media.log 2>&1
+
+# ============================================
+# نظام الهاتف (Loop Cloud PBX)
+# ============================================
+
+# 22. حذف تسجيلات المكالمات الأقدم من مدة احتفاظ كل شركة - يومياً في 3:11 صباحاً
+#    - PbxTenant.recording_retention_days (الافتراضي 90 يوماً)؛ الشركات تحت الحجز القانوني تُستثنى
+#    - يحذف الكائن من التخزين أولاً ثم الصف، ثم يعيد فحص حصة التخزين (max_pbx_recording_bytes)
+11 3 * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py purge_pbx_recordings >> /var/log/crm-api-pbx-recordings.log 2>&1
+
+# 23. تجميع استخدام نظام الهاتف اليومي (PbxUsageDaily) - كل ساعة في الدقيقة 9
+#    - يعيد حساب اليوم الحالي والسابق (إعادة التشغيل آمنة)
+9 * * * * cd /var/www/crm-api && /var/www/crm-api/venv/bin/python manage.py rollup_pbx_usage >> /var/log/crm-api-pbx-usage.log 2>&1

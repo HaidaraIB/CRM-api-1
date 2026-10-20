@@ -651,6 +651,14 @@ class CanManageContent(LimitedAdminPermission):
     required_permission = "can_manage_content"
 
 
+class CanManageTelephony(LimitedAdminPermission):
+    """Loop Cloud PBX platform console. Tenant managers may look; only this flag changes anything."""
+
+    message = "You do not have permission to manage the phone system."
+    write_permission = "can_manage_telephony"
+    read_permissions = ["can_manage_tenants"]
+
+
 class CanManageDemoBookings(LimitedAdminPermission):
     message = "You do not have permission to manage demo bookings."
     required_permission = "can_manage_demo_bookings"

@@ -11,9 +11,9 @@ deals, tasks, or lead editing.
 from __future__ import annotations
 
 import logging
+import os
 
 from django.db.models import Count, Q
-from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -25,6 +25,7 @@ from accounts.permissions import (
     HasActiveSubscription,
 )
 from crm_saas_api.responses import error_response, success_response
+from object_storage.serving import field_file_response
 from settings.models import SystemSettings
 from sync.cache import invalidate_badges
 from sync.conditional import conditional_token, not_modified, tag
@@ -1095,15 +1096,20 @@ def social_message_attachment(request, pk: int):
             status_code=status.HTTP_404_NOT_FOUND,
         )
 
-    response = FileResponse(
-        message.attachment.open('rb'),
-        content_type=message.attachment_mime or 'application/octet-stream',
-    )
-    if message.original_filename:
-        response['Content-Disposition'] = f'inline; filename="{message.original_filename}"'
+    # Object storage: a redirect to a presigned GET; local: streamed. Either way
     # private: this is an ACL-filtered payload, no shared cache may hold it.
-    response['Cache-Control'] = 'private, max-age=3600'
-    return response
+    try:
+        return field_file_response(
+            message.attachment,
+            filename=message.original_filename or os.path.basename(message.attachment.name),
+            content_type=message.attachment_mime or 'application/octet-stream',
+        )
+    except FileNotFoundError:
+        return error_response(
+            'Attachment not found.',
+            code='social_attachment_not_found',
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
 
 
 # --- WhatsApp inbox number (Integrations tab) ----------------------------------

@@ -11,6 +11,8 @@ from django.conf import settings as dj_settings
 
 logger = logging.getLogger(__name__)
 
+_LOGO_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif"}
+
 
 @dataclass(frozen=True)
 class IssuerBranding:
@@ -37,23 +39,15 @@ class IssuerBranding:
             logo_bytes: bytes | None = None
             logo_mime: str | None = None
             if bs.logo and getattr(bs.logo, "name", None):
-                path = Path(dj_settings.MEDIA_ROOT) / bs.logo.name
-                if path.is_file():
+                logo_mime = _LOGO_MIME.get(Path(bs.logo.name).suffix.lower())
+                if logo_mime:
                     try:
-                        raw = path.read_bytes()
-                        ext = path.suffix.lower()
-                        if ext == ".png":
-                            logo_mime = "image/png"
-                        elif ext in (".jpg", ".jpeg"):
-                            logo_mime = "image/jpeg"
-                        elif ext == ".gif":
-                            logo_mime = "image/gif"
-                        else:
-                            logo_mime = None
-                        if logo_mime:
-                            logo_bytes = raw
-                    except OSError as e:
-                        logger.warning("Could not read billing logo for invoice: %s", e)
+                        # Through the storage: local disk or the private R2 bucket.
+                        with bs.logo.storage.open(bs.logo.name, "rb") as fh:
+                            logo_bytes = fh.read()
+                    except Exception as e:  # missing file, storage unreachable
+                        logger.warning("Could not read billing logo for invoice: %s", type(e).__name__)
+                        logo_mime = None
             return cls(
                 issuer_name=bs.issuer_name or "",
                 issuer_address=bs.issuer_address or "",

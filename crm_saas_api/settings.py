@@ -149,6 +149,9 @@ CORS_ALLOW_HEADERS = [
     # after its first successful fetch.
     "if-none-match",
     "if-modified-since",
+    # Retry-safe POSTs (telephony click-to-call). Same failure mode as above: a
+    # cross-origin browser would never send the request at all.
+    "idempotency-key",
 ]
 
 # Response headers JavaScript is allowed to read.
@@ -244,6 +247,8 @@ INSTALLED_APPS = [
     "sync",
     "validation",
     "realtime",
+    "telephony",
+    "object_storage",
     "reports",
     "drf_spectacular",
     "drf_spectacular_sidecar",
@@ -359,13 +364,16 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 (MEDIA_ROOT / "fonts").mkdir(parents=True, exist_ok=True)
 
-# Tenant chat attachments: "local" (Django FileField under MEDIA_ROOT) or "supabase"
-TENANT_CHAT_STORAGE = (os.getenv("TENANT_CHAT_STORAGE", "local") or "local").strip().lower()
-SUPABASE_URL = (os.getenv("SUPABASE_URL", "") or "").strip().rstrip("/")
-SUPABASE_SERVICE_ROLE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()
-SUPABASE_CHAT_BUCKET = (os.getenv("SUPABASE_CHAT_BUCKET", "tenant-chat") or "tenant-chat").strip()
+# Object storage: Cloudflare R2 for media, backups and call recordings, or local
+# disk under MEDIA_ROOT when no R2 endpoint is configured (dev, CI). One set of
+# env vars (R2_*); see docs/STORAGE.md and object_storage/config.py. The old
+# RECORDING_S3_* / TELEPHONY_RECORDING_BUCKET / AWS_* names still work as fallbacks.
+from object_storage.config import storages_from_env  # noqa: E402
 
-# Backups directory
+STORAGES, OBJECT_STORAGE_BACKEND, RECORDING_STORAGE_BACKEND = storages_from_env()
+
+# Local working directory for backup files (the pre-restore snapshot of the live
+# database). The backups themselves are kept in the "backups" storage.
 BACKUP_ROOT = Path(MEDIA_ROOT / "backups")
 BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -687,16 +695,6 @@ DEMO_META_ACCOUNT_USERNAME = os.getenv("DEMO_META_ACCOUNT_USERNAME", "")
 DEMO_META_ACCOUNT_EMAIL = os.getenv("DEMO_META_ACCOUNT_EMAIL", "")
 DEMO_META_ACCOUNT_2FA_CODE = os.getenv("DEMO_META_ACCOUNT_2FA_CODE", "")
 
-# ============================================================================
-# Call recording storage (local disk or S3-compatible e.g. Cloudflare R2)
-# ============================================================================
-
-RECORDING_STORAGE_BACKEND = (
-    os.getenv("RECORDING_STORAGE_BACKEND", "local") or "local"
-).strip().lower()
-RECORDING_S3_BUCKET = (os.getenv("RECORDING_S3_BUCKET", "") or "").strip()
-RECORDING_S3_ENDPOINT_URL = (os.getenv("RECORDING_S3_ENDPOINT_URL", "") or "").strip()
-RECORDING_S3_REGION = (os.getenv("RECORDING_S3_REGION", "") or "").strip()
 
 # ============================================================================
 # Firebase Cloud Messaging
@@ -781,6 +779,82 @@ PUSH_QUEUE_ENABLED = os.getenv("PUSH_QUEUE_ENABLED", "").strip().lower() in (
     "true",
     "yes",
 )
+
+# Loop Cloud PBX provisioning jobs run on their own single-worker cluster so a
+# compile never competes with pushes on the main queue (CRM-pbx ADR 0001):
+#
+#     Q_CLUSTER_NAME=telephony python manage.py qcluster
+#
+# Same switch semantics as PUSH_QUEUE_ENABLED: off until that cluster runs; while
+# off, jobs run inline after commit (a compile is a few ms and touches no node).
+Q_CLUSTER["ALT_CLUSTERS"] = {
+    "telephony": {"workers": 1, "timeout": 120, "retry": 180, "recycle": 200},
+}
+TELEPHONY_QUEUE_ENABLED = os.getenv("TELEPHONY_QUEUE_ENABLED", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+# How WebRTC extensions authenticate (CRM-pbx contract section 4 / 10):
+#   "static" - digest secret rendered into the node config (dev; no Kamailio)
+#   "edge"   - Kamailio auth_ephemeral at the edge; no auth section for WebRTC
+TELEPHONY_WEBRTC_AUTH = os.getenv("TELEPHONY_WEBRTC_AUTH", "static").strip().lower()
+# Browser softphone (GET /telephony/me/webrtc-credentials, contract section 4).
+# "edge": short-lived HMAC credentials Kamailio (auth_ephemeral) and coturn
+# (use-auth-secret) verify with these shared secrets.
+TELEPHONY_SIP_WS_URI = os.getenv("TELEPHONY_SIP_WS_URI", "").strip()  # wss://sip.<domain>/ws
+TELEPHONY_SIP_DOMAIN = os.getenv("TELEPHONY_SIP_DOMAIN", "").strip()  # sip.<domain>
+# Private Kamailio listener used by Asterisk for edge-mode agent and carrier
+# traffic. It is platform configuration, never tenant input.
+TELEPHONY_SIP_EDGE_PROXY = os.getenv("TELEPHONY_SIP_EDGE_PROXY", "").strip()  # 127.0.0.1:5065
+TELEPHONY_TURN_URLS = [u.strip() for u in os.getenv("TELEPHONY_TURN_URLS", "").split(",") if u.strip()]
+
+
+def _telephony_secret(name):
+    """Read an edge secret directly or from a restricted systemd credential file."""
+    path = os.getenv(f"{name}_FILE", "").strip()
+    if path:
+        try:
+            return Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ImproperlyConfigured(f"Cannot read {name}_FILE") from exc
+    return os.getenv(name, "")
+
+
+PBX_SIP_EPHEMERAL_SECRET = _telephony_secret("PBX_SIP_EPHEMERAL_SECRET")
+PBX_TURN_SECRET = _telephony_secret("PBX_TURN_SECRET")
+TELEPHONY_CREDENTIAL_TTL_SECONDS = int(os.getenv("TELEPHONY_CREDENTIAL_TTL_SECONDS", str(8 * 3600)))
+# "static" auth (dev stack, no Kamailio) hands the browser the extension's digest
+# secret. Never in production: refused unless DEBUG or this explicit opt-in.
+TELEPHONY_ALLOW_STATIC_WEBRTC = os.getenv("TELEPHONY_ALLOW_STATIC_WEBRTC", "").strip().lower() in ("1", "true", "yes")
+# CRM -> worker call-control API (private link), seconds.
+TELEPHONY_WORKER_TIMEOUT = float(os.getenv("TELEPHONY_WORKER_TIMEOUT", "5"))
+# After a compile commits, nudge the home node's worker (POST /v1/apply-now) so the
+# applier pulls within about a second instead of its 15 s poll. Off by default:
+# tests and dev without a worker must never try to reach the private link.
+TELEPHONY_APPLY_NUDGE = os.getenv("TELEPHONY_APPLY_NUDGE", "").strip().lower() in ("1", "true", "yes")
+TELEPHONY_APPLY_NUDGE_TIMEOUT = float(os.getenv("TELEPHONY_APPLY_NUDGE_TIMEOUT", "1.5"))
+# Outbound fraud limits every node enforces per tenant (CRM-pbx contract section 6,
+# fraud; shipped in each artifact manifest). A tenant's PbxTenant.fraud_limits,
+# set by the platform operator, overrides keys here. "block" stops the tenant's
+# outbound calls on the node at once and suspends it until an operator resumes it.
+TELEPHONY_FRAUD_DEFAULTS = {
+    "max_calls_per_hour": int(os.getenv("TELEPHONY_FRAUD_MAX_CALLS_PER_HOUR", "120")),
+    "max_new_destinations_per_hour": int(os.getenv("TELEPHONY_FRAUD_MAX_NEW_DESTINATIONS_PER_HOUR", "60")),
+    "max_international_share": float(os.getenv("TELEPHONY_FRAUD_MAX_INTERNATIONAL_SHARE", "0.5")),
+    "min_calls_for_share": int(os.getenv("TELEPHONY_FRAUD_MIN_CALLS_FOR_SHARE", "10")),
+    "home_prefixes": [p.strip() for p in os.getenv("TELEPHONY_FRAUD_HOME_PREFIXES", "+964").split(",") if p.strip()],
+    "premium_prefixes": [p.strip() for p in os.getenv("TELEPHONY_FRAUD_PREMIUM_PREFIXES", "").split(",") if p.strip()],
+    "action": os.getenv("TELEPHONY_FRAUD_ACTION", "block").strip().lower(),
+}
+# Emergency numbers (docs/TELEPHONY.md, Emergency calls): every tenant's phones can dial
+# them through the tenant's own trunk, even while its outbound calling is suspended
+# (billing, plan, fraud or platform), and each call alerts the company's admins.
+# No extension may use one. The default is the commonly cited Iraqi set and must be
+# confirmed with the carriers and the regulator before commercialization (spec §14).
+TELEPHONY_EMERGENCY_NUMBERS = [
+    n.strip() for n in os.getenv("TELEPHONY_EMERGENCY_NUMBERS", "104,115,122,112,911").split(",") if n.strip()
+]
 
 # Broker: Redis in production, ORM as the fallback.
 #

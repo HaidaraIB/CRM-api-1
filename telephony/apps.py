@@ -1,0 +1,7 @@
+from django.apps import AppConfig
+
+
+class TelephonyConfig(AppConfig):
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "telephony"
+    verbose_name = "Telephony (Loop Cloud PBX)"

@@ -5,6 +5,7 @@ from django.db import models
 from django.db.models import F, Q
 
 from companies.models import Company
+from object_storage.paths import TenantUploadTo
 
 
 class ChatConversation(models.Model):
@@ -129,7 +130,7 @@ class ChatMessage(models.Model):
         related_name="forwards",
     )
     attachment = models.FileField(
-        upload_to="tenant_chat/%Y/%m/%d/",
+        upload_to=TenantUploadTo("tenant_chat/%Y/%m/%d", company="conversation.company_id"),
         max_length=500,
         null=True,
         blank=True,
@@ -157,7 +158,7 @@ class ChatMessage(models.Model):
         max_length=512,
         blank=True,
         default="",
-        help_text="Supabase Storage object path when TENANT_CHAT_STORAGE=supabase (empty for local FileField).",
+        help_text="Legacy object path; unused (files live in the attachment FileField).",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -512,6 +512,7 @@ class UserSerializer(serializers.ModelSerializer):
                 "can_manage_communication": limited_admin.can_manage_communication,
                 "can_manage_content": limited_admin.can_manage_content,
                 "can_manage_demo_bookings": limited_admin.can_manage_demo_bookings,
+                "can_manage_telephony": limited_admin.can_manage_telephony,
                 "can_manage_settings": limited_admin.can_manage_settings,
                 "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
             }
@@ -819,6 +820,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     "can_manage_communication": limited_admin.can_manage_communication,
                     "can_manage_content": limited_admin.can_manage_content,
                     "can_manage_demo_bookings": limited_admin.can_manage_demo_bookings,
+                    "can_manage_telephony": limited_admin.can_manage_telephony,
                     "can_manage_settings": limited_admin.can_manage_settings,
                     "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
                 }
@@ -905,6 +907,7 @@ def build_user_auth_payload(user, request=None):
                 "can_manage_communication": limited_admin.can_manage_communication,
                 "can_manage_content": limited_admin.can_manage_content,
                 "can_manage_demo_bookings": limited_admin.can_manage_demo_bookings,
+                "can_manage_telephony": limited_admin.can_manage_telephony,
                 "can_manage_settings": limited_admin.can_manage_settings,
                 "can_manage_limited_admins": limited_admin.can_manage_limited_admins,
             },
@@ -1561,6 +1564,7 @@ class LimitedAdminSerializer(serializers.ModelSerializer):
             'can_manage_communication',
             'can_manage_content',
             'can_manage_demo_bookings',
+            'can_manage_telephony',
             'can_manage_settings',
             'can_manage_limited_admins',
         ]
@@ -1612,6 +1616,7 @@ class CreateLimitedAdminSerializer(serializers.Serializer):
     can_manage_communication = serializers.BooleanField(default=False)
     can_manage_content = serializers.BooleanField(default=False)
     can_manage_demo_bookings = serializers.BooleanField(default=False)
+    can_manage_telephony = serializers.BooleanField(default=False)
     can_manage_settings = serializers.BooleanField(default=False)
     can_manage_limited_admins = serializers.BooleanField(default=False)
     
@@ -1650,6 +1655,7 @@ class CreateLimitedAdminSerializer(serializers.Serializer):
             'can_manage_communication': validated_data.pop('can_manage_communication', False),
             'can_manage_content': validated_data.pop('can_manage_content', False),
             'can_manage_demo_bookings': validated_data.pop('can_manage_demo_bookings', False),
+            'can_manage_telephony': validated_data.pop('can_manage_telephony', False),
             'can_manage_settings': validated_data.pop('can_manage_settings', False),
             'can_manage_limited_admins': validated_data.pop('can_manage_limited_admins', False),
         }

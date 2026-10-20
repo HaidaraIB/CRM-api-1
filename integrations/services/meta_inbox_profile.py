@@ -23,6 +23,9 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.utils import timezone
 
+from object_storage.backends import is_remote
+from object_storage.paths import company_prefix
+
 from ..models import MetaInboxConnection, SocialChannel, SocialContact
 from ..oauth_utils import MetaInboxOAuth
 
@@ -235,15 +238,25 @@ def _store_profile_pic(contact: SocialContact, url: str) -> tuple[str, str]:
     if not data:
         return '', ''
 
-    key = f"social_profiles/{contact.company_id}/{contact.channel}_{contact.external_id}.jpg"
+    key = f"{company_prefix(contact.company_id)}/social_profiles/{contact.channel}_{contact.external_id}.jpg"
     if default_storage.exists(key):
         default_storage.delete(key)
     saved = default_storage.save(key, ContentFile(data))
+    return saved, _persistable_url(saved)
+
+
+def _persistable_url(key: str) -> str:
+    """
+    A URL that may be stored in ``profile_pic_url``: the local /media/ URL. Object
+    storage URLs are presigned and expire, so none is stored; ``contact_avatar_url``
+    signs a fresh one from ``avatar_path`` on every read.
+    """
+    if is_remote(default_storage):
+        return ''
     try:
-        stored_url = default_storage.url(saved)
+        return absolute_profile_pic_url(default_storage.url(key))
     except Exception:
-        stored_url = saved
-    return saved, absolute_profile_pic_url(stored_url)
+        return key
 
 
 def fetch_contact_profile(contact: SocialContact, *, page_token: str) -> dict:
@@ -386,13 +399,6 @@ def ensure_contact_profile(contact: SocialContact, connection, *, force: bool = 
         if public_url and contact.profile_pic_url != public_url:
             contact.profile_pic_url = public_url
             update_fields.append('profile_pic_url')
-        elif avatar_path and not public_url:
-            # Keep profile_pic_url in sync via storage url when absolute failed
-            try:
-                contact.profile_pic_url = absolute_profile_pic_url(default_storage.url(avatar_path))
-                update_fields.append('profile_pic_url')
-            except Exception:
-                pass
 
         contact.save(update_fields=list(dict.fromkeys(update_fields)))
     except Exception:
