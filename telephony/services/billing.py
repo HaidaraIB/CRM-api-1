@@ -1,10 +1,12 @@
 """
-Subscription → phone system (plan: "end_expired_subscriptions queues a SUSPEND job").
+Subscription/pilot policy → phone system ("end_expired_subscriptions" queues
+a SUSPEND job).
 
 Desk phones dial out through the PBX without ever asking the CRM, so an expired
-subscription (or a plan without ``telephony``) must reach the node: outbound calls
-are suspended (blocked on the node at once, then recompiled). Incoming and internal
-calls keep working. When the company is entitled again, the suspension is lifted.
+subscription, or loss of both plan entitlement and explicit pilot approval, must
+reach the node: outbound calls are suspended (blocked on the node at once, then
+recompiled). Incoming and internal calls keep working. When the company is
+entitled again, the suspension is lifted.
 
 Run as a reconciliation from ``end_expired_subscriptions`` (every 15 minutes), so
 the payment path is untouched: a renewal resumes calling within one run. Only
@@ -28,14 +30,14 @@ REASON = "Subscription ended or the plan has no phone system"
 
 
 def entitled(company, *, now=None) -> bool:
-    from subscriptions.entitlements import build_company_entitlements
+    from integrations.policy import is_integration_allowed
     from subscriptions.models import Subscription
 
     now = now or timezone.now()
     sub = Subscription.objects.filter(company=company, is_active=True, end_date__gt=now).select_related("plan").first()
     if sub is None:
         return False
-    return bool(build_company_entitlements(company, subscription=sub).features.get("telephony", False))
+    return is_integration_allowed(company, "telephony")
 
 
 def reconcile(*, now=None) -> dict:

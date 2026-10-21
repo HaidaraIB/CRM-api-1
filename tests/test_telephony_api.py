@@ -22,6 +22,44 @@ def test_plan_without_telephony_is_forbidden(admin_user, subscription):
     assert c.get(f"{BASE}/extensions/").status_code == 403
 
 
+def test_explicit_pilot_approval_bypasses_missing_plan_entitlement(admin_user, company, subscription):
+    from settings.models import SystemSettings
+
+    settings_obj = SystemSettings.get_settings()
+    settings_obj.integration_policies = {
+        "telephony": {
+            "global_enabled": False,
+            "global_message": "",
+            "company_overrides": {str(company.id): {"enabled": True, "message": ""}},
+        },
+    }
+    settings_obj.save(update_fields=["integration_policies"])
+    c = APIClient()
+    c.force_authenticate(admin_user)
+
+    policy_response = c.get("/api/v1/integrations/policy/")
+    assert policy_response.status_code == 200
+    assert api_body(policy_response)["telephony"] == {"enabled": True, "message": "", "scope": "exception"}
+    assert c.get(f"{BASE}/status/").status_code == 200
+
+
+def test_explicit_pilot_approval_does_not_bypass_active_subscription(company):
+    from integrations.policy import is_integration_allowed
+    from settings.models import SystemSettings
+
+    settings_obj = SystemSettings.get_settings()
+    settings_obj.integration_policies = {
+        "telephony": {
+            "global_enabled": False,
+            "global_message": "",
+            "company_overrides": {str(company.id): {"enabled": True, "message": ""}},
+        },
+    }
+    settings_obj.save(update_fields=["integration_policies"])
+
+    assert is_integration_allowed(company, "telephony") is False
+
+
 def test_kill_switch_blocks_telephony(admin_client, company):
     from settings.models import SystemSettings
 
@@ -74,7 +112,7 @@ def test_admin_provision_requires_explicit_pilot_approval(
 
 
 def test_admin_provision_allows_explicit_pilot_company(
-    company, pbx_node, superadmin_client, telephony_subscription,
+    company, pbx_node, superadmin_client, subscription,
 ):
     from settings.models import SystemSettings
 

@@ -63,6 +63,24 @@ def test_plan_without_telephony_suspends(live, telephony_plan):
     assert billing.reconcile()["suspended"] == 1
 
 
+def test_explicit_pilot_approval_keeps_planless_tenant_entitled(live, telephony_plan, company):
+    from settings.models import SystemSettings
+
+    telephony_plan.features = {"telephony": False}
+    telephony_plan.save(update_fields=["features"])
+    settings_obj = SystemSettings.get_settings()
+    settings_obj.integration_policies = {
+        "telephony": {
+            "global_enabled": False,
+            "global_message": "",
+            "company_overrides": {str(company.id): {"enabled": True, "message": ""}},
+        },
+    }
+    settings_obj.save(update_fields=["integration_policies"])
+
+    assert billing.reconcile()["suspended"] == 0
+
+
 def test_node_that_cannot_unblock_keeps_the_suspension(live, company, worker):
     _expire(company)
     billing.reconcile()

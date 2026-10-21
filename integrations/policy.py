@@ -105,18 +105,47 @@ def get_effective_integration_policy(policies: dict[str, Any] | None, *, company
 
 
 def is_integration_allowed(company, platform: str) -> bool:
-    """True when plan and admin policy allow the integration platform."""
+    """True when the company's combined plan and admin policy allows a platform."""
+    return bool(get_company_integration_access(company, platform)["enabled"])
+
+
+def get_company_integration_access(
+    company,
+    platform: str,
+    *,
+    policies: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the effective tenant gate, including the PBX pilot exception.
+
+    Telephony is absent from normal plans during the pilot. Its explicit
+    company exception is therefore also the temporary feature entitlement.
+    This exception is deliberately narrow: global telephony remains off, and
+    plan rules for every established integration are unchanged.
+    """
     if not company:
-        return False
-    plan_gate = get_plan_integration_access(company, platform)
-    if not plan_gate["enabled"]:
-        return False
+        return {
+            "enabled": False,
+            "message": "This integration is not available for this company.",
+            "scope": "company",
+        }
+
+    if policies is None:
+        policies = SystemSettings.get_settings().integration_policies or {}
     effective = get_effective_integration_policy(
-        SystemSettings.get_settings().integration_policies or {},
+        policies,
         company_id=company.id,
         platform=platform,
     )
-    return bool(effective["enabled"])
+    if platform == "telephony" and effective["enabled"] and effective["scope"] == "exception":
+        # The pilot grant replaces only the missing plan feature. It must not
+        # make an unsubscribed or expired company eligible for provisioning.
+        if build_company_entitlements(company).plan_id is not None:
+            return effective
+
+    plan_gate = get_plan_integration_access(company, platform)
+    if not plan_gate["enabled"]:
+        return {key: plan_gate[key] for key in ("enabled", "message", "scope")}
+    return effective
 
 
 def is_any_sms_integration_allowed(company) -> bool:

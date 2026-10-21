@@ -29,6 +29,7 @@ from ..models import (
 )
 from ..policy import (
     INTEGRATION_POLICY_PLATFORMS,
+    get_company_integration_access,
     get_effective_integration_policy,
     get_plan_integration_access,
 )
@@ -85,18 +86,10 @@ def integration_policy_view(request):
     policies = settings_obj.integration_policies or {}
     data = {}
     for platform in INTEGRATION_POLICY_PLATFORMS:
-        plan_gate = get_plan_integration_access(company, platform)
-        if not plan_gate["enabled"]:
-            data[platform] = {
-                "enabled": False,
-                "message": plan_gate["message"],
-                "scope": "plan",
-            }
-            continue
-        data[platform] = get_effective_integration_policy(
-            policies,
-            company_id=company.id,
-            platform=platform,
+        data[platform] = get_company_integration_access(
+            company,
+            platform,
+            policies=policies,
         )
     return success_response(data=data)
 

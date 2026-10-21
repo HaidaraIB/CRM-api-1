@@ -9,8 +9,8 @@ from .models import PbxNode
 
 class HasTelephonyFeature(permissions.BasePermission):
     """
-    The company's plan includes ``telephony`` (a paid add-on, off by default) and
-    the platform kill switch (integration policy ``telephony``) allows it.
+    The company has normal plan access, or an explicit temporary pilot grant,
+    and the platform telephony policy allows it.
     """
 
     message = "Telephony is not available for your company."
