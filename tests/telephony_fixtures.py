@@ -18,6 +18,7 @@ from rest_framework.test import APIClient
 
 __all__ = [
     "fernet_key",
+    "telephony_policy_enabled",
     "telephony_plan",
     "telephony_subscription",
     "other_telephony_subscription",
@@ -45,6 +46,18 @@ def fernet_key(settings):
     enc._fernet_instance = None
     yield
     enc._fernet_instance = None
+
+
+@pytest.fixture(autouse=True)
+def telephony_policy_enabled(db):
+    """Most telephony tests exercise an approved company; production defaults remain off."""
+    from settings.models import SystemSettings
+
+    system_settings = SystemSettings.get_settings()
+    system_settings.integration_policies = {
+        "telephony": {"global_enabled": True, "global_message": "", "company_overrides": {}},
+    }
+    system_settings.save(update_fields=["integration_policies"])
 
 
 @pytest.fixture

@@ -26,6 +26,7 @@ from rest_framework.views import APIView
 from accounts.permissions import CanManageTelephony, HasActiveSubscription
 from companies.models import Company
 from integrations.encryption import encrypt_token
+from integrations.policy import is_integration_allowed
 from subscriptions.entitlements import require_quota
 
 from . import contract
@@ -632,6 +633,14 @@ class AdminPbxTenantViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, vi
     @action(detail=False, methods=["post"], url_path=r"(?P<company_id>\d+)/provision")
     def provision(self, request, company_id=None):
         company = get_object_or_404(Company, pk=company_id)
+        if not is_integration_allowed(company, "telephony"):
+            return Response(
+                {
+                    "code": "telephony_not_approved",
+                    "message": "Approve this company as the PBX pilot before provisioning it.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         tenant = provisioning.ensure_tenant(company)
         return self._job_response(tenant, provisioning.Job.Kind.PROVISION, request)
 

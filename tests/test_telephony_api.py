@@ -31,6 +31,69 @@ def test_kill_switch_blocks_telephony(admin_client, company):
     assert admin_client.get(f"{BASE}/status/").status_code == 403
 
 
+def test_telephony_policy_defaults_to_off(company):
+    from integrations.policy import get_effective_integration_policy
+
+    policy = get_effective_integration_policy({}, company_id=company.id, platform="telephony")
+    assert policy["enabled"] is False
+
+
+def test_system_settings_cannot_globally_enable_telephony():
+    from settings.serializers import SystemSettingsSerializer
+
+    serializer = SystemSettingsSerializer()
+    policies = serializer.validate_integration_policies(
+        {
+            "telephony": {
+                "global_enabled": True,
+                "global_message": "",
+                "company_overrides": {},
+            },
+        },
+    )
+
+    assert policies["telephony"]["global_enabled"] is False
+
+
+def test_admin_provision_requires_explicit_pilot_approval(
+    company, pbx_node, superadmin_client, telephony_subscription,
+):
+    from settings.models import SystemSettings
+
+    settings_obj = SystemSettings.get_settings()
+    settings_obj.integration_policies = {
+        "telephony": {"global_enabled": False, "global_message": "", "company_overrides": {}},
+    }
+    settings_obj.save(update_fields=["integration_policies"])
+
+    response = superadmin_client.post(f"/api/v1/admin/telephony/tenants/{company.id}/provision/")
+
+    assert response.status_code == 403
+    assert api_body(response)["code"] == "telephony_not_approved"
+    assert not PbxTenant.objects.filter(company=company).exists()
+
+
+def test_admin_provision_allows_explicit_pilot_company(
+    company, pbx_node, superadmin_client, telephony_subscription,
+):
+    from settings.models import SystemSettings
+
+    settings_obj = SystemSettings.get_settings()
+    settings_obj.integration_policies = {
+        "telephony": {
+            "global_enabled": False,
+            "global_message": "",
+            "company_overrides": {str(company.id): {"enabled": True, "message": ""}},
+        },
+    }
+    settings_obj.save(update_fields=["integration_policies"])
+
+    response = superadmin_client.post(f"/api/v1/admin/telephony/tenants/{company.id}/provision/")
+
+    assert response.status_code == 202
+    assert PbxTenant.objects.filter(company=company).exists()
+
+
 def test_employees_cannot_read_pbx_config(employee_client):
     assert employee_client.get(f"{BASE}/trunks/").status_code == 403
     assert employee_client.get(f"{BASE}/extensions/").status_code == 403
@@ -287,7 +350,7 @@ def test_tenant_admins_cannot_use_platform_endpoints(admin_client, company):
     assert admin_client.post(f"/api/v1/admin/telephony/tenants/{company.id}/provision/").status_code == 403
 
 
-def test_admin_suspend_resume(superadmin_client, company, pbx_node):
+def test_admin_suspend_resume(superadmin_client, company, pbx_node, telephony_subscription):
     superadmin_client.post(f"/api/v1/admin/telephony/tenants/{company.id}/provision/")
     resp = superadmin_client.post(f"/api/v1/admin/telephony/tenants/{company.id}/suspend/", {"reason": "fraud"}, format="json")
     assert resp.status_code == 202

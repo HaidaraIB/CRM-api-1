@@ -18,9 +18,9 @@ from .models import (
     BillingSettings,
 )
 from integrations.policy import (
-    INTEGRATION_POLICY_DEFAULTS,
     INTEGRATION_POLICY_PLATFORMS,
     apply_integration_policy_side_effects,
+    integration_policy_default_enabled,
 )
 from .feature_policy import normalize_feature_policies
 from .seed_i18n import canonical_seed_name
@@ -646,7 +646,10 @@ class SystemSettingsSerializer(serializers.ModelSerializer):
             raw = value.get(platform) or {}
             if not isinstance(raw, dict):
                 raw = {}
-            global_enabled = raw.get("global_enabled", INTEGRATION_POLICY_DEFAULTS["global_enabled"])
+            global_enabled = raw.get("global_enabled", integration_policy_default_enabled(platform))
+            if platform == "telephony":
+                # PBX rollout is pilot-only until the production acceptance gates are complete.
+                global_enabled = False
             global_message = (raw.get("global_message") or "").strip()
             company_overrides_raw = raw.get("company_overrides") or {}
             company_overrides = {}

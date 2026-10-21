@@ -50,6 +50,11 @@ INTEGRATION_POLICY_DEFAULTS = {
 }
 
 
+def integration_policy_default_enabled(platform: str) -> bool:
+    """Telephony is deny-by-default; established integrations keep their current default."""
+    return False if platform == "telephony" else bool(INTEGRATION_POLICY_DEFAULTS["global_enabled"])
+
+
 def _is_global_exception(company_policy: dict[str, Any] | None) -> bool:
     """Explicit allow-list entry when the platform is globally disabled."""
     return isinstance(company_policy, dict) and company_policy.get("enabled") is True
@@ -68,7 +73,7 @@ def _get_platform_policy(policies: dict[str, Any] | None, platform: str) -> dict
     if not isinstance(raw, dict):
         raw = {}
     return {
-        "global_enabled": bool(raw.get("global_enabled", INTEGRATION_POLICY_DEFAULTS["global_enabled"])),
+        "global_enabled": bool(raw.get("global_enabled", integration_policy_default_enabled(platform))),
         "global_message": (raw.get("global_message") or "").strip(),
         "company_overrides": raw.get("company_overrides") if isinstance(raw.get("company_overrides"), dict) else {},
     }
