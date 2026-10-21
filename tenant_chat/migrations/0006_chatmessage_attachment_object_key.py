@@ -14,7 +14,7 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 blank=True,
                 default="",
-                help_text="Supabase Storage object path when TENANT_CHAT_STORAGE=supabase (empty for local FileField).",
+                help_text="Legacy object path; unused (files live in the attachment FileField).",
                 max_length=512,
             ),
         ),

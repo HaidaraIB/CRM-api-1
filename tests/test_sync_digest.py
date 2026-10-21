@@ -287,6 +287,7 @@ class TestSyncDigestSliceVersions:
         "leads",
         "deals",
         "todos",
+        "telephony",
     }
 
     def _versions(self, client):

@@ -1,4 +1,10 @@
-"""Call recording object storage (local dev, S3/R2 prod)."""
+"""
+Call recording object storage: the ``recordings`` alias in ``settings.STORAGES``.
+
+R2 (``loop-pbx-recordings``) in production, ``MEDIA_ROOT/pbx_recordings`` on local
+disk otherwise. PBX recordings are uploaded by the node itself (CRM-pbx contract
+§7); WhatsApp call recordings are saved here by the API. See docs/STORAGE.md.
+"""
 
 from __future__ import annotations
 
@@ -6,32 +12,19 @@ import logging
 import uuid
 from pathlib import Path
 
-from django.conf import settings
+from django.core.files.base import ContentFile
+
+from object_storage.backends import is_remote, recordings_storage
 
 logger = logging.getLogger(__name__)
 
 
-def _s3_client():
-    """Lazy boto3 import — only required when RECORDING_STORAGE_BACKEND is s3 or r2."""
-    try:
-        import boto3
-    except ImportError as exc:
-        raise RuntimeError(
-            "boto3 is required for S3/R2 recording storage. Install with: pip install boto3"
-        ) from exc
-
-    client_kwargs: dict = {}
-    endpoint = (getattr(settings, "RECORDING_S3_ENDPOINT_URL", "") or "").strip()
-    if endpoint:
-        client_kwargs["endpoint_url"] = endpoint
-    region = (getattr(settings, "RECORDING_S3_REGION", "") or "").strip()
-    if region:
-        client_kwargs["region_name"] = region
-    return boto3.client("s3", **client_kwargs)
+def storage():
+    return recordings_storage()
 
 
-def _backend_name() -> str:
-    return (getattr(settings, "RECORDING_STORAGE_BACKEND", "local") or "local").strip().lower()
+def is_object_storage() -> bool:
+    return is_remote(storage())
 
 
 def build_storage_key(
@@ -55,69 +48,26 @@ def save_recording(
     original_filename: str,
     prefix: str = "recording",
 ) -> str:
-    """Persist recording bytes; returns opaque storage key."""
-    key = build_storage_key(
-        company_id, linkedid, original_filename, prefix=prefix
-    )
-    backend = _backend_name()
-
-    if backend in ("s3", "r2"):
-        return _save_s3(key, file_bytes)
-
-    return _save_local(key, file_bytes)
-
-
-def _save_local(key: str, file_bytes: bytes) -> str:
-    root = Path(settings.MEDIA_ROOT) / "pbx_recordings"
-    dest = root / key
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(file_bytes)
-    logger.info("Saved recording locally key=%s bytes=%s", key, len(file_bytes))
-    return key
-
-
-def _save_s3(key: str, file_bytes: bytes) -> str:
-    bucket = (getattr(settings, "RECORDING_S3_BUCKET", "") or "").strip()
-    if not bucket:
-        raise RuntimeError("RECORDING_S3_BUCKET is not configured")
-
-    client = _s3_client()
-    client.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=file_bytes,
-        ContentType=_guess_content_type(key),
-    )
-    logger.info("Saved recording to S3 key=%s bytes=%s", key, len(file_bytes))
-    return key
+    """Persist recording bytes; returns the storage key."""
+    key = build_storage_key(company_id, linkedid, original_filename, prefix=prefix)
+    content = ContentFile(file_bytes)
+    content.content_type = guess_content_type(key)
+    saved = storage().save(key, content)
+    logger.info("recording.saved key=%s bytes=%s", saved, len(file_bytes))
+    return saved
 
 
 def open_recording(storage_key: str):
-    """Return a readable binary file-like object for streaming."""
+    """A readable binary file object for streaming."""
     if not storage_key:
         raise FileNotFoundError("empty storage key")
-    backend = _backend_name()
-    if backend in ("s3", "r2"):
-        return _open_s3(storage_key)
-    return _open_local(storage_key)
+    store = storage()
+    if not is_remote(store) and not store.exists(storage_key):
+        raise FileNotFoundError(storage_key)
+    return store.open(storage_key, "rb")
 
 
-def _open_local(storage_key: str):
-    path = Path(settings.MEDIA_ROOT) / "pbx_recordings" / storage_key
-    if not path.is_file():
-        raise FileNotFoundError(str(path))
-    return path.open("rb")
-
-
-def _open_s3(storage_key: str):
-    bucket = (getattr(settings, "RECORDING_S3_BUCKET", "") or "").strip()
-    if not bucket:
-        raise RuntimeError("RECORDING_S3_BUCKET is not configured")
-    client = _s3_client()
-    return client.get_object(Bucket=bucket, Key=storage_key)["Body"]
-
-
-def _guess_content_type(key: str) -> str:
+def guess_content_type(key: str) -> str:
     ext = Path(key).suffix.lower()
     if ext == ".wav":
         return "audio/wav"

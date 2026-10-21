@@ -3,6 +3,7 @@ from django.db.models import Q
 from django.contrib.auth import get_user_model
 from companies.models import Company
 from .encryption import encrypt_token, decrypt_token
+from object_storage.paths import TenantUploadTo
 
 User = get_user_model()
 
@@ -1055,7 +1056,7 @@ class LeadWhatsAppMessage(models.Model):
         LOCATION = "location", "Location"
 
     attachment = models.FileField(
-        upload_to="whatsapp_chat/%Y/%m/%d/",
+        upload_to=TenantUploadTo("whatsapp_chat/%Y/%m/%d", company="client.company_id"),
         max_length=500,
         null=True,
         blank=True,
@@ -1243,7 +1244,7 @@ class MessageTemplate(models.Model):
         help_text="نص الرأس عند اختيار header_type=text",
     )
     header_media = models.FileField(
-        upload_to="whatsapp_templates/headers/%Y/%m/",
+        upload_to=TenantUploadTo("whatsapp_templates/headers/%Y/%m"),
         max_length=500,
         null=True,
         blank=True,
@@ -1976,7 +1977,7 @@ class SocialMessage(models.Model):
         REEL = "reel", "Reel"
 
     attachment = models.FileField(
-        upload_to="social_chat/%Y/%m/%d/",
+        upload_to=TenantUploadTo("social_chat/%Y/%m/%d", company="conversation.company_id"),
         max_length=500,
         null=True,
         blank=True,

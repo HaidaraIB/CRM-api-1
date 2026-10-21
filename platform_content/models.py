@@ -1,6 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
+from object_storage.backends import public_storage
 
 
 class GuideCategory(models.Model):
@@ -57,6 +58,7 @@ class GuideArticle(models.Model):
     is_published = models.BooleanField(default=False)
     cover_image = models.ImageField(
         upload_to="platform_content/guide/%Y/%m/",
+        storage=public_storage,
         blank=True,
         null=True,
         max_length=500,
@@ -119,6 +121,7 @@ class NewsPost(models.Model):
     )
     cover_image = models.ImageField(
         upload_to="platform_content/news/%Y/%m/",
+        storage=public_storage,
         blank=True,
         null=True,
         max_length=500,

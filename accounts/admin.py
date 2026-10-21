@@ -188,6 +188,7 @@ class LimitedAdminAdmin(admin.ModelAdmin):
                 "can_manage_communication",
                 "can_manage_content",
                 "can_manage_demo_bookings",
+                "can_manage_telephony",
                 "can_manage_settings",
                 "can_manage_limited_admins",
             )

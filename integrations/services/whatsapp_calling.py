@@ -30,7 +30,7 @@ from integrations.services.whatsapp_sender import (
     sender_for_call,
 )
 from integrations.oauth_utils import META_GRAPH_API_BASE_URL
-from integrations.storage.recordings import open_recording, save_recording
+from integrations.storage.recordings import save_recording
 
 logger = logging.getLogger(__name__)
 
@@ -836,9 +836,9 @@ def get_wa_playback_url(call: WhatsAppCall, request=None) -> str | None:
     return path
 
 
-def stream_wa_recording(call: WhatsAppCall):
+def stream_wa_recording_check(call: WhatsAppCall) -> None:
+    """Raise FileNotFoundError unless the call has a stored recording ready to play."""
     if call.recording_status != WhatsAppCallRecordingStatus.READY:
         raise FileNotFoundError("recording not ready")
     if not call.recording_storage_key:
         raise FileNotFoundError("missing storage key")
-    return open_recording(call.recording_storage_key)

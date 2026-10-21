@@ -509,15 +509,15 @@ def test_forward_copies_attachment_to_new_message():
     assert fwd.data["forwarded_from"]["id"] == oid
 
 
+IN_MEMORY_STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
+
 @pytest.mark.django_db
-@override_settings(
-    TENANT_CHAT_STORAGE="supabase",
-    SUPABASE_URL="https://example.supabase.co",
-    SUPABASE_SERVICE_ROLE_KEY="test-service-role",
-    SUPABASE_CHAT_BUCKET="tenant-chat",
-)
-@patch("tenant_chat.supabase_storage.upload_bytes")
-def test_supabase_mode_multipart_sets_object_key(mock_upload):
+@override_settings(STORAGES=IN_MEMORY_STORAGES)
+def test_new_attachments_go_to_default_storage():
     company, owner = _company_with_subscription("t_sb_up")
     emp = _user(company, "emp_sb_up", Role.EMPLOYEE.value)
     owner_client = APIClient()
@@ -528,101 +528,9 @@ def test_supabase_mode_multipart_sets_object_key(mock_upload):
     up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
     r2 = owner_client.post(msg_url, {"body": "sb", "file": up}, format="multipart")
     assert r2.status_code == status.HTTP_201_CREATED
-    mock_upload.assert_called_once()
-    args, _kwargs = mock_upload.call_args
-    assert args[0].startswith(f"company_{company.id}/")
-    assert r2.data.get("attachment_url")
     msg = ChatMessage.objects.get(pk=r2.data["id"])
-    assert msg.attachment_object_key == args[0]
-    assert not (msg.attachment and getattr(msg.attachment, "name", None))
-
-
-@pytest.mark.django_db
-@override_settings(
-    TENANT_CHAT_STORAGE="supabase",
-    SUPABASE_URL="https://example.supabase.co",
-    SUPABASE_SERVICE_ROLE_KEY="test-service-role",
-    SUPABASE_CHAT_BUCKET="tenant-chat",
-)
-@patch("tenant_chat.supabase_storage.upload_bytes")
-@patch("tenant_chat.supabase_storage.download_bytes", return_value=MINI_PNG_BYTES)
-def test_supabase_mode_forward_copies_via_storage(mock_download, mock_upload):
-    company, owner = _company_with_subscription("t_sb_fwd")
-    emp = _user(company, "emp_sb_fwd", Role.EMPLOYEE.value)
-    solo = _user(company, "solo_sb_fwd", Role.EMPLOYEE.value)
-    owner_client = APIClient()
-    owner_client.force_authenticate(user=owner)
-    url = reverse("tenant_chat_conversation-list")
-    r1 = owner_client.post(url, {"with_user_id": emp.id}, format="json")
-    conv_a = r1.data["id"]
-    msg_url_a = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_a})
-    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
-    origin = owner_client.post(msg_url_a, {"body": "pic", "file": up}, format="multipart")
-    assert origin.status_code == status.HTTP_201_CREATED
-    oid = origin.data["id"]
-    conv_b = owner_client.post(url, {"with_user_id": solo.id}, format="json").data["id"]
-    msg_url_b = reverse("tenant_chat_conversation-messages", kwargs={"pk": conv_b})
-    fwd = owner_client.post(
-        msg_url_b,
-        {"body": "look", "forward_from_message_id": oid},
-        format="json",
-    )
-    assert fwd.status_code == status.HTTP_201_CREATED
-    assert mock_download.call_count == 1
-    assert mock_upload.call_count == 2
-    assert fwd.data.get("attachment_url")
-
-
-@pytest.mark.django_db
-@override_settings(
-    TENANT_CHAT_STORAGE="supabase",
-    SUPABASE_URL="",
-    SUPABASE_SERVICE_ROLE_KEY="",
-    SUPABASE_CHAT_BUCKET="tenant-chat",
-)
-def test_supabase_misconfigured_rejects_file_upload():
-    company, owner = _company_with_subscription("t_sb_bad")
-    emp = _user(company, "emp_sb_bad", Role.EMPLOYEE.value)
-    owner_client = APIClient()
-    owner_client.force_authenticate(user=owner)
-    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
-    msg_url = reverse("tenant_chat_conversation-messages", kwargs={"pk": r.data["id"]})
-    up = SimpleUploadedFile("tiny.png", MINI_PNG_BYTES, content_type="image/png")
-    r2 = owner_client.post(msg_url, {"body": "x", "file": up}, format="multipart")
-    assert r2.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-
-
-@pytest.mark.django_db
-@override_settings(
-    TENANT_CHAT_STORAGE="supabase",
-    SUPABASE_URL="https://example.supabase.co",
-    SUPABASE_SERVICE_ROLE_KEY="test-service-role",
-    SUPABASE_CHAT_BUCKET="tenant-chat",
-)
-@patch("tenant_chat.supabase_storage.create_signed_url", return_value="https://signed.example/file?token=1")
-def test_supabase_attachment_get_redirects(mock_sign):
-    company, owner = _company_with_subscription("t_sb_redir")
-    emp = _user(company, "emp_sb_redir", Role.EMPLOYEE.value)
-    owner_client = APIClient()
-    owner_client.force_authenticate(user=owner)
-    emp_client = APIClient()
-    emp_client.force_authenticate(user=emp)
-    r = owner_client.post(reverse("tenant_chat_conversation-list"), {"with_user_id": emp.id}, format="json")
-    conv = ChatConversation.objects.get(pk=r.data["id"])
-    msg = ChatMessage.objects.create(
-        conversation=conv,
-        sender=owner,
-        body="x",
-        attachment_kind="image",
-        attachment_mime="image/png",
-        attachment_size=len(MINI_PNG_BYTES),
-        attachment_object_key=f"company_{company.id}/m0_test.png",
-    )
-    att_url = reverse("tenant_chat_message_attachment", kwargs={"pk": msg.id})
-    dl = emp_client.get(att_url)
-    assert dl.status_code == status.HTTP_302_FOUND
-    assert dl["Location"] == "https://signed.example/file?token=1"
-    mock_sign.assert_called_once()
+    assert msg.attachment.name.startswith(f"companies/{company.id}/tenant_chat/")
+    assert msg.attachment.storage.exists(msg.attachment.name)
 
 
 @pytest.mark.django_db

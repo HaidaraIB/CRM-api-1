@@ -247,54 +247,16 @@ def safe_original_filename(name: str | None, max_len: int = 200) -> str:
 
 
 def message_has_stored_attachment(msg) -> bool:
-    key = getattr(msg, "attachment_object_key", None) or ""
-    if str(key).strip():
-        return True
-    att = getattr(msg, "attachment", None)
+    att =getattr(msg, "attachment", None)
     return bool(att and getattr(att, "name", None))
 
 
 def copy_chat_attachment_from_source(src, dst) -> None:
-    """Duplicate stored file and metadata from src onto dst (e.g. forward)."""
+    """
+    Duplicate stored file and metadata from src onto dst (e.g. forward). The copy
+    lands in dst's FileField (default storage).
+    """
     from django.core.files.base import ContentFile
-
-    from . import supabase_storage as sc
-
-    if sc.is_supabase_chat_storage():
-        dst.attachment_kind = src.attachment_kind
-        dst.attachment_mime = src.attachment_mime or ""
-        dst.attachment_size = src.attachment_size
-        dst.attachment_width = getattr(src, "attachment_width", None)
-        dst.attachment_height = getattr(src, "attachment_height", None)
-        dst.original_filename = src.original_filename or ""
-
-        data: bytes | None = None
-        if getattr(src, "attachment_object_key", None):
-            data = sc.download_bytes(src.attachment_object_key)
-        elif src.attachment:
-            src.attachment.open("rb")
-            try:
-                data = src.attachment.read()
-            finally:
-                src.attachment.close()
-        if data is None:
-            return
-
-        key = sc.build_object_key(dst.conversation.company_id, dst.id, dst.original_filename or "fwd")
-        sc.upload_bytes(key, data, dst.attachment_mime or "application/octet-stream")
-        dst.attachment_object_key = key
-        dst.save(
-            update_fields=[
-                "attachment_kind",
-                "attachment_mime",
-                "attachment_size",
-                "attachment_width",
-                "attachment_height",
-                "original_filename",
-                "attachment_object_key",
-            ]
-        )
-        return
 
     if not src.attachment:
         return
@@ -305,11 +267,11 @@ def copy_chat_attachment_from_source(src, dst) -> None:
     finally:
         src.attachment.close()
     dst.attachment_kind = src.attachment_kind
-    dst.attachment_mime = src.attachment_mime
+    dst.attachment_mime = src.attachment_mime or ""
     dst.attachment_size = src.attachment_size
     dst.attachment_width = getattr(src, "attachment_width", None)
     dst.attachment_height = getattr(src, "attachment_height", None)
-    dst.original_filename = src.original_filename
+    dst.original_filename = src.original_filename or ""
     dst.attachment.save(name, ContentFile(data), save=True)
 
 

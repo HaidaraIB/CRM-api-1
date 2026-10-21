@@ -106,7 +106,8 @@ class TestLeadMessages:
         ][0]
         assert row["conversation"] == conv.id
         assert row["channel"] == "instagram"
-        assert row["contact_name"] == "curious_shopper"
+        # SocialContact.display_name renders usernames as "@handle".
+        assert row["contact_name"] == "@curious_shopper"
         assert row["direction"] == "inbound"
         assert row["body"] == "do you deliver?"
         assert row["created_by_username"] is None

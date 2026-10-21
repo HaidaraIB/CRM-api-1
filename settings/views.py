@@ -1,4 +1,3 @@
-from io import BytesIO
 from pathlib import Path
 
 from rest_framework import viewsets, filters, status
@@ -7,7 +6,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from crm_saas_api.responses import error_response, success_response
-from django.http import FileResponse
+from object_storage.serving import field_file_response
 from django.db import models
 from accounts.permissions import (
     HasActiveSubscription,
@@ -527,21 +526,20 @@ class SystemBackupViewSet(viewsets.ModelViewSet):
                 status_code=status.HTTP_404_NOT_FOUND,
             )
         try:
-            with backup.file.open("rb") as f:
-                content = f.read()
+            # Object storage: a redirect to a presigned GET (attachment); local: streamed.
+            return field_file_response(
+                backup.file,
+                filename=Path(backup.file.name).name,
+                content_type="application/octet-stream",
+                as_attachment=True,
+                cache_control="private, no-store",
+            )
         except (OSError, FileNotFoundError):
             return error_response(
                 "Backup file not found on disk.",
                 code="not_found",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
-        filename = Path(backup.file.name).name
-        response = FileResponse(
-            BytesIO(content),
-            as_attachment=True,
-            filename=filename,
-        )
-        return response
 
 
 class SystemAuditLogViewSet(viewsets.ReadOnlyModelViewSet):

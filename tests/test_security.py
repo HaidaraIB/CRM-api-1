@@ -111,15 +111,19 @@ class TestRateLimiting:
         )
 
     def test_throttled_request_logs_user_identity(
-        self, authenticated_admin, admin_user, settings, caplog
+        self, authenticated_admin, admin_user, monkeypatch, caplog
     ):
         from django.core.cache import cache
+        from rest_framework.throttling import SimpleRateThrottle
+
         cache.clear()
-        rates = dict(settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_RATES") or {})
-        settings.REST_FRAMEWORK = {
-            **settings.REST_FRAMEWORK,
-            "DEFAULT_THROTTLE_RATES": {**rates, "user": "1/minute"},
-        }
+        # DRF binds THROTTLE_RATES once at import, so overriding settings at test
+        # time does not reach it; patch the table the throttles actually read.
+        monkeypatch.setattr(
+            SimpleRateThrottle,
+            "THROTTLE_RATES",
+            {**SimpleRateThrottle.THROTTLE_RATES, "user": "1/minute"},
+        )
 
         with caplog.at_level(logging.WARNING, logger="crm_saas_api.exception_handler"):
             first = authenticated_admin.get("/api/v1/clients/")

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
 
-from django.http import FileResponse, Http404
+from django.http import Http404
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -47,7 +48,7 @@ from integrations.services.whatsapp_calling import (
     send_call_permission_request,
     send_call_permission_request_interactive,
     store_call_recording,
-    stream_wa_recording,
+    stream_wa_recording_check,
     verify_wa_playback_token,
 )
 from integrations.social_inbox_access import (
@@ -63,6 +64,8 @@ from integrations.whatsapp_access import (
 from integrations.services.whatsapp_sender import AccountSender, sender_for_call
 from integrations.whatsapp_account_sync import resolve_whatsapp_account_for_api
 from integrations.views.webhooks_messaging import _integration_gate
+from object_storage.backends import recordings_storage
+from object_storage.serving import file_response
 from sync.conditional import conditional_token, not_modified, tag
 
 logger = logging.getLogger(__name__)
@@ -1345,11 +1348,18 @@ def whatsapp_call_recording_play(request, pk: int):
     if not call:
         return error_response("Not found", status_code=404)
     try:
-        fh = stream_wa_recording(call)
+        stream_wa_recording_check(call)
+        content_type = mimetypes.guess_type(call.recording_storage_key)[0] or "audio/webm"
+        # Object storage: a redirect to a presigned GET; local disk: streamed.
+        return file_response(
+            recordings_storage(),
+            call.recording_storage_key,
+            filename=os.path.basename(call.recording_storage_key),
+            content_type=content_type,
+            cache_control="private, no-store",
+        )
     except FileNotFoundError:
         raise Http404("Recording not found")
-    content_type = mimetypes.guess_type(call.recording_storage_key)[0] or "audio/webm"
-    return FileResponse(fh, content_type=content_type, as_attachment=False)
 
 
 @api_view(["GET", "POST"])

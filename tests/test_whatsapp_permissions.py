@@ -8,6 +8,10 @@ from rest_framework.test import APIClient
 from conftest import api_body
 
 
+def _call_ids(body):
+    return {row["meta_call_id"] for row in body["results"]}
+
+
 def _err_code(response):
     body = api_body(response)
     if isinstance(body, dict):
@@ -113,14 +117,31 @@ class TestWhatsAppChatPermissions:
 
 @pytest.mark.django_db
 class TestWhatsAppCallPermissions:
-    def test_employee_call_disabled_gets_403_on_calls_list(
-        self, authenticated_employee, employee_user
+    def test_employee_call_disabled_sees_no_crm_calls(
+        self, authenticated_employee, employee_user, company
     ):
+        """
+        The calls API also serves inbox calls to social-inbox users, so an employee
+        with WhatsApp calling switched off still gets 200 — but none of the CRM
+        WhatsApp calls, even ones on their own assigned lead.
+        """
+        from crm.models import Client
+        from integrations.models import WhatsAppAccount, WhatsAppCall
+
+        account = WhatsAppAccount.objects.create(company=company, waba_id="w-perm", phone_number_id="pn-perm")
+        lead = Client.objects.create(name="L", company=company, priority="low", type="cold", assigned_to=employee_user)
+        WhatsAppCall.objects.create(company=company, whatsapp_account=account, meta_call_id="c-perm", client=lead)
+
+        employee_user.whatsapp_call_enabled = True
+        employee_user.save(update_fields=["whatsapp_call_enabled"])
+        visible = api_body(authenticated_employee.get("/api/v1/integrations/whatsapp/calls/"))
+        assert _call_ids(visible) == {"c-perm"}
+
         employee_user.whatsapp_call_enabled = False
         employee_user.save(update_fields=["whatsapp_call_enabled"])
         response = authenticated_employee.get("/api/v1/integrations/whatsapp/calls/")
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert _err_code(response) == "whatsapp_access_disabled"
+        assert response.status_code == status.HTTP_200_OK
+        assert _call_ids(api_body(response)) == set()
 
     def test_employee_call_enabled_passes_gate_on_calls_list(
         self, authenticated_employee, employee_user
@@ -139,7 +160,8 @@ class TestWhatsAppCallPermissions:
         )
         assert _err_code(response) != "whatsapp_access_disabled"
 
-    def test_supervisor_without_call_permission_gets_403(self, company, subscription):
+    def test_supervisor_without_call_or_inbox_permission_gets_403(self, company, subscription):
+        """Neither WhatsApp calling nor the social inbox: the calls API is closed."""
         from accounts.models import User, SupervisorPermission
 
         supervisor = User.objects.create_user(
@@ -154,6 +176,7 @@ class TestWhatsAppCallPermissions:
             is_active=True,
             can_manage_leads=True,
             can_manage_whatsapp_calls=False,
+            can_manage_social_inbox=False,
         )
         client = APIClient()
         client.force_authenticate(user=supervisor)
@@ -193,7 +216,7 @@ class TestWhatsAppCallPermissions:
 
 @pytest.mark.django_db
 class TestWhatsAppDeleteLockdown:
-    """Only company owner/admin may delete WhatsApp history."""
+    """Only the company owner may delete WhatsApp history (not other admins)."""
 
     @pytest.fixture
     def wa_client_with_msg(self, company, db):
@@ -294,11 +317,21 @@ class TestWhatsAppDeleteLockdown:
         assert resp2.status_code == status.HTTP_403_FORBIDDEN
         assert _err_code(resp2) == "whatsapp_delete_forbidden"
 
-    def test_admin_can_delete_conversation_and_message(
-        self, authenticated_admin, wa_client_with_msg
-    ):
+    def test_non_owner_admin_cannot_delete(self, authenticated_admin, wa_client_with_msg):
         client, msg = wa_client_with_msg
-        resp_msg = authenticated_admin.delete(
+        resp = authenticated_admin.delete(f"/api/v1/integrations/whatsapp/messages/{msg.id}/")
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert _err_code(resp) == "whatsapp_delete_forbidden"
+        resp = authenticated_admin.delete(f"/api/v1/integrations/whatsapp/conversations/?client={client.id}")
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_owner_can_delete_conversation_and_message(
+        self, owner_user, subscription, wa_client_with_msg
+    ):
+        authenticated_owner = APIClient()
+        authenticated_owner.force_authenticate(user=owner_user)
+        client, msg = wa_client_with_msg
+        resp_msg = authenticated_owner.delete(
             f"/api/v1/integrations/whatsapp/messages/{msg.id}/"
         )
         assert resp_msg.status_code == status.HTTP_204_NO_CONTENT
@@ -312,7 +345,7 @@ class TestWhatsAppDeleteLockdown:
             direction=LeadWhatsAppMessage.DIRECTION_INBOUND,
             is_read=True,
         )
-        resp = authenticated_admin.delete(
+        resp = authenticated_owner.delete(
             f"/api/v1/integrations/whatsapp/conversations/?client={client.id}"
         )
         assert resp.status_code == status.HTTP_200_OK

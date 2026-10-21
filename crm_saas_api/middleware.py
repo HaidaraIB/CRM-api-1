@@ -44,6 +44,8 @@ MAINTENANCE_WHITELIST_PREFIXES = [
     "/api/integrations/webhooks/",
     "/api/integrations/leads/inbound/",
     "/api/integrations/leads/mujeb/",
+    # PBX nodes authenticate with node tokens, not X-API-Key (CRM-pbx contract 5).
+    "/api/internal/telephony/",
 ]
 
 
@@ -121,6 +123,8 @@ class APIKeyValidationMiddleware(MiddlewareMixin):
         "/api/integrations/webhooks/",
         "/api/integrations/leads/inbound/",
         "/api/integrations/leads/mujeb/",
+    # PBX nodes authenticate with node tokens, not X-API-Key (CRM-pbx contract 5).
+    "/api/internal/telephony/",
     ]
 
     def process_request(self, request):

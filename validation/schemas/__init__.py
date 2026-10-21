@@ -22,5 +22,6 @@ def load_all() -> None:
         settings as settings_schemas,
         subscriptions,
         support,
+        telephony,
         tenants,
     )

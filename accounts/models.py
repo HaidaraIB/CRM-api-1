@@ -6,6 +6,7 @@ from enum import Enum
 from datetime import timedelta
 import uuid
 import secrets
+from object_storage.paths import TenantUploadTo
 
 
 class Role(Enum):
@@ -30,7 +31,7 @@ class User(AbstractUser):
     )
     role = models.CharField(max_length=64, choices=Role.choices())
     phone = models.CharField(max_length=20, blank=True, null=True)
-    profile_photo = models.ImageField(upload_to="profile_photos/", null=True, blank=True)
+    profile_photo = models.ImageField(upload_to=TenantUploadTo("profile_photos"), null=True, blank=True)
     email_verified = models.BooleanField(default=False)
     phone_verified = models.BooleanField(
         default=False,
@@ -517,6 +518,10 @@ class LimitedAdmin(models.Model):
         default=False,
         help_text="Can manage public demo bookings and availability",
     )
+    can_manage_telephony = models.BooleanField(
+        default=False,
+        help_text="Can manage Loop Cloud PBX nodes, tenants, number verification and fraud alerts",
+    )
     can_manage_settings = models.BooleanField(default=False)
     can_manage_limited_admins = models.BooleanField(default=False, help_text="Can manage other limited admins")
     
@@ -543,6 +548,7 @@ class LimitedAdmin(models.Model):
             'manage_communication': self.can_manage_communication,
             'manage_content': self.can_manage_content,
             'manage_demo_bookings': self.can_manage_demo_bookings,
+            'manage_telephony': self.can_manage_telephony,
             'manage_settings': self.can_manage_settings,
             'manage_limited_admins': self.can_manage_limited_admins,
         }

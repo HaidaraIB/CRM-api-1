@@ -27,6 +27,7 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 from .views import home
+from telephony import urls as telephony_urls
 from accounts.views import check_registration_availability
 
 # Import viewsets
@@ -463,12 +464,17 @@ v1_patterns = [
     path("reports/teams/", TeamsReportView.as_view(), name="reports_teams"),
     path("reports/marketing/", MarketingReportView.as_view(), name="reports_marketing"),
     path("reports/calls/", CallReportView.as_view(), name="reports_calls"),
-    path("work-sessions/ping/", WorkSessionPingView.as_view(), name="work_session_ping"),
     path("reports/v2/", include("reports.urls")),
+    path("work-sessions/ping/", WorkSessionPingView.as_view(), name="work_session_ping"),
     path("work-sessions/today/", WorkSessionTodayView.as_view(), name="work_session_today"),
     path("work-sessions/summary/", WorkSessionSummaryView.as_view(), name="work_session_summary"),
     path("", include("notifications.urls")),
     path("validation/", include("validation.urls")),
+    # Loop Cloud PBX: tenant config, platform admin, and the node-only internal API.
+    path("telephony/", include(telephony_urls.tenant_urlpatterns)),
+    path("admin/telephony/", include(telephony_urls.admin_urlpatterns)),
+    path("internal/telephony/", include(telephony_urls.internal_urlpatterns)),
+    path("public/telephony/", include(telephony_urls.public_urlpatterns)),
 ]
 
 urlpatterns = [

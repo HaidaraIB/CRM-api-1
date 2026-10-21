@@ -12,12 +12,7 @@ from sync.version import bump_company_slice, bump_support_conversation
 from ..models import SupportConversation, SupportMessage
 from .attachments import (
     KIND_IMAGE,
-    build_object_key,
-    chat_storage,
     image_upload_pixel_dimensions,
-    is_configured,
-    is_supabase_chat_storage,
-    is_supabase_mode_requested,
     media_preview_label,
     normalize_chat_image_upload,
     safe_original_filename,
@@ -73,7 +68,6 @@ def send_message(
     mime_final = ""
     size_final = 0
     kind = None
-    name_hint = ""
     attachment_width = None
     attachment_height = None
 
@@ -90,13 +84,6 @@ def send_message(
                         attachment_width, attachment_height = dims
             except ValueError:
                 raise
-        name_hint = (
-            processed.name if processed is not None else safe_original_filename(uploaded_file.name)
-        )
-
-    if is_supabase_mode_requested() and not is_configured():
-        if uploaded_file:
-            raise ValueError("Chat storage is misconfigured.")
 
     company_id = conversation.company_id
 
@@ -132,24 +119,13 @@ def send_message(
                 attachment_height=attachment_height,
                 original_filename=safe_original_filename(uploaded_file.name),
             )
-            if is_supabase_chat_storage():
-                key = build_object_key(company_id, msg.id, name_hint)
-                if processed is not None:
-                    payload = processed.read()
-                else:
-                    uploaded_file.seek(0)
-                    payload = uploaded_file.read()
-                chat_storage.upload_bytes(key, payload, mime_final)
-                msg.attachment_object_key = key
-                msg.save(update_fields=["attachment_object_key"])
+            if processed is not None:
+                msg.attachment.save(processed.name, processed, save=True)
             else:
-                if processed is not None:
-                    msg.attachment.save(processed.name, processed, save=True)
-                else:
-                    uploaded_file.seek(0)
-                    msg.attachment.save(
-                        safe_original_filename(uploaded_file.name), uploaded_file, save=True
-                    )
+                uploaded_file.seek(0)
+                msg.attachment.save(
+                    safe_original_filename(uploaded_file.name), uploaded_file, save=True
+                )
         else:
             if not (body or "").strip():
                 raise ValueError("Message body or attachment is required.")

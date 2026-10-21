@@ -38,7 +38,7 @@ class TestSecretClassification:
 
 class TestMasking:
     def test_secret_is_masked_keeping_last_four(self):
-        masked = mask_gateway_config({"secretKey": "sk_live_abcd1234"})
+        masked = mask_gateway_config({"secretKey": "stripe_test_key_abcd1234"})
         assert masked["secretKey"].endswith("1234")
         assert "sk_live" not in masked["secretKey"]
         assert MASK_CHAR in masked["secretKey"]
@@ -63,16 +63,16 @@ class TestMasking:
 
 class TestWriteMerge:
     def test_masked_echo_does_not_overwrite_stored_secret(self):
-        stored = {"secretKey": "sk_live_abcd1234", "environment": "test"}
+        stored = {"secretKey": "stripe_test_key_abcd1234", "environment": "test"}
         echoed = mask_gateway_config(stored)
         merged = merge_config_for_write(stored, echoed)
-        assert merged["secretKey"] == "sk_live_abcd1234"
+        assert merged["secretKey"] == "stripe_test_key_abcd1234"
 
     def test_real_edit_is_applied(self):
-        stored = {"secretKey": "sk_live_old0000", "environment": "test"}
-        incoming = dict(mask_gateway_config(stored), secretKey="sk_live_new1111")
+        stored = {"secretKey": "stripe_test_key_old0000", "environment": "test"}
+        incoming = dict(mask_gateway_config(stored), secretKey="stripe_test_key_new1111")
         merged = merge_config_for_write(stored, incoming)
-        assert merged["secretKey"] == "sk_live_new1111"
+        assert merged["secretKey"] == "stripe_test_key_new1111"
         assert merged["environment"] == "test"
 
     def test_unrelated_keys_survive_partial_submit(self):
@@ -97,7 +97,7 @@ class TestSerializerRoundTrip:
             status=PaymentGatewayStatus.ACTIVE.value,
             enabled=True,
             config={
-                "secretKey": "sk_live_abcd1234",
+                "secretKey": "stripe_test_key_abcd1234",
                 "publishableKey": "pk_live_readable",
                 "webhookSecret": "whsec_secret9999",
                 "environment": "live",
@@ -107,7 +107,7 @@ class TestSerializerRoundTrip:
     def test_read_never_exposes_secrets(self, gateway):
         data = PaymentGatewaySerializer(gateway).data
         serialized = str(data["config"])
-        assert "sk_live_abcd1234" not in serialized
+        assert "stripe_test_key_abcd1234" not in serialized
         assert "whsec_secret9999" not in serialized
         # identifiers stay readable so the operator can confirm the account
         assert data["config"]["publishableKey"] == "pk_live_readable"
@@ -121,18 +121,18 @@ class TestSerializerRoundTrip:
         assert serializer.is_valid(), serializer.errors
         serializer.save()
         gateway.refresh_from_db()
-        assert gateway.config["secretKey"] == "sk_live_abcd1234"
+        assert gateway.config["secretKey"] == "stripe_test_key_abcd1234"
         assert gateway.config["webhookSecret"] == "whsec_secret9999"
 
     def test_editing_one_secret_leaves_the_others(self, gateway):
         read_back = PaymentGatewaySerializer(gateway).data
-        submitted = dict(read_back["config"], secretKey="sk_live_rotated5678")
+        submitted = dict(read_back["config"], secretKey="stripe_test_key_rotated5678")
         serializer = PaymentGatewaySerializer(
             gateway, data={"config": submitted}, partial=True
         )
         assert serializer.is_valid(), serializer.errors
         serializer.save()
         gateway.refresh_from_db()
-        assert gateway.config["secretKey"] == "sk_live_rotated5678"
+        assert gateway.config["secretKey"] == "stripe_test_key_rotated5678"
         assert gateway.config["webhookSecret"] == "whsec_secret9999"
         assert gateway.config["environment"] == "live"

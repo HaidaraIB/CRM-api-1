@@ -1,0 +1,26 @@
+# Reviewed false positives: deterministic PBX contract vectors and placeholder-only documentation examples.
+# Each entry is a specific finding fingerprint; new findings remain reportable.
+c9ff00602c6d00a1c6c42feaafaae0acd96ce33e:tests/fixtures/pbx_contract/credentials.json:generic-api-key:11
+c9ff00602c6d00a1c6c42feaafaae0acd96ce33e:tests/fixtures/pbx_contract/credentials.json:generic-api-key:21
+c9ff00602c6d00a1c6c42feaafaae0acd96ce33e:tests/fixtures/pbx_contract/credentials.json:generic-api-key:31
+830b877ef610e42dee8fc09f766a489dcd55f022:tests/test_gateway_config_masking.py:generic-api-key:41
+830b877ef610e42dee8fc09f766a489dcd55f022:tests/test_gateway_config_masking.py:generic-api-key:66
+830b877ef610e42dee8fc09f766a489dcd55f022:tests/test_gateway_config_masking.py:generic-api-key:100
+830b877ef610e42dee8fc09f766a489dcd55f022:tests/test_gateway_config_masking.py:stripe-access-token:129
+830b877ef610e42dee8fc09f766a489dcd55f022:tests/test_gateway_config_masking.py:stripe-access-token:136
+afea4305c634a6c34fab03c29d8a25b7bc86faba:docs/MUJEB_INTEGRATION.md:curl-auth-header:200
+6b424b83ec1ff96b585aaa2722650c68def50e60:docs/MUJEB_INTEGRATION.md:curl-auth-header:125
+ea24538632762a9133d28323e371cc4075c2264e:docs/CUSTOM_LEAD_API.md:curl-auth-header:105
+9a800d11a41e0db651e656d0f501f0e99ce75a9d:READMEs/TESTING_GUIDE.md:curl-auth-header:90
+dddfb6b686cfd3d648907accf64a88cd7667f2e9:READMEs/INTEGRATIONS_COMPLETE_GUIDE.md:curl-auth-header:478
+dddfb6b686cfd3d648907accf64a88cd7667f2e9:READMEs/INTEGRATIONS_COMPLETE_GUIDE.md:curl-auth-header:482
+
+# Current-worktree equivalents of the reviewed contract vectors and documentation placeholders.
+tests/fixtures/pbx_contract/credentials.json:generic-api-key:11
+tests/fixtures/pbx_contract/credentials.json:generic-api-key:21
+tests/fixtures/pbx_contract/credentials.json:generic-api-key:31
+docs/MUJEB_INTEGRATION.md:curl-auth-header:200
+docs/MUJEB_INTEGRATION.md:curl-auth-header:209
+docs/CUSTOM_LEAD_API.md:curl-auth-header:120
+docs/INTEGRATIONS_COMPLETE_GUIDE.md:curl-auth-header:480
+docs/INTEGRATIONS_COMPLETE_GUIDE.md:curl-auth-header:484

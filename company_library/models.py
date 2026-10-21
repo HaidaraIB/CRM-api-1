@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from object_storage.paths import TenantUploadTo
 
 
 class CompanyLibraryFile(models.Model):
@@ -21,7 +22,7 @@ class CompanyLibraryFile(models.Model):
         blank=True,
         related_name="library_uploads",
     )
-    file = models.FileField(upload_to="company_library/%Y/%m/%d/", max_length=500)
+    file = models.FileField(upload_to=TenantUploadTo("company_library/%Y/%m/%d"), max_length=500)
     original_filename = models.CharField(max_length=255)
     mime_type = models.CharField(max_length=128, blank=True, default="")
     size_bytes = models.PositiveBigIntegerField(default=0)

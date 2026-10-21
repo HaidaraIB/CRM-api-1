@@ -859,8 +859,6 @@ def whatsapp_send_location(request):
 @permission_classes([IsAuthenticated, HasActiveSubscription])
 def whatsapp_message_attachment(request, pk):
     """Authenticated download for a WhatsApp message attachment."""
-    from django.http import FileResponse
-
     from integrations.whatsapp_access import require_client_whatsapp_access
 
     if not user_can_access_whatsapp_chats(request.user):
@@ -881,16 +879,17 @@ def whatsapp_message_attachment(request, pk):
     if not msg.attachment or not getattr(msg.attachment, 'name', None):
         return error_response('No attachment', code='not_found', status_code=404)
 
-    filename = msg.original_filename or 'attachment'
-    stream = msg.attachment.open('rb')
-    resp = FileResponse(
-        stream,
-        as_attachment=False,
-        filename=filename,
-        content_type=msg.attachment_mime or 'application/octet-stream',
-    )
-    resp['Cache-Control'] = 'private, max-age=3600'
-    return resp
+    from object_storage.serving import field_file_response
+
+    try:
+        # Object storage: a redirect to a presigned GET; local: streamed.
+        return field_file_response(
+            msg.attachment,
+            filename=msg.original_filename or 'attachment',
+            content_type=msg.attachment_mime or 'application/octet-stream',
+        )
+    except FileNotFoundError:
+        return error_response('No attachment', code='not_found', status_code=404)
 
 
 # WhatsApp customer service window: ~24h after the user's last inbound message (session messages).

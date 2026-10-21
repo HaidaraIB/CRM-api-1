@@ -47,6 +47,8 @@ class Command(BaseCommand):
 
         if count == 0:
             self.stdout.write(self.style.SUCCESS("No expired subscriptions found."))
+            if not dry_run:
+                self._reconcile_telephony()
             return
 
         self.stdout.write(f"Found {count} expired subscription(s) to process.")
@@ -142,3 +144,17 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.SUCCESS(f"Successfully processed {processed} subscription(s).")
             )
+        if not dry_run:
+            self._reconcile_telephony()
+
+    def _reconcile_telephony(self):
+        """Phone system follows the subscription: lapsed -> outbound suspended; renewed -> resumed."""
+        from telephony.services.billing import reconcile
+
+        try:
+            report = reconcile()
+        except Exception:  # never let the phone system break subscription expiry
+            logger.exception("Telephony entitlement reconciliation failed")
+            return
+        if any(report.values()):
+            self.stdout.write(f"Phone system: {report}")
