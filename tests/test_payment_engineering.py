@@ -466,3 +466,182 @@ class TestConfirmLockQuery:
         assert reason == "marked_failed"
         payment.refresh_from_db()
         assert payment.payment_status == PaymentStatus.FAILED.value
+
+
+def _rsa_pair():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_pem = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    return private_key, public_pem
+
+
+def _qicard_sign(private_key, payload):
+    import base64
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    from subscriptions.qicard_utils import qicard_signature_payload
+
+    signature = private_key.sign(
+        qicard_signature_payload(payload).encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("ascii")
+
+
+class TestQicardConfig:
+    def test_live_base_url_strips_api_v1(self):
+        from subscriptions.qicard_utils import _api_base_url
+
+        config = {"environment": "live", "apiBaseUrl": "https://3ds-api.qi.iq/api/v1/"}
+        assert _api_base_url(config) == "https://3ds-api.qi.iq"
+
+    def test_live_default_host(self):
+        from subscriptions.qicard_utils import _api_base_url
+
+        assert _api_base_url({"environment": "live"}) == "https://3ds-api.qi.iq"
+
+    def test_test_environment_ignores_custom_host(self):
+        from subscriptions.qicard_utils import _api_base_url
+
+        config = {"environment": "test", "apiBaseUrl": "https://3ds-api.qi.iq"}
+        assert _api_base_url(config) == "https://uat-sandbox-3ds-api.qi.iq"
+
+    def test_test_credentials_uses_configured_host(self):
+        from subscriptions.gateways.registry import get_adapter
+
+        with patch("subscriptions.qicard_utils.requests.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            result = get_adapter("qicard").test_credentials(
+                {
+                    "terminalId": "684932",
+                    "username": "u",
+                    "password": "p",
+                    "environment": "live",
+                    "apiBaseUrl": "https://3ds-api.qi.iq/api/v1",
+                }
+            )
+        assert result["success"] is True
+        assert mock_post.call_args[0][0] == "https://3ds-api.qi.iq/api/v1/payment"
+
+    def test_signature_payload_matches_qicard_sample(self):
+        from subscriptions.qicard_utils import qicard_signature_payload
+
+        payload = {
+            "paymentId": "b91e8d70-1ab7-4275-85a2-61f7dbb31410",
+            "amount": 10000,
+            "currency": "IQD",
+            "creationDate": "2025-01-13T21:25:19",
+            "status": "SUCCESS",
+        }
+        assert qicard_signature_payload(payload) == (
+            "b91e8d70-1ab7-4275-85a2-61f7dbb31410|10000.000|IQD|2025-01-13T21:25:19|SUCCESS"
+        )
+        assert qicard_signature_payload({**payload, "amount": 10000.0}).split("|")[1] == "10000.000"
+        assert qicard_signature_payload({"paymentId": "x"}) == "x|-|-|-|-"
+
+
+@pytest.mark.django_db
+class TestQicardWebhookSignature:
+    @pytest.fixture
+    def keys(self):
+        return _rsa_pair()
+
+    @pytest.fixture
+    def signed_gateway(self, keys):
+        _, public_pem = keys
+        return PaymentGateway.objects.create(
+            name="QiCard",
+            status=PaymentGatewayStatus.ACTIVE.value,
+            enabled=True,
+            config={
+                "terminalId": "t",
+                "username": "u",
+                "password": "p",
+                "publicKey": public_pem,
+            },
+        )
+
+    def _payment(self, subscription, gateway, plan, tran_ref):
+        return Payment.objects.create(
+            subscription=subscription,
+            amount=Decimal("29.00"),
+            currency="USD",
+            amount_usd=Decimal("29.00"),
+            payment_method=gateway,
+            payment_status=PaymentStatus.PENDING.value,
+            tran_ref=tran_ref,
+            target_plan=plan,
+            billing_cycle=BillingCycle.MONTHLY,
+        )
+
+    def _notification(self, tran_ref):
+        return {
+            "paymentId": tran_ref,
+            "amount": 37700,
+            "currency": "IQD",
+            "creationDate": "2026-10-22T10:00:00",
+            "status": "SUCCESS",
+        }
+
+    def test_valid_signature_finalizes(
+        self, api_client, inactive_subscription, signed_gateway, paid_plan, keys
+    ):
+        payment = self._payment(inactive_subscription, signed_gateway, paid_plan, "qi_sig_ok")
+        body = self._notification("qi_sig_ok")
+        with patch(
+            "subscriptions.qicard_utils.verify_qicard_payment",
+            return_value={"status": "SUCCESS"},
+        ):
+            res = api_client.post(
+                "/api/payments/qicard-webhook/",
+                body,
+                format="json",
+                HTTP_X_SIGNATURE=_qicard_sign(keys[0], body),
+            )
+        assert res.status_code == 200
+        payment.refresh_from_db()
+        assert payment.payment_status == PaymentStatus.COMPLETED.value
+
+    @pytest.mark.parametrize("signature", ["", "bm90LWEtc2lnbmF0dXJl", "%%%"])
+    def test_bad_or_missing_signature_rejected(
+        self, api_client, inactive_subscription, signed_gateway, paid_plan, signature
+    ):
+        payment = self._payment(inactive_subscription, signed_gateway, paid_plan, "qi_sig_bad")
+        headers = {"HTTP_X_SIGNATURE": signature} if signature else {}
+        with patch(
+            "subscriptions.qicard_utils.verify_qicard_payment",
+            return_value={"status": "SUCCESS"},
+        ) as mock_verify:
+            res = api_client.post(
+                "/api/payments/qicard-webhook/",
+                self._notification("qi_sig_bad"),
+                format="json",
+                **headers,
+            )
+        assert res.status_code == 401
+        mock_verify.assert_not_called()
+        payment.refresh_from_db()
+        assert payment.payment_status == PaymentStatus.PENDING.value
+        assert payment.applied_at is None
+
+    def test_tampered_body_rejected(
+        self, api_client, inactive_subscription, signed_gateway, paid_plan, keys
+    ):
+        self._payment(inactive_subscription, signed_gateway, paid_plan, "qi_sig_tamper")
+        body = self._notification("qi_sig_tamper")
+        signature = _qicard_sign(keys[0], {**body, "status": "FAILED"})
+        res = api_client.post(
+            "/api/payments/qicard-webhook/",
+            body,
+            format="json",
+            HTTP_X_SIGNATURE=signature,
+        )
+        assert res.status_code == 401

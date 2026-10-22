@@ -7,6 +7,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from crm_saas_api.responses import error_response, success_response
 
+from ..qicard_utils import SIGNATURE_HEADER, verify_qicard_signature
 from ..services.payment_completion import (
     confirm_and_finalize_payment,
     find_payment_by_tran_ref,
@@ -144,6 +145,23 @@ def qicard_webhook(request):
                 "Payment not found",
                 code="not_found",
                 status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Once the operator has loaded QiCard's RSA public key, unsigned or
+        # mis-signed notifications are rejected outright. Without a key we
+        # still rely on the API re-query inside confirm_and_finalize_payment.
+        gateway_config = (getattr(payment.payment_method, "config", None) or {})
+        public_key = (gateway_config.get("publicKey") or "").strip()
+        if public_key and not verify_qicard_signature(
+            payload, request.META.get(SIGNATURE_HEADER, ""), public_key
+        ):
+            logger.warning(
+                "QiCard webhook signature rejected payment_id=%s", payment_id
+            )
+            return error_response(
+                "Invalid signature",
+                code="unauthorized",
+                status_code=status.HTTP_401_UNAUTHORIZED,
             )
 
         ok, reason = confirm_and_finalize_payment(payment, mark_failed=True)

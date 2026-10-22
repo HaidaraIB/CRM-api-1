@@ -94,7 +94,11 @@ class QicardAdapter(BaseGatewayAdapter):
                 "message": "Terminal ID, Username, and Password are required",
             }
         return test_qicard_credentials(
-            terminal_id, username, password, config.get("environment", "test")
+            terminal_id,
+            username,
+            password,
+            config.get("environment", "test"),
+            config.get("apiBaseUrl", ""),
         )
 
     def refund(self, tran_ref: str, amount, message: str = "") -> dict:

@@ -16,7 +16,10 @@ from settings.models import SystemSettings
 logger = logging.getLogger(__name__)
 
 DEFAULT_TEST_API_BASE = "https://uat-sandbox-3ds-api.qi.iq"
-DEFAULT_LIVE_API_BASE = "https://api.qi.iq"
+DEFAULT_LIVE_API_BASE = "https://3ds-api.qi.iq"
+
+# Webhook notifications carry a base64 RSA-SHA256 signature in this header.
+SIGNATURE_HEADER = "HTTP_X_SIGNATURE"
 
 
 @dataclass(frozen=True)
@@ -43,10 +46,18 @@ def get_qicard_gateway():
         return None
 
 
+def _normalize_base_url(url: str) -> str:
+    """QiCard hands out `https://host/api/v1`; request paths already add `/api/v1`."""
+    url = (url or "").strip().rstrip("/")
+    if url.lower().endswith("/api/v1"):
+        url = url[: -len("/api/v1")].rstrip("/")
+    return url
+
+
 def _api_base_url(config: dict) -> str:
     environment = config.get("environment", "test")
     if environment == "live":
-        custom = (config.get("apiBaseUrl") or "").strip().rstrip("/")
+        custom = _normalize_base_url(config.get("apiBaseUrl") or "")
         return custom or DEFAULT_LIVE_API_BASE
     return DEFAULT_TEST_API_BASE.rstrip("/")
 
@@ -92,7 +103,7 @@ def _qicard_client_from_credentials(
     password = password.strip()
     config = {"environment": environment}
     if api_base_url:
-        config["apiBaseUrl"] = api_base_url.strip().rstrip("/")
+        config["apiBaseUrl"] = api_base_url
     credentials = f"{username}:{password}"
     encoded_credentials = base64.b64encode(credentials.encode("utf-8")).decode("utf-8")
     headers = {
@@ -385,8 +396,56 @@ def cancel_qicard_payment(payment_id: str, amount: float | None = None):
         raise Exception(f"QiCard cancel error: {str(e)}") from e
 
 
+def _js_amount_text(amount) -> str:
+    """Mirror QiCard's Node sample: `amount ? amount.toString() + '.000' : '-'`."""
+    if not amount:
+        return "-"
+    if isinstance(amount, float) and amount.is_integer():
+        amount = int(amount)
+    return f"{amount}.000"
+
+
+def qicard_signature_payload(payload: dict) -> str:
+    """The string QiCard signs: paymentId|amount|currency|creationDate|status."""
+    return "|".join(
+        [
+            str(payload.get("paymentId") or "-"),
+            _js_amount_text(payload.get("amount")),
+            str(payload.get("currency") or "-"),
+            str(payload.get("creationDate") or "-"),
+            str(payload.get("status") or "-"),
+        ]
+    )
+
+
+def verify_qicard_signature(payload: dict, signature_b64: str, public_key_pem: str) -> bool:
+    """True when `signature_b64` is QiCard's RSA-SHA256 signature over the payload."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    if not signature_b64 or not public_key_pem:
+        return False
+    try:
+        public_key = serialization.load_pem_public_key(public_key_pem.strip().encode("utf-8"))
+        signature = base64.b64decode(signature_b64.strip(), validate=True)
+        public_key.verify(
+            signature,
+            qicard_signature_payload(payload).encode("utf-8"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+
+
 def test_qicard_credentials(
-    terminal_id: str, username: str, password: str, environment: str = "test"
+    terminal_id: str,
+    username: str,
+    password: str,
+    environment: str = "test",
+    api_base_url: str = "",
 ):
     """
     Test QiCard credentials by attempting to create a minimal test payment request
@@ -403,7 +462,7 @@ def test_qicard_credentials(
             }
 
         client = _qicard_client_from_credentials(
-            terminal_id, username, password, environment
+            terminal_id, username, password, environment, api_base_url
         )
 
         test_request_id = str(uuid.uuid4())
