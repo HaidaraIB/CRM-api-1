@@ -38,7 +38,9 @@ def link_call_to_crm(call_id):
 
     with transaction.atomic():
         call = (
-            PbxCall.objects.select_for_update()
+            # of=("self",): Postgres refuses FOR UPDATE on the nullable side of the
+            # outer joins select_related emits for answered_by/extension/crm_contact.
+            PbxCall.objects.select_for_update(of=("self",))
             .select_related("answered_by__user", "extension__user", "crm_contact", "company")
             .filter(pk=call_id)
             .first()
