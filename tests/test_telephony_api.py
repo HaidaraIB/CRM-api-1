@@ -132,6 +132,49 @@ def test_admin_provision_allows_explicit_pilot_company(
     assert PbxTenant.objects.filter(company=company).exists()
 
 
+def test_admin_provision_candidates_are_approved_companies_without_a_tenant(
+    company, other_company, pbx_node, superadmin_client, subscription,
+):
+    """The console's first-provision list: pilot exceptions only, with the provision gate's verdict."""
+    from settings.models import SystemSettings
+
+    unapproved = type(company).objects.create(name="Unapproved Co", domain="unapproved.example.com",
+                                              owner=company.owner)
+    settings_obj = SystemSettings.get_settings()
+    settings_obj.integration_policies = {
+        "telephony": {
+            "global_enabled": False,
+            "global_message": "",
+            "company_overrides": {
+                str(company.id): {"enabled": True, "message": ""},
+                str(other_company.id): {"enabled": True, "message": ""},  # approved, but no subscription
+                str(unapproved.id): {"enabled": False, "message": "no"},
+            },
+        },
+    }
+    settings_obj.save(update_fields=["integration_policies"])
+    url = "/api/v1/admin/telephony/tenants/candidates/"
+
+    rows = {row["company"]: row for row in api_body(superadmin_client.get(url))}
+    assert set(rows) == {company.id, other_company.id}
+    assert rows[company.id] == {"company": company.id, "company_name": company.name, "eligible": True, "message": ""}
+    assert rows[other_company.id]["eligible"] is False and rows[other_company.id]["message"]
+    # The verdict matches what provision does.
+    assert superadmin_client.post(f"/api/v1/admin/telephony/tenants/{other_company.id}/provision/").status_code == 403
+
+    assert superadmin_client.post(f"/api/v1/admin/telephony/tenants/{company.id}/provision/").status_code == 202
+    assert {row["company"] for row in api_body(superadmin_client.get(url))} == {other_company.id}
+
+
+def test_admin_provision_candidates_empty_without_pilot(superadmin_client, company, subscription):
+    from settings.models import SystemSettings
+
+    settings_obj = SystemSettings.get_settings()
+    settings_obj.integration_policies = {}
+    settings_obj.save(update_fields=["integration_policies"])
+    assert api_body(superadmin_client.get("/api/v1/admin/telephony/tenants/candidates/")) == []
+
+
 def test_employees_cannot_read_pbx_config(employee_client):
     assert employee_client.get(f"{BASE}/trunks/").status_code == 403
     assert employee_client.get(f"{BASE}/extensions/").status_code == 403

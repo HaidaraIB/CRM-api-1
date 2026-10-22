@@ -11,7 +11,7 @@ This is the `telephony` app. The PBX nodes, the applier and the CRM↔PBX contra
 | Compiler | `telephony/services/compiler.py`, typed rows → `pjsip_t<key>.conf` + `extensions_t<key>.conf`. Golden output: `tests/snapshots/telephony/` |
 | Provisioning state machine | `telephony/services/provisioning.py` (compile → versioned encrypted artifact → node applies → apply-result) |
 | Tenant API | `/api/v1/telephony/`: `status/`, `settings/` (call recording), `extensions/` (+ `credentials/rotate/`), `trunks/`, `numbers/`, `inbound-routes/`, `outbound-routes/` |
-| Platform admin API | `/api/v1/admin/telephony/`: `nodes/` (+ `rotate-tokens/`), `tenants/`, `tenants/<company_id>/provision/`, `…/suspend/`, `…/resume/`, `…/jobs/`, `numbers/<id>/verify/` |
+| Platform admin API | `/api/v1/admin/telephony/`: `nodes/` (+ `rotate-tokens/`), `tenants/`, `tenants/candidates/` (pilot-approved companies with no tenant, each with the provision gate's `eligible` verdict), `tenants/<company_id>/provision/`, `…/suspend/`, `…/resume/`, `…/jobs/`, `numbers/<id>/verify/` |
 | Internal node API | `/api/v1/internal/telephony/nodes/<id>/desired-state`, `…/artifacts/<tag>/<version>/`, `…/apply-result`. Authenticated by node token, not by JWT or X-API-Key. |
 
 **Access**
@@ -322,7 +322,7 @@ To turn the queue on in production:
 2. On the PBX VPS, put `node_token` in `/etc/loop-pbx/node-token` and start `loop-pbx-applier` (see `CRM-pbx/deploy/systemd/`).
 3. Expose the internal API on the WireGuard address only, using `CRM-pbx/deploy/nginx-internal-telephony.conf.snippet`.
 4. On the PBX VPS, store `sha256(crm_token)` in `/etc/loop-pbx/crm-token.sha256` and start `loop-pbx-worker`. It runs the bridge, the recording uploader and the call-control API on `10.77.0.2:7070`.
-5. Provision a company with `POST /api/v1/admin/telephony/tenants/<company_id>/provision/`. The tenant shows `pending` until the node reports `applied`, then `active`.
+5. Provision a company with `POST /api/v1/admin/telephony/tenants/<company_id>/provision/` (Admin panel: Telephony → Companies → **Set up a company**, which lists only pilot-approved companies without a tenant). The tenant shows `pending` until the node reports `applied`, then `active`.
 
 ## Tests
 

@@ -156,7 +156,7 @@ COVERED_ROUTES = {
     # platform admin: test_tenant_admins_cannot_use_platform_endpoints + below
     "pbx-admin-node-list", "pbx-admin-node-detail", "pbx-admin-node-rotate-tokens",
     "pbx-admin-tenant-list", "pbx-admin-tenant-detail", "pbx-admin-tenant-jobs",
-    "pbx-admin-tenant-provision", "pbx-admin-tenant-suspend", "pbx-admin-tenant-resume",
+    "pbx-admin-tenant-provision", "pbx-admin-tenant-candidates", "pbx-admin-tenant-suspend", "pbx-admin-tenant-resume",
     "pbx-admin-number-verify",
     # node-only: test_telephony_provisioning node-auth tests
     "pbx-internal-desired-state", "pbx-internal-artifact", "pbx-internal-apply-result",
@@ -221,6 +221,7 @@ def test_every_route_is_covered():
     [
         ("get", "/api/v1/admin/telephony/nodes/"),
         ("get", "/api/v1/admin/telephony/tenants/"),
+        ("get", "/api/v1/admin/telephony/tenants/candidates/"),
         ("post", "/api/v1/admin/telephony/tenants/{company}/suspend/"),
         ("post", "/api/v1/admin/telephony/tenants/{company}/resume/"),
         ("get", "/api/v1/admin/telephony/tenants/{company}/jobs/"),

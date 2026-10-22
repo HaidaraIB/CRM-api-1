@@ -68,6 +68,14 @@ def _global_exception_company_ids(company_overrides: dict[str, Any]) -> list[str
     ]
 
 
+def telephony_exception_company_ids(policies: dict[str, Any] | None = None) -> list[int]:
+    """Companies holding the explicit PBX pilot exception (the only way past the locked global switch)."""
+    if policies is None:
+        policies = SystemSettings.get_settings().integration_policies or {}
+    overrides = _get_platform_policy(policies, "telephony")["company_overrides"]
+    return [int(company_id) for company_id in _global_exception_company_ids(overrides) if str(company_id).isdigit()]
+
+
 def _get_platform_policy(policies: dict[str, Any] | None, platform: str) -> dict[str, Any]:
     raw = (policies or {}).get(platform) or {}
     if not isinstance(raw, dict):

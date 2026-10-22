@@ -630,6 +630,24 @@ class AdminPbxTenantViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, vi
         tenant.refresh_from_db()
         return Response({"tenant": AdminTenantSerializer(tenant).data, "job": PbxJobSerializer(job).data}, status=code)
 
+    @action(detail=False, methods=["get"])
+    def candidates(self, request):
+        """Pilot-approved companies with no tenant yet: what a first provision can target.
+
+        Telephony is globally locked off, so only explicit company exceptions can pass
+        the gate. Each row says whether ``provision`` would accept it now (it also needs
+        an active subscription), using the same gate as ``provision``.
+        """
+        from integrations.policy import get_company_integration_access, telephony_exception_company_ids
+
+        companies = Company.objects.filter(pk__in=telephony_exception_company_ids(), pbx_tenant__isnull=True).order_by("name")
+        rows = []
+        for company in companies:
+            access = get_company_integration_access(company, "telephony")
+            rows.append({"company": company.id, "company_name": company.name,
+                         "eligible": bool(access["enabled"]), "message": "" if access["enabled"] else access["message"]})
+        return Response(rows)
+
     @action(detail=False, methods=["post"], url_path=r"(?P<company_id>\d+)/provision")
     def provision(self, request, company_id=None):
         company = get_object_or_404(Company, pk=company_id)
