@@ -3,6 +3,7 @@ Notification service for sending push notifications via Firebase Cloud Messaging
 """
 import logging
 import os
+import threading
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -39,6 +40,13 @@ except ImportError:
 # FCM connection would get the qcluster worker killed instead of raising a catchable error.
 _FIREBASE_APP_OPTIONS = {"httpTimeout": 15}
 
+# httpTimeout bounds each socket operation, not the call: DNS, the OAuth token refresh,
+# urllib3's connect/read retries and the IPv6→IPv4 fallback each get their own budget,
+# so one multicast has been seen running past Q_CLUSTER["timeout"] and getting the
+# worker killed anyway. deliver_push can make two sends (web, then native), so twice
+# this must stay under that 60s with room for the DB work around them.
+_FCM_SEND_DEADLINE_SECONDS = 25
+
 
 class NotificationService:
     """Service for sending push notifications"""
@@ -68,7 +76,33 @@ class NotificationService:
         """Returns (success_count, stale_token_list)."""
         if not tokens:
             return 0, []
-        batch = messaging.send_each_for_multicast(multicast)
+
+        outcome: Dict[str, Any] = {}
+
+        def _send():
+            try:
+                outcome["batch"] = messaging.send_each_for_multicast(multicast)
+            except Exception as exc:  # re-raised on the caller's thread below
+                outcome["error"] = exc
+
+        # Daemon so a send still stuck past the deadline can't hold up worker exit.
+        sender = threading.Thread(target=_send, name="fcm-send", daemon=True)
+        sender.start()
+        sender.join(_FCM_SEND_DEADLINE_SECONDS)
+        if sender.is_alive():
+            # Abandoned, not cancelled: it may still deliver once the network recovers.
+            # Stale-token pruning waits for the next push that completes.
+            logger.error(
+                "FCM send to %s exceeded %ss for %d token(s); giving up on it",
+                user.username,
+                _FCM_SEND_DEADLINE_SECONDS,
+                len(tokens),
+            )
+            return 0, []
+        if "error" in outcome:
+            raise outcome["error"]
+
+        batch = outcome["batch"]
         stale: List[str] = []
         for token, resp in zip(tokens, batch.responses):
             if resp.success:
