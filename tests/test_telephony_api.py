@@ -316,7 +316,7 @@ def test_recording_is_off_by_default(admin_client, tenant_a):
     assert body["recording_mode"] == "off" and body["recording_accepted_at"] is None
 
 
-def test_turning_recording_on_requires_attestation(admin_client, admin_user, tenant_a):
+def test_turning_recording_on_requires_attestation(admin_client, admin_user, tenant_a, recording_allowed):
     from settings.models import SystemAuditLog
 
     resp = admin_client.patch(f"{BASE}/settings/", {"recording_mode": "external"}, format="json")
@@ -350,6 +350,27 @@ def test_turning_recording_on_requires_attestation(admin_client, admin_user, ten
     assert admin_client.patch(f"{BASE}/settings/", {"recording_mode": "off"}, format="json").status_code == 200
     tenant_a.refresh_from_db()
     assert tenant_a.config_version == 3 and tenant_a.recording_accepted_by == admin_user
+
+
+def test_recording_stays_off_until_the_platform_allows_it(admin_client, tenant_a):
+    """TELEPHONY_RECORDING_ALLOWED (off by default) is the legal gate: no attestation gets past it."""
+    assert api_body(admin_client.get(f"{BASE}/settings/"))["recording_available"] is False
+    for mode in ("external", "all"):
+        resp = admin_client.patch(
+            f"{BASE}/settings/", {"recording_mode": mode, "accept_recording_terms": True}, format="json"
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"]["fields"]["recording_mode"][0]["code"] == "validation.pbx_recording_unavailable"
+    tenant_a.refresh_from_db()
+    assert tenant_a.recording_mode == "off" and tenant_a.recording_accepted_at is None
+    assert tenant_a.config_version == 0
+    # Settings that do not record still save.
+    resp = admin_client.patch(f"{BASE}/settings/", {"recording_retention_days": 30}, format="json")
+    assert resp.status_code == 200 and api_body(resp)["recording_retention_days"] == 30
+
+
+def test_recording_available_follows_the_platform_gate(admin_client, tenant_a, recording_allowed):
+    assert api_body(admin_client.get(f"{BASE}/settings/"))["recording_available"] is True
 
 
 def test_unchanged_settings_do_not_recompile(admin_client, tenant_a):

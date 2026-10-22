@@ -108,6 +108,20 @@ def _realtime_off_by_default(settings):
 
 
 @pytest.fixture(autouse=True)
+def _local_storage_by_default(settings):
+    """
+    Files go to local storage unless a test sets STORAGES itself (the R2 tests
+    and test_object_storage_live do). A local .env with R2_* set would otherwise
+    point every upload in the suite at the real bucket. CI has no .env.
+    """
+    from object_storage.config import build_storages
+
+    settings.STORAGES = build_storages(media="local", recordings="local", r2=None)
+    settings.OBJECT_STORAGE_BACKEND = "local"
+    settings.RECORDING_STORAGE_BACKEND = "local"
+
+
+@pytest.fixture(autouse=True)
 def _tests_skip_api_key_gate(settings):
     """
     APIKeyValidationMiddleware skips validation when no keys are configured.

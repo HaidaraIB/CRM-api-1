@@ -56,6 +56,11 @@ Recording is **off by default**. It is a tenant setting:
 | `recording_notice` | `none`, `ar`, `en`, `ar_en` (default) | The announcement the outside party hears before the call connects |
 
 - **Changing it:** `GET/PATCH /api/v1/telephony/settings/`, by tenant admins only.
+- **Platform legal gate:** `TELEPHONY_RECORDING_ALLOWED` is off by default. While it is off:
+  - any `recording_mode` other than `off` is refused with `validation.pbx_recording_unavailable`;
+  - `GET /telephony/settings/` returns `recording_available: false`, and the dashboard locks the control;
+  - the compiler emits no MixMonitor or notice, whatever a tenant row says.
+  Turn it on only after legal approval, once the approved 8 kHz / 16-bit / mono Arabic and English notices are installed on every node.
 - **Attestation:** turning recording on requires `"accept_recording_terms": true`. That is the admin's attestation that the company may record and will inform callers. `recording_accepted_at` and `recording_accepted_by` are stored.
 - **Audit:** every change is written to `SystemAuditLog` (`telephony.recording_settings_changed`) and triggers a recompile.
 

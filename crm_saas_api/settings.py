@@ -834,6 +834,11 @@ TELEPHONY_WORKER_TIMEOUT = float(os.getenv("TELEPHONY_WORKER_TIMEOUT", "5"))
 # tests and dev without a worker must never try to reach the private link.
 TELEPHONY_APPLY_NUDGE = os.getenv("TELEPHONY_APPLY_NUDGE", "").strip().lower() in ("1", "true", "yes")
 TELEPHONY_APPLY_NUDGE_TIMEOUT = float(os.getenv("TELEPHONY_APPLY_NUDGE_TIMEOUT", "1.5"))
+# Platform switch for call recording. Off until legal approval and the approved
+# Arabic/English notices are installed on every node (CRM-pbx production runbook
+# section 3): tenants cannot turn recording on, and the compiler never records,
+# whatever a tenant row says.
+TELEPHONY_RECORDING_ALLOWED = os.getenv("TELEPHONY_RECORDING_ALLOWED", "").strip().lower() in ("1", "true", "yes")
 # Outbound fraud limits every node enforces per tenant (CRM-pbx contract section 6,
 # fraud; shipped in each artifact manifest). A tenant's PbxTenant.fraud_limits,
 # set by the platform operator, overrides keys here. "block" stops the tenant's

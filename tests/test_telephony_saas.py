@@ -33,7 +33,7 @@ def media(settings, tmp_path):
 
 
 @pytest.fixture
-def live(tenant_a, company):
+def live(tenant_a, company, recording_allowed):
     PbxTenant.objects.filter(pk=tenant_a.pk).update(
         status=PbxTenant.Status.ACTIVE, applied_version=1, config_version=1, recording_mode=RecordingMode.EXTERNAL,
     )
@@ -223,11 +223,13 @@ def test_rollup_and_usage_report(live, media, admin_client, company):
 
 def test_usage_reports_recent_limit_hits(live, admin_client, pbx_node):
     """quota.warning from the node (a live plan limit refused a call) shows on the Usage tab."""
-    from tests.test_telephony_calls import Node
+    from tests.test_telephony_calls import T0, Node
 
     node = Node(pbx_node)
+    # Event times are offsets from the fixed T0; keep them an hour ago so they stay inside the 7-day window.
+    recent = int((timezone.now() - T0).total_seconds()) - 3600
     warning = lambda quota, limit, at: node.event(  # noqa: E731
-        "quota.warning", live, {"quota": quota, "limit": limit, "observed": limit + 1}, at=at)
+        "quota.warning", live, {"quota": quota, "limit": limit, "observed": limit + 1}, at=recent + at)
     result = node.push(warning("max_pbx_concurrent_calls", 5, 0), warning("max_pbx_concurrent_calls", 5, 600),
                        warning("max_pbx_cps", 1, 30))
     assert len(result["accepted"]) == 3 and not result["rejected"]

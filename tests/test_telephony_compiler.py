@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from django.test import override_settings
 
 from telephony import contract
 from telephony.models import (
@@ -194,7 +195,8 @@ def test_duplicate_patterns_keep_highest_priority_route(scenario, company, make_
 def _record(tenant, mode=RecordingMode.EXTERNAL, notice=RecordingNotice.AR_EN):
     tenant.recording_mode, tenant.recording_notice = mode, notice
     tenant.save()
-    return compile_tenant(tenant)
+    with override_settings(TELEPHONY_RECORDING_ALLOWED=True):  # the platform's legal gate, off by default
+        return compile_tenant(tenant)
 
 
 def _block(text, ctx):
@@ -207,6 +209,15 @@ def test_recording_snapshot(scenario):
     _check_snapshot("recording/extensions_tdev4test.conf", compiled.files["extensions_tdev4test.conf"])
     assert compiled.files["pjsip_tdev4test.conf"] == plain["pjsip_tdev4test.conf"]
     assert compiled.warnings == []
+
+
+def test_platform_gate_overrides_a_tenant_that_records(scenario):
+    """A row left in a recording mode compiles no recording while TELEPHONY_RECORDING_ALLOWED is off."""
+    scenario.recording_mode, scenario.recording_notice = RecordingMode.ALL, RecordingNotice.AR_EN
+    scenario.save()
+    text = compile_tenant(scenario).files["extensions_tdev4test.conf"]
+    for needle in ("MixMonitor", "sub-record", "sub-notice", "LOOP_RECORDING", "Playback", ",U("):
+        assert needle not in text
 
 
 def test_recording_off_emits_nothing(scenario):
@@ -488,7 +499,7 @@ def test_emergency_numbers_leave_by_the_first_route_without_the_outbound_switch(
     assert warnings == []
 
 
-def test_emergency_numbers_bypass_a_suspension_and_still_record_nothing(scenario):
+def test_emergency_numbers_bypass_a_suspension_and_still_record_nothing(scenario, recording_allowed):
     scenario.outbound_suspended = True
     scenario.recording_mode = RecordingMode.EXTERNAL
     block, _ = _from_agent(scenario)

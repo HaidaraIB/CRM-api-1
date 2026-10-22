@@ -197,7 +197,7 @@ def test_presence_is_company_scoped(admin_client, other_admin_client, company, o
         assert [a["display_name"] for a in agents] == [name]
 
 
-def test_settings_change_only_own_tenant(admin_client, tenant_a, tenant_b, other_company):
+def test_settings_change_only_own_tenant(admin_client, tenant_a, tenant_b, other_company, recording_allowed):
     resp = admin_client.patch(
         f"{BASE}/settings/",
         {"recording_mode": "all", "accept_recording_terms": True, "company": other_company.id},

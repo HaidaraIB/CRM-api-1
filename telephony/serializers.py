@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 
+from django.conf import settings
 from rest_framework import serializers
 
 from accounts.models import User
@@ -710,13 +711,15 @@ class TelephonySettingsSerializer(serializers.ModelSerializer):
     accept_recording_terms = serializers.BooleanField(write_only=True, required=False, default=False)
     recording_bytes_used = serializers.SerializerMethodField()
     recording_bytes_limit = serializers.SerializerMethodField()
+    # False until the platform enables recording (TELEPHONY_RECORDING_ALLOWED, the legal gate).
+    recording_available = serializers.SerializerMethodField()
 
     class Meta:
         model = PbxTenant
         fields = [
             "recording_mode", "recording_notice", "recording_accepted_at", "recording_accepted_by",
             "accept_recording_terms", "recording_retention_days", "recording_legal_hold", "recording_paused_quota",
-            "recording_bytes_used", "recording_bytes_limit",
+            "recording_bytes_used", "recording_bytes_limit", "recording_available",
         ]
         # Legal hold is the platform operator's; the quota pause follows storage use.
         read_only_fields = ["recording_accepted_at", "recording_accepted_by", "recording_legal_hold",
@@ -732,6 +735,9 @@ class TelephonySettingsSerializer(serializers.ModelSerializer):
 
         return storage_limit(obj.company)
 
+    def get_recording_available(self, obj):
+        return bool(settings.TELEPHONY_RECORDING_ALLOWED)
+
     def validate_recording_retention_days(self, value):
         if not 7 <= value <= 3650:
             raise serializers.ValidationError("Keep recordings between 7 and 3650 days.")
@@ -744,7 +750,12 @@ class TelephonySettingsSerializer(serializers.ModelSerializer):
 
         accepted = attrs.pop("accept_recording_terms", False)
         was_off = self.instance.recording_mode == RecordingMode.OFF
-        if attrs.get("recording_mode", self.instance.recording_mode) != RecordingMode.OFF and was_off:
+        recording_on = attrs.get("recording_mode", self.instance.recording_mode) != RecordingMode.OFF
+        if recording_on and not settings.TELEPHONY_RECORDING_ALLOWED:
+            raise serializers.ValidationError(
+                {"recording_mode": "Call recording is not available yet."}, code="pbx_recording_unavailable"
+            )
+        if recording_on and was_off:
             if not accepted:
                 raise serializers.ValidationError({
                     "accept_recording_terms": "Confirm that your company may record calls and will inform callers."

@@ -27,6 +27,7 @@ __all__ = [
     "other_admin_client",
     "employee_client",
     "superadmin_client",
+    "recording_allowed",
     "tenant_a",
     "tenant_b",
     "make_trunk",
@@ -139,6 +140,12 @@ def superadmin_client(db):
         is_superuser=True, is_staff=True,
     )
     return _client(user)
+
+
+@pytest.fixture
+def recording_allowed(settings):
+    """Recording is legally gated off by default (TELEPHONY_RECORDING_ALLOWED); tests of the recording path opt in."""
+    settings.TELEPHONY_RECORDING_ALLOWED = True
 
 
 @pytest.fixture

@@ -41,6 +41,12 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _no_pbx_env_file(monkeypatch):
+    """The applier and worker inherit this: a production-shaped CRM-pbx/.env must not leak in."""
+    monkeypatch.setenv("LOOP_ENV_FILE", "none")
+
+
 def _run(args, env=None, timeout=120):
     return subprocess.run(args, cwd=PBX_REPO, env={**os.environ, **(env or {})}, capture_output=True, text=True, timeout=timeout)
 
@@ -322,7 +328,7 @@ def _rms(wav_bytes: bytes) -> float:
 
 def test_recorded_calls_reach_object_storage_and_play_back(
     live_server, tmp_path, settings, company, admin_user, employee_user, make_trunk, make_number,
-    make_extension, telephony_subscription,
+    make_extension, telephony_subscription, recording_allowed,
 ):
     import hashlib
     import urllib.request
