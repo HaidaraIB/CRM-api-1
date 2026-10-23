@@ -39,6 +39,7 @@ from ..models import (
 from ..serializers import (
     PlanSerializer,
     PlanListSerializer,
+    PublicPlanSerializer,
     SubscriptionSerializer,
     SubscriptionListSerializer,
     PaymentSerializer,
@@ -128,11 +129,16 @@ class PublicPlanListView(generics.ListAPIView):
     """
 
     permission_classes = [AllowAny]
-    serializer_class = PlanListSerializer
+    serializer_class = PublicPlanSerializer
     pagination_class = None
 
     def get_queryset(self):
-        return Plan.objects.filter(visible=True).order_by("price_monthly")
+        # sort_order defaults to 0 for every plan, so legacy order (by price) is kept.
+        return Plan.objects.filter(visible=True).order_by("sort_order", "price_monthly", "id")
+
+    def get_serializer_context(self):
+        # One clock for the whole response so every card agrees on sale state.
+        return {**super().get_serializer_context(), "now": timezone.now()}
 
 
 class PublicPaymentGatewayListView(generics.ListAPIView):

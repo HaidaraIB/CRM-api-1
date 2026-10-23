@@ -94,6 +94,8 @@ class InvoiceView:
     money_display: str
     subtotal_display: str
     total_display: str
+    # Non-empty only when the payment was charged a sale price ("-$6.51").
+    discount_display: str
     status_code: str
     status_label: str
     status_bg: str
@@ -132,6 +134,11 @@ class InvoiceView:
         cur = (getattr(invoice, "currency", None) or "USD").strip().upper()[:10]
         amount_str = _format_amount(getattr(invoice, "amount", 0))
         money = _money_display(cur, amount_str)
+        regular = getattr(invoice, "regular_amount", None)
+        discount = getattr(invoice, "discount_amount", None)
+        has_discount = regular is not None and discount is not None and Decimal(str(discount)) > 0
+        subtotal = _money_display(cur, _format_amount(regular)) if has_discount else money
+        discount_display = f"-{_money_display(cur, _format_amount(discount))}" if has_discount else ""
 
         addr_lines = tuple(_issuer_address_lines(branding))
         line_desc = _line_item_description(invoice)
@@ -147,8 +154,9 @@ class InvoiceView:
             currency=cur,
             amount_numeric_str=amount_str,
             money_display=money,
-            subtotal_display=money,
+            subtotal_display=subtotal,
             total_display=money,
+            discount_display=discount_display,
             status_code=status_code or "",
             status_label=status_label,
             status_bg=status_bg,

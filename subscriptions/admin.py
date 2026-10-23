@@ -7,6 +7,7 @@ from .models import (
     InvoiceSequence,
     Broadcast,
     PaymentGateway,
+    Promotion,
     TrialCode,
     TrialCodeRedemption,
 )
@@ -59,6 +60,25 @@ class PlanAdmin(admin.ModelAdmin):
                     "clients",
                     "visible",
                 )
+            },
+        ),
+        (
+            "Sale & card presentation",
+            {
+                "fields": (
+                    "sale_price_monthly",
+                    "sale_price_yearly",
+                    "sale_starts_at",
+                    "sale_ends_at",
+                    "badge",
+                    "badge_text",
+                    "badge_text_ar",
+                    "is_featured",
+                    "offer_note",
+                    "offer_note_ar",
+                    "sort_order",
+                ),
+                "classes": ("collapse",),
             },
         ),
         (
@@ -367,4 +387,12 @@ class PaymentGatewayAdmin(admin.ModelAdmin):
         "description",
     ]
     ordering = ["name"]
+    readonly_fields = ["created_at", "updated_at"]
+
+
+@admin.register(Promotion)
+class PromotionAdmin(admin.ModelAdmin):
+    list_display = ["name", "theme", "starts_at", "ends_at", "is_active", "priority"]
+    list_filter = ["is_active", "theme"]
+    search_fields = ["name"]
     readonly_fields = ["created_at", "updated_at"]

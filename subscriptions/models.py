@@ -57,6 +57,16 @@ class PaymentGatewayStatus(Enum):
         return [(i.value, i.name) for i in cls]
 
 
+class PlanBadge(models.TextChoices):
+    NONE = "", "None"
+    MOST_POPULAR = "most_popular", "Most popular"
+    BEST_VALUE = "best_value", "Best value"
+    RECOMMENDED = "recommended", "Recommended"
+    NEW = "new", "New"
+    LIMITED_OFFER = "limited_offer", "Limited offer"
+    CUSTOM = "custom", "Custom"
+
+
 class Plan(models.Model):
     name = models.CharField(max_length=255)
     name_ar = models.CharField(max_length=255, blank=True, default="")
@@ -80,6 +90,23 @@ class Plan(models.Model):
     limits = models.JSONField(blank=True, default=dict)
     usage_limits_monthly = models.JSONField(blank=True, default=dict)
     visible = models.BooleanField(default=True)
+
+    # --- Offer / sale (all optional; defaults mean "a normal plan") ---
+    # A sale price is charged instead of the regular price while the sale window
+    # is live. Each cycle is independent. Resolution lives in services/pricing.py.
+    sale_price_monthly = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    sale_price_yearly = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    sale_starts_at = models.DateTimeField(null=True, blank=True, help_text="Null = sale is live immediately.")
+    sale_ends_at = models.DateTimeField(null=True, blank=True, help_text="Null = sale runs until removed.")
+
+    # --- Card presentation ---
+    badge = models.CharField(max_length=32, blank=True, default="", choices=PlanBadge.choices)
+    badge_text = models.CharField(max_length=40, blank=True, default="")
+    badge_text_ar = models.CharField(max_length=40, blank=True, default="")
+    is_featured = models.BooleanField(default=False, help_text="Emphasized card on pricing pages.")
+    offer_note = models.CharField(max_length=160, blank=True, default="")
+    offer_note_ar = models.CharField(max_length=160, blank=True, default="")
+    sort_order = models.PositiveIntegerField(default=0, help_text="Public order: sort_order, then price.")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -364,6 +391,10 @@ class Payment(models.Model):
     )
     # Gateway-specific session payload for reuse (e.g. FIB QR / app links).
     session_meta = models.JSONField(default=dict, blank=True)
+    # Server-written price snapshot taken at checkout (see services/pricing.py
+    # `CheckoutQuote.snapshot`). Lets a webhook that lands after a sale ended
+    # still match the amount we asked the gateway to charge. Never client input.
+    pricing = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -412,6 +443,10 @@ class Invoice(models.Model):
     plan_name = models.CharField(max_length=255, default="")
     line_description = models.CharField(max_length=512, blank=True, default="")
     billing_cycle = models.CharField(max_length=10, blank=True, default="")
+    # Set when the payment was charged a sale price: regular list price and the
+    # discount subtracted from it (same currency as `amount`).
+    regular_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     due_date = models.DateField(null=True, blank=True)
     last_emailed_at = models.DateTimeField(null=True, blank=True)
     legacy_payment_status = models.CharField(
@@ -544,3 +579,96 @@ class Broadcast(models.Model):
         """The subset of ``users`` that has not already received this broadcast."""
         done = set(self.delivered_user_ids or [])
         return [u for u in users if u.id not in done]
+
+
+class PromotionTheme(models.TextChoices):
+    SALE = "sale", "Sale (red)"
+    BRAND = "brand", "Brand"
+    DARK = "dark", "Dark"
+    AMBER = "amber", "Amber"
+
+
+class PromotionAudience(models.TextChoices):
+    PUBLIC = "public", "Public pages"
+    DASHBOARD = "dashboard", "Tenant dashboard (owners)"
+    MOBILE = "mobile", "Mobile app"
+
+
+PROMOTION_MAX_MESSAGES = 6
+PROMOTION_MESSAGE_MAX_LENGTH = 120
+
+
+class PromotionQuerySet(models.QuerySet):
+    def live(self, at=None, audience: str | None = None):
+        at = at or timezone.now()
+        qs = self.filter(is_active=True, starts_at__lte=at).filter(
+            models.Q(ends_at__isnull=True) | models.Q(ends_at__gt=at)
+        )
+        if audience:
+            # JSON list membership; done in Python to stay portable across
+            # SQLite (tests) and Postgres.
+            ids = [p.pk for p in qs.only("pk", "audiences") if audience in (p.audiences or [])]
+            qs = qs.filter(pk__in=ids)
+        return qs.order_by("-priority", "-starts_at", "-pk")
+
+    def current(self, at=None, audience: str | None = None):
+        """The one promotion a surface shows right now (or None)."""
+        return self.live(at=at, audience=audience).first()
+
+
+class Promotion(models.Model):
+    """
+    Platform-wide promotion bar ("Black Friday — ends in 02d 14h"). Purely
+    presentational: it never changes what anyone is charged. Plan sale prices
+    (Plan.sale_*) are the billing side and keep their own window on purpose,
+    so pausing or deleting a promotion can never alter checkout amounts.
+    """
+
+    name = models.CharField(max_length=120, help_text="Internal label (never shown to tenants).")
+    # [{"en": "...", "ar": "..."}], 1..PROMOTION_MAX_MESSAGES items.
+    messages = models.JSONField(default=list)
+    cta_label = models.CharField(max_length=40, blank=True, default="")
+    cta_label_ar = models.CharField(max_length=40, blank=True, default="")
+    cta_url = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="https://… or /path. Blank = each surface's plans/billing page.",
+    )
+    theme = models.CharField(max_length=16, choices=PromotionTheme.choices, default=PromotionTheme.SALE)
+    starts_at = models.DateTimeField()
+    ends_at = models.DateTimeField(null=True, blank=True)
+    show_countdown = models.BooleanField(default=False)
+    audiences = models.JSONField(default=list)
+    dismissible = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    priority = models.IntegerField(default=0)
+    created_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = PromotionQuerySet.as_manager()
+
+    class Meta:
+        db_table = "promotions"
+        ordering = ["-starts_at", "-pk"]
+
+    def __str__(self):
+        return self.name
+
+    def status_at(self, at=None) -> str:
+        """paused | scheduled | live | ended."""
+        at = at or timezone.now()
+        if not self.is_active:
+            return "paused"
+        if self.starts_at and self.starts_at > at:
+            return "scheduled"
+        if self.ends_at and self.ends_at <= at:
+            return "ended"
+        return "live"

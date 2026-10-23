@@ -79,6 +79,12 @@
                         <td style="font-size:11px;color:#6b7280;">{{ label_subtotal }}</td>
                         <td style="font-size:14px;color:#111827;text-align:right;font-weight:500;">{{ invoice_view.subtotal_display }}</td>
                       </tr>
+                      {% if invoice_view.discount_display %}
+                      <tr>
+                        <td style="font-size:11px;color:#6b7280;padding-top:8px;">{{ label_discount }}</td>
+                        <td style="font-size:14px;color:#e11d48;text-align:right;font-weight:600;padding-top:8px;">{{ invoice_view.discount_display }}</td>
+                      </tr>
+                      {% endif %}
                     </table>
                   </td>
                 </tr>

@@ -119,6 +119,8 @@ from subscriptions.views import (
     PaymentGatewayViewSet,
     PublicPlanListView,
     PublicPaymentGatewayListView,
+    PromotionViewSet,
+    active_promotion_public,
     create_paytabs_payment,
     paytabs_return,
     paytabs_callback,
@@ -245,6 +247,7 @@ router.register(
 router.register(r"suppliers", SupplierViewSet, basename="supplier")
 
 router.register(r"plans", PlanViewSet, basename="plan")
+router.register(r"promotions", PromotionViewSet, basename="promotion")
 router.register(r"subscriptions", SubscriptionViewSet, basename="subscription")
 router.register(r"payments", PaymentViewSet, basename="payment")
 router.register(r"invoices", InvoiceViewSet, basename="invoice")
@@ -417,6 +420,7 @@ v1_patterns = [
     path("auth/request-2fa/", request_two_factor_auth, name="request_two_factor_auth"),
     path("auth/verify-2fa/", verify_two_factor_auth, name="verify_two_factor_auth"),
     path("public/plans/", PublicPlanListView.as_view(), name="public_plan_list"),
+    path("public/promotions/active/", active_promotion_public, name="public_active_promotion"),
     path("public/trial-codes/validate/", validate_trial_code_public, name="validate_trial_code_public"),
     path("public/payment-gateways/", PublicPaymentGatewayListView.as_view(), name="public_payment_gateway_list"),
     path(

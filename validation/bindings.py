@@ -67,6 +67,7 @@ def install() -> None:
         BroadcastSerializer,
         PaymentGatewaySerializer,
         PlanSerializer,
+        PromotionSerializer,
         TrialCodeBatchGenerateSerializer,
         TrialCodeCreateSerializer,
     )
@@ -132,6 +133,7 @@ def install() -> None:
         (NewsPostSerializer, "news_post.upsert"),
         (PageHelpVideoSerializer, "page_help_video.upsert"),
         (PlanSerializer, "plan.upsert"),
+        (PromotionSerializer, "promotion.upsert"),
         (PaymentGatewaySerializer, "payment_gateway.create"),
         (TrialCodeCreateSerializer, "trial_code.create"),
         (TrialCodeBatchGenerateSerializer, "trial_code.batch"),

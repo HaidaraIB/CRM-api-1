@@ -9,6 +9,9 @@ Field semantics (Stripe-like):
 - Renewals: new window [old end_date, old end_date + period).
 - Downgrades / paid→free: scheduled via pending_plan; applied at period boundary by
   end_expired_subscriptions (or switch-plan-free for immediate free-only switches).
+- Sale prices (services/pricing.py) apply to initial and renewal checkouts; upgrade
+  proration stays on regular prices. The charged amount is snapshotted on
+  Payment.pricing so a webhook that lands after a sale ended still applies.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ from django.utils import timezone
 
 from subscriptions.cache_utils import invalidate_company_subscription_cache
 from subscriptions.services.trial_eligibility import mark_company_free_trial_consumed
+from subscriptions.services.pricing import CheckoutQuote, cycle_price
 from subscriptions.models import (
     BillingCycle,
     Payment,
@@ -46,6 +50,7 @@ def is_plan_free(plan: Plan) -> bool:
 
 
 def plan_price_for_cycle(plan: Plan, billing_cycle: str) -> float:
+    """Regular (list) price. For the price actually charged now use pricing.cycle_price."""
     if billing_cycle == BillingCycle.YEARLY:
         return float(plan.price_yearly or 0)
     return float(plan.price_monthly or 0)
@@ -107,6 +112,27 @@ def _amount_matches_expected(paid: float, expected: Decimal) -> bool:
     return diff <= AMOUNT_TOLERANCE_USD or diff / max(exp, Decimal("0.01")) <= AMOUNT_TOLERANCE_RATIO
 
 
+def _amount_matches_any(paid: float, candidates) -> bool:
+    return any(c is not None and _amount_matches_expected(paid, Decimal(str(c))) for c in candidates)
+
+
+def _acceptable_full_period_amounts(
+    plan: Plan, billing_cycle: str, locked_amount_usd: Optional[Decimal], now
+) -> list[Decimal]:
+    """
+    Amounts that legitimately pay for a full initial/renewal period:
+    - the price the server locked at checkout (the sale may have ended since),
+    - the price charged right now (sale price while live),
+    - the regular price (legacy payments without a snapshot; sale started mid-session).
+    Every candidate is server-derived; the paid amount itself was verified with the gateway.
+    """
+    current = cycle_price(plan, billing_cycle, at=now)
+    out = [current.price, current.regular]
+    if locked_amount_usd is not None:
+        out.insert(0, Decimal(str(locked_amount_usd)))
+    return out
+
+
 def normalize_subscription_billing_window(subscription: Subscription) -> list[str]:
     """
     Ensure current_period_start and end_date form a valid billing window (Stripe-style:
@@ -155,10 +181,15 @@ def apply_successful_payment(
     target_plan: Plan,
     billing_cycle: str,
     exclude_payment_id: Optional[int] = None,
+    locked_amount_usd: Optional[Decimal] = None,
 ) -> Subscription:
     """
     Apply a completed payment: set plan, period dates, and status.
     Call from gateway return handlers after verifying gateway state.
+
+    ``locked_amount_usd`` is the server-written checkout snapshot amount
+    (Payment.pricing["charged_usd"]); it is accepted for initial/renewal even if
+    the plan's sale has ended since the session was opened.
     """
     subscription = Subscription.objects.select_for_update().get(pk=subscription.pk)
     target_plan = Plan.objects.get(pk=target_plan.pk)
@@ -171,7 +202,9 @@ def apply_successful_payment(
 
     prior_completed = _prior_completed_payments_exist(subscription.id, exclude_payment_id)
     period_days = period_days_for_cycle(billing_cycle)
-    new_price = plan_price_for_cycle(target_plan, billing_cycle)
+    full_period_amounts = _acceptable_full_period_amounts(
+        target_plan, billing_cycle, locked_amount_usd, now
+    )
 
     # --- Upgrade: higher tier, active period, both paid in this cycle ---
     if (
@@ -221,10 +254,9 @@ def apply_successful_payment(
         and subscription.end_date
         and subscription.end_date > now
     ):
-        full = Decimal(str(new_price))
-        if not _amount_matches_expected(amount_usd, full):
+        if not _amount_matches_any(amount_usd, full_period_amounts):
             raise ValueError(
-                f"Payment amount does not match renewal price (expected ~{full} USD)."
+                f"Payment amount does not match renewal price (expected ~{full_period_amounts[0]} USD)."
             )
         base = subscription.end_date
         subscription.current_period_start = base
@@ -249,9 +281,9 @@ def apply_successful_payment(
         return subscription
 
     # --- Initial purchase / reactivation / trial→paid ---
-    if not _amount_matches_expected(amount_usd, Decimal(str(new_price))):
+    if not _amount_matches_any(amount_usd, full_period_amounts):
         raise ValueError(
-            f"Payment amount does not match plan price for cycle (expected ~{new_price} USD)."
+            f"Payment amount does not match plan price for cycle (expected ~{full_period_amounts[0]} USD)."
         )
     # New paid period starts when payment succeeds (aligned with major billing providers).
     base = now
@@ -287,19 +319,16 @@ def apply_successful_payment(
     return subscription
 
 
-def resolve_checkout_pricing(
+def resolve_checkout_quote(
     subscription: Subscription,
     *,
     target_plan_id: Optional[int],
     billing_cycle_param: Optional[str],
-) -> Tuple[Plan, str, Decimal, str]:
+) -> CheckoutQuote:
     """
-    Decide target plan, billing cycle, amount (USD), and intent label for a new checkout session.
-    Does not mutate the subscription or plan rows.
-
-    Returns:
-        (target_plan, billing_cycle, amount_usd, intent)
-        intent: initial | renewal | upgrade | error
+    Decide target plan, billing cycle, amount (USD), and intent for a new checkout session.
+    Does not mutate the subscription or plan rows. Raises ValueError for changes that
+    must not go through checkout (downgrade / lateral / nothing due).
     """
     subscription = Subscription.objects.select_related("plan").get(pk=subscription.pk)
     old_plan = subscription.plan
@@ -328,7 +357,7 @@ def resolve_checkout_pricing(
     if target_plan.tier == old_plan.tier and target_plan.id != old_plan.id:
         raise ValueError("Lateral plan changes are not supported via checkout.")
 
-    # Upgrade
+    # Upgrade — prorated on regular prices (sales never apply to proration).
     if (
         prior_completed
         and subscription.end_date
@@ -342,18 +371,46 @@ def resolve_checkout_pricing(
         )
         if amt <= 0:
             raise ValueError("No prorated amount due for this upgrade.")
-        return target_plan, billing_cycle, amt, "upgrade"
+        return CheckoutQuote(
+            plan=target_plan, billing_cycle=billing_cycle, amount_usd=amt,
+            intent="upgrade", regular_usd=amt,
+        )
+
+    price = cycle_price(target_plan, billing_cycle, at=now)
 
     # Renewal (same plan)
     if prior_completed and target_plan.id == old_plan.id and subscription.end_date and subscription.end_date > now:
-        price = Decimal(str(plan_price_for_cycle(target_plan, billing_cycle)))
-        return target_plan, billing_cycle, price, "renewal"
+        return CheckoutQuote(
+            plan=target_plan, billing_cycle=billing_cycle, amount_usd=price.price,
+            intent="renewal", regular_usd=price.regular, sale_ends_at=price.sale_ends_at,
+        )
 
     # First payment / trial→paid / expired reactivation
-    price = Decimal(str(plan_price_for_cycle(target_plan, billing_cycle)))
-    if price <= 0:
+    if price.price <= 0:
         raise ValueError("Target plan does not require payment for this billing cycle.")
-    return target_plan, billing_cycle, price, "initial"
+    return CheckoutQuote(
+        plan=target_plan, billing_cycle=billing_cycle, amount_usd=price.price,
+        intent="initial", regular_usd=price.regular, sale_ends_at=price.sale_ends_at,
+    )
+
+
+def resolve_checkout_pricing(
+    subscription: Subscription,
+    *,
+    target_plan_id: Optional[int],
+    billing_cycle_param: Optional[str],
+) -> Tuple[Plan, str, Decimal, str]:
+    """
+    Back-compat wrapper over resolve_checkout_quote.
+
+    Returns:
+        (target_plan, billing_cycle, amount_usd, intent)
+        intent: initial | renewal | upgrade
+    """
+    q = resolve_checkout_quote(
+        subscription, target_plan_id=target_plan_id, billing_cycle_param=billing_cycle_param
+    )
+    return q.plan, q.billing_cycle, q.amount_usd, q.intent
 
 
 @transaction.atomic
@@ -369,6 +426,7 @@ def finalize_completed_payment(
     Idempotent: if payment.applied_at is set, returns without changing the period again.
     Locks the Payment row to prevent concurrent double-apply.
     """
+    from subscriptions.services.pricing import locked_amount_from_snapshot
     from subscriptions.services.subscription_helpers import infer_billing_cycle_from_amount_usd
 
     payment = Payment.objects.select_for_update().get(pk=payment.pk)
@@ -385,6 +443,7 @@ def finalize_completed_payment(
         target_plan=target,
         billing_cycle=bc,
         exclude_payment_id=payment.id,
+        locked_amount_usd=locked_amount_from_snapshot(payment.pricing),
     )
     payment.applied_at = timezone.now()
     payment.save(update_fields=["applied_at", "updated_at"])
@@ -399,13 +458,14 @@ def preview_plan_change(
 ) -> dict[str, Any]:
     """Data for GET preview-change (no mutation)."""
     try:
-        target_plan, billing_cycle, amount_usd, intent = resolve_checkout_pricing(
+        quote = resolve_checkout_quote(
             subscription,
             target_plan_id=plan_id,
             billing_cycle_param=billing_cycle_param,
         )
     except ValueError as e:
         return {"ok": False, "error": str(e), "code": "invalid_change"}
+    target_plan = quote.plan
 
     now = timezone.now()
     old_plan = subscription.plan
@@ -416,9 +476,12 @@ def preview_plan_change(
 
     return {
         "ok": True,
-        "intent": intent,
-        "billing_cycle": billing_cycle,
-        "amount_usd": str(amount_usd),
+        "intent": quote.intent,
+        "billing_cycle": quote.billing_cycle,
+        "amount_usd": str(quote.amount_usd),
+        "regular_amount_usd": str(quote.regular_usd),
+        "discount_usd": str(quote.discount_usd),
+        "sale_ends_at": quote.sale_ends_at.isoformat() if quote.sale_ends_at else None,
         "current_period_end": sub.end_date.isoformat() if sub.end_date else None,
         "current_period_start": sub.current_period_start.isoformat() if sub.current_period_start else None,
         "days_remaining_in_period": days_left,

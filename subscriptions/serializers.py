@@ -10,7 +10,12 @@ from .gateway_config import (
     strip_masked_values,
 )
 from .models import (
+    PROMOTION_MAX_MESSAGES,
+    PROMOTION_MESSAGE_MAX_LENGTH,
     Plan,
+    PlanBadge,
+    Promotion,
+    PromotionAudience,
     Subscription,
     Payment,
     Invoice,
@@ -25,6 +30,7 @@ from .services.trial_codes import (
     validate_trial_code_format,
 )
 from .services.gateway_activation import apply_exclusive_activation
+from .services.pricing import plan_pricing_json, sale_window_status
 
 
 class CreateCheckoutSessionSerializer(serializers.Serializer):
@@ -48,6 +54,26 @@ CreateQicardPaymentSerializer = CreateCheckoutSessionSerializer
 CreateFibPaymentSerializer = CreateCheckoutSessionSerializer
 
 
+# Sale + card-presentation fields shared by every plan serializer.
+PLAN_OFFER_FIELDS = (
+    "sale_price_monthly",
+    "sale_price_yearly",
+    "sale_starts_at",
+    "sale_ends_at",
+    "badge",
+    "badge_text",
+    "badge_text_ar",
+    "is_featured",
+    "offer_note",
+    "offer_note_ar",
+    "sort_order",
+)
+
+
+def _field_error(field: str, code: str, message: str) -> serializers.ValidationError:
+    return serializers.ValidationError({field: [ErrorDetail(message, code=code)]})
+
+
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plan
@@ -67,6 +93,7 @@ class PlanSerializer(serializers.ModelSerializer):
             "usage_limits_monthly",
             "visible",
             "tier",
+            *PLAN_OFFER_FIELDS,
             "created_at",
             "updated_at",
         ]
@@ -108,7 +135,76 @@ class PlanSerializer(serializers.ModelSerializer):
             )
         except DjangoValidationError as e:
             raise serializers.ValidationError(e.messages[0] if e.messages else str(e))
+        self._validate_offer(attrs, pm=pm, py=py, td=td)
         return attrs
+
+    def _current(self, attrs, name, default=None):
+        if name in attrs:
+            return attrs[name]
+        if self.instance is not None:
+            return getattr(self.instance, name)
+        return default
+
+    def _validate_offer(self, attrs, *, pm, py, td):
+        """Cross-field sale/badge rules the catalog cannot express."""
+        from decimal import Decimal
+
+        sale_m = self._current(attrs, "sale_price_monthly")
+        sale_y = self._current(attrs, "sale_price_yearly")
+        is_paid = Decimal(str(pm or 0)) > 0 or Decimal(str(py or 0)) > 0
+        for field, sale, regular in (
+            ("sale_price_monthly", sale_m, pm),
+            ("sale_price_yearly", sale_y, py),
+        ):
+            if sale is None:
+                continue
+            if not is_paid:
+                raise _field_error(
+                    field,
+                    "validation.sale_requires_paid_plan",
+                    "Only paid plans can have a sale price.",
+                )
+            regular_dec = Decimal(str(regular or 0))
+            if not (Decimal("0") < Decimal(str(sale)) < regular_dec):
+                raise _field_error(
+                    field,
+                    "validation.sale_price_below_regular",
+                    "Sale price must be greater than 0 and lower than the regular price.",
+                )
+
+        starts = self._current(attrs, "sale_starts_at")
+        ends = self._current(attrs, "sale_ends_at")
+        if starts and ends and ends <= starts:
+            raise _field_error(
+                "sale_ends_at", "validation.date_range", "The end must be after the start."
+            )
+
+        badge = self._current(attrs, "badge", "")
+        if badge == PlanBadge.CUSTOM:
+            for f in ("badge_text", "badge_text_ar"):
+                if not (self._current(attrs, f, "") or "").strip():
+                    raise _field_error(f, "validation.required_if", "This field is required.")
+        note_en = (self._current(attrs, "offer_note", "") or "").strip()
+        note_ar = (self._current(attrs, "offer_note_ar", "") or "").strip()
+        if bool(note_en) != bool(note_ar):
+            missing = "offer_note_ar" if note_en else "offer_note"
+            raise _field_error(
+                missing,
+                "validation.both_locales_required",
+                "Provide this text in both English and Arabic.",
+            )
+
+    def validate_badge_text(self, value):
+        return (value or "").strip()
+
+    def validate_badge_text_ar(self, value):
+        return (value or "").strip()
+
+    def validate_offer_note(self, value):
+        return (value or "").strip()
+
+    def validate_offer_note_ar(self, value):
+        return (value or "").strip()
 
 
 class PlanListSerializer(serializers.ModelSerializer):
@@ -118,6 +214,8 @@ class PlanListSerializer(serializers.ModelSerializer):
     pending_subscription_count = serializers.IntegerField(read_only=True, default=0)
     trial_code_count = serializers.IntegerField(read_only=True, default=0)
     target_payment_count = serializers.IntegerField(read_only=True, default=0)
+    pricing = serializers.SerializerMethodField()
+    sale_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Plan
@@ -137,11 +235,45 @@ class PlanListSerializer(serializers.ModelSerializer):
             "usage_limits_monthly",
             "visible",
             "tier",
+            *PLAN_OFFER_FIELDS,
+            "pricing",
+            "sale_status",
             "subscription_count",
             "pending_subscription_count",
             "trial_code_count",
             "target_payment_count",
         ]
+
+    def get_pricing(self, obj):
+        return plan_pricing_json(obj, at=self.context.get("now"))
+
+    def get_sale_status(self, obj):
+        return sale_window_status(obj, self.context.get("now"))
+
+
+class PublicPlanSerializer(PlanListSerializer):
+    """
+    Public pricing-page shape. Keeps every PlanListSerializer field (existing
+    clients read them) and adds a display-ready badge object. `pricing` carries
+    the price to show/charge now; `price_monthly`/`price_yearly` stay regular.
+    """
+
+    badge = serializers.SerializerMethodField()
+    sale_ends_at = serializers.SerializerMethodField()
+
+    class Meta(PlanListSerializer.Meta):
+        fields = list(PlanListSerializer.Meta.fields)
+
+    def get_badge(self, obj):
+        if not obj.badge:
+            return None
+        return {"key": obj.badge, "text": obj.badge_text, "text_ar": obj.badge_text_ar}
+
+    def get_sale_ends_at(self, obj):
+        # Only advertise an end date while the sale is actually live.
+        if sale_window_status(obj, self.context.get("now")) != "live" or not obj.sale_ends_at:
+            return None
+        return obj.sale_ends_at.isoformat()
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
@@ -726,4 +858,149 @@ class TrialCodeRedemptionSerializer(serializers.ModelSerializer):
             "owner_email",
             "owner_name",
             "redeemed_at",
+        ]
+
+
+class PromotionSerializer(serializers.ModelSerializer):
+    """Super Admin CRUD for the promotion bar."""
+
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Promotion
+        fields = [
+            "id",
+            "name",
+            "messages",
+            "cta_label",
+            "cta_label_ar",
+            "cta_url",
+            "theme",
+            "starts_at",
+            "ends_at",
+            "show_countdown",
+            "audiences",
+            "dismissible",
+            "is_active",
+            "priority",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "status", "created_at", "updated_at"]
+
+    def get_status(self, obj):
+        return obj.status_at()
+
+    def validate_name(self, value):
+        return (value or "").strip()
+
+    def validate_messages(self, value):
+        if not isinstance(value, list) or not value:
+            raise serializers.ValidationError(
+                [ErrorDetail("Add at least one message.", code="validation.array")]
+            )
+        if len(value) > PROMOTION_MAX_MESSAGES:
+            raise serializers.ValidationError(
+                [ErrorDetail(f"At most {PROMOTION_MAX_MESSAGES} messages.", code="validation.array")]
+            )
+        cleaned = []
+        for item in value:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError(
+                    [ErrorDetail("Invalid message.", code="validation.invalid")]
+                )
+            en = str(item.get("en") or "").strip()
+            ar = str(item.get("ar") or "").strip()
+            if not en or not ar:
+                raise serializers.ValidationError(
+                    [ErrorDetail(
+                        "Provide every message in both English and Arabic.",
+                        code="validation.both_locales_required",
+                    )]
+                )
+            if len(en) > PROMOTION_MESSAGE_MAX_LENGTH or len(ar) > PROMOTION_MESSAGE_MAX_LENGTH:
+                raise serializers.ValidationError(
+                    [ErrorDetail(
+                        f"Must be at most {PROMOTION_MESSAGE_MAX_LENGTH} characters.",
+                        code="validation.max_length",
+                    )]
+                )
+            cleaned.append({"en": en, "ar": ar})
+        return cleaned
+
+    def validate_audiences(self, value):
+        allowed = {c.value for c in PromotionAudience}
+        if not isinstance(value, list) or not value:
+            raise serializers.ValidationError(
+                [ErrorDetail("Choose at least one place to show it.", code="validation.array")]
+            )
+        if any(a not in allowed for a in value):
+            raise serializers.ValidationError(
+                [ErrorDetail("Select a valid option.", code="validation.one_of")]
+            )
+        # Stable order, no duplicates.
+        return [a.value for a in PromotionAudience if a.value in value]
+
+    def validate_cta_url(self, value):
+        url = (value or "").strip()
+        if not url:
+            return ""
+        if url.startswith("/") and not url.startswith("//"):
+            return url
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise serializers.ValidationError(
+                [ErrorDetail("Use an https:// link or a path starting with /.", code="validation.url")]
+            )
+        return url
+
+    def _current(self, attrs, name, default=None):
+        if name in attrs:
+            return attrs[name]
+        if self.instance is not None:
+            return getattr(self.instance, name)
+        return default
+
+    def validate(self, attrs):
+        starts = self._current(attrs, "starts_at")
+        ends = self._current(attrs, "ends_at")
+        if starts and ends and ends <= starts:
+            raise _field_error("ends_at", "validation.date_range", "The end must be after the start.")
+        if self._current(attrs, "show_countdown", False) and not ends:
+            raise _field_error(
+                "show_countdown",
+                "validation.countdown_requires_end",
+                "A countdown needs an end date.",
+            )
+        label_en = (self._current(attrs, "cta_label", "") or "").strip()
+        label_ar = (self._current(attrs, "cta_label_ar", "") or "").strip()
+        if bool(label_en) != bool(label_ar):
+            raise _field_error(
+                "cta_label_ar" if label_en else "cta_label",
+                "validation.both_locales_required",
+                "Provide this text in both English and Arabic.",
+            )
+        return attrs
+
+
+class PublicPromotionSerializer(serializers.ModelSerializer):
+    """What a pricing surface needs to render the bar — nothing internal."""
+
+    class Meta:
+        model = Promotion
+        fields = [
+            "id",
+            "messages",
+            "cta_label",
+            "cta_label_ar",
+            "cta_url",
+            "theme",
+            "starts_at",
+            "ends_at",
+            "show_countdown",
+            "dismissible",
+            "updated_at",
         ]

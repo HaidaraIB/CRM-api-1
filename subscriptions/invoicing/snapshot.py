@@ -4,6 +4,7 @@ Create one read-only Invoice per Payment (idempotent).
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -20,6 +21,25 @@ def _line_description(subscription, payment) -> str:
     if cycle:
         return f"{name} — {cycle}"
     return name
+
+
+def _discount_lines(payment):
+    """
+    (regular_amount, discount_amount) in the invoice currency when the payment
+    was charged a sale price, else (None, None). Scaled from the USD snapshot so
+    it stays correct if the gateway billed in another currency.
+    """
+    pricing = getattr(payment, "pricing", None) or {}
+    try:
+        regular_usd = Decimal(str(pricing.get("regular_usd")))
+        charged_usd = Decimal(str(pricing.get("charged_usd")))
+    except Exception:
+        return None, None
+    if charged_usd <= 0 or regular_usd <= charged_usd:
+        return None, None
+    amount = Decimal(str(payment.amount))
+    regular = (amount * regular_usd / charged_usd).quantize(Decimal("0.01"))
+    return regular, (regular - amount).quantize(Decimal("0.01"))
 
 
 def ensure_invoice_for_payment(payment):
@@ -44,6 +64,7 @@ def ensure_invoice_for_payment(payment):
 
     company = subscription.company
     plan = payment.target_plan or subscription.plan
+    regular_amount, discount_amount = _discount_lines(payment)
 
     try:
         with transaction.atomic():
@@ -60,6 +81,8 @@ def ensure_invoice_for_payment(payment):
                 line_description=_line_description(subscription, payment)[:512],
                 billing_cycle=(payment.billing_cycle or subscription.billing_cycle or "")[:10],
                 due_date=timezone.now().date(),
+                regular_amount=regular_amount,
+                discount_amount=discount_amount,
             )
     except IntegrityError:
         return Invoice.objects.filter(payment_id=payment.pk).first()

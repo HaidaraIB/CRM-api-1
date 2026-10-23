@@ -28,6 +28,10 @@ def default_message(code: str, params: dict | None = None) -> str:
         "validation.password_policy": _password_message(reason, params),
         "validation.array": "Check the number of items.",
         "validation.invalid": "Invalid value.",
+        "validation.sale_price_below_regular": "Sale price must be greater than 0 and lower than the regular price.",
+        "validation.sale_requires_paid_plan": "Only paid plans can have a sale price.",
+        "validation.both_locales_required": "Provide this text in both English and Arabic.",
+        "validation.countdown_requires_end": "A countdown needs an end date.",
         "validation.whatsapp_template_body": _whatsapp_message(reason),
     }
     template = templates.get(code, "Invalid value.")

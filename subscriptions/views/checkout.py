@@ -31,7 +31,7 @@ from ..gateways.registry import resolve_gateway
 from ..models import Payment, PaymentStatus, Plan, Subscription
 from ..phone_verification_gate import require_owner_phone_verified
 from ..serializers import CreateCheckoutSessionSerializer
-from ..services.billing import resolve_checkout_pricing
+from ..services.billing import resolve_checkout_quote
 from ..services.checkout_auth import require_subscription_owner
 from ..services.payment_completion import (
     attach_checkout_session,
@@ -119,10 +119,13 @@ def create_checkout_session(request, *, slug: str):
         return gate
 
     try:
-        target_plan, billing_cycle, amount_dec, intent = resolve_checkout_pricing(
+        quote = resolve_checkout_quote(
             subscription,
             target_plan_id=plan_id,
             billing_cycle_param=billing_cycle_param,
+        )
+        target_plan, billing_cycle, amount_dec, intent = (
+            quote.plan, quote.billing_cycle, quote.amount_usd, quote.intent
         )
     except ValueError as e:
         return error_response(str(e), code="invalid_checkout")
@@ -217,6 +220,7 @@ def create_checkout_session(request, *, slug: str):
                 tran_ref=session.tran_ref,
                 target_plan=target_plan,
                 billing_cycle=billing_cycle,
+                pricing=quote.snapshot(),
             )
             attach_checkout_session(
                 payment,

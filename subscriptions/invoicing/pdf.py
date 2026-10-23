@@ -321,7 +321,8 @@ def _line_items_table(view: InvoiceView, content_width) -> Table:
     hdr = [_p("Description", hdr_desc), _p("Amount", hdr_amt)]
     row = [
         _p_field(view.line_item_description, styles),
-        _p(view.money_display, amt_b),
+        # The line shows the list price; a sale discount is its own row under Subtotal.
+        _p(view.subtotal_display, amt_b),
     ]
     t = Table([hdr, row], colWidths=[content_width * 0.68, content_width * 0.32])
     t.setStyle(
@@ -355,10 +356,11 @@ def _totals_table(view: InvoiceView, content_width) -> Table:
     )
     tot_l = ParagraphStyle(name="TotL", parent=bui, fontName="Helvetica-Bold")
     t1 = ParagraphStyle(name="T1", parent=bui, alignment=TA_RIGHT)
-    rows = [
-        [_p("Subtotal", bui), _p(view.subtotal_display, t1)],
-        [_p("Total", tot_l), _p(view.total_display, tot_v)],
-    ]
+    rows = [[_p("Subtotal", bui), _p(view.subtotal_display, t1)]]
+    if view.discount_display:
+        rows.append([_p("Discount", bui), _p(view.discount_display, t1)])
+    rows.append([_p("Total", tot_l), _p(view.total_display, tot_v)])
+    total_row = len(rows) - 1
     t = Table(rows, colWidths=[w * 0.45, w * 0.55], hAlign="RIGHT")
     t.setStyle(
         TableStyle(
@@ -370,7 +372,7 @@ def _totals_table(view: InvoiceView, content_width) -> Table:
                 ("RIGHTPADDING", (0, 0), (-1, -1), 10),
                 ("TOPPADDING", (0, 0), (-1, -1), 6),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                ("LINEABOVE", (0, 1), (-1, 1), 1.5, _ACCENT),
+                ("LINEABOVE", (0, total_row), (-1, total_row), 1.5, _ACCENT),
             ]
         )
     )

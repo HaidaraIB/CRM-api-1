@@ -11,6 +11,7 @@ from .billing import (
     is_plan_free,
     preview_plan_change,
     resolve_checkout_pricing,
+    resolve_checkout_quote,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "is_plan_free",
     "preview_plan_change",
     "resolve_checkout_pricing",
+    "resolve_checkout_quote",
 ]

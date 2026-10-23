@@ -28,8 +28,11 @@ from .viewsets_public import (
     switch_subscription_plan_free,
 )
 from .zaincash import create_zaincash_payment, zaincash_return
+from .promotions import PromotionViewSet, active_promotion_public
 
 __all__ = [
+    "PromotionViewSet",
+    "active_promotion_public",
     "BroadcastViewSet",
     "InvoiceViewSet",
     "PaymentGatewayViewSet",

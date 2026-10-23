@@ -18,6 +18,10 @@ def infer_billing_cycle_from_amount_usd(plan, amount_usd: float) -> str:
         return "yearly"
     if abs(amount_usd - pm) < 0.01:
         return "monthly"
+    # Sale prices (legacy rows without billing_cycle may have been charged one).
+    for sale, cycle in ((plan.sale_price_yearly, "yearly"), (plan.sale_price_monthly, "monthly")):
+        if sale is not None and abs(amount_usd - float(sale)) < 0.01:
+            return cycle
     yearly_diff = abs(amount_usd - py)
     monthly_diff = abs(amount_usd - pm)
     return "yearly" if yearly_diff < monthly_diff else "monthly"
