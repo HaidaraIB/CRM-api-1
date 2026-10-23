@@ -3,7 +3,9 @@ Notification service for sending push notifications via Firebase Cloud Messaging
 """
 import logging
 import os
+import sys
 import threading
+import traceback
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -47,6 +49,26 @@ _FIREBASE_APP_OPTIONS = {"httpTimeout": 15}
 # this must stay under that 60s with room for the DB work around them.
 _FCM_SEND_DEADLINE_SECONDS = 25
 
+# Innermost frames are where a stall sits (OAuth refresh, socket read, connect/DNS).
+_STUCK_STACK_FRAMES = 15
+
+
+def _stuck_send_stacks(threads_before: set) -> str:
+    """
+    Stacks of the threads a stalled send started. send_each_for_multicast does the
+    HTTP work on its own ThreadPoolExecutor, so the fcm-send thread alone only shows
+    it waiting on futures. Threads that already existed (including sends abandoned
+    earlier) are left out.
+    """
+    frames = sys._current_frames()
+    parts = []
+    for thread in threading.enumerate():
+        if thread.ident in threads_before or thread.ident not in frames:
+            continue
+        stack = traceback.format_stack(frames[thread.ident])[-_STUCK_STACK_FRAMES:]
+        parts.append(f"--- thread {thread.name} ---\n{''.join(stack)}")
+    return "\n".join(parts) or "(no new threads still running)"
+
 
 class NotificationService:
     """Service for sending push notifications"""
@@ -85,6 +107,7 @@ class NotificationService:
             except Exception as exc:  # re-raised on the caller's thread below
                 outcome["error"] = exc
 
+        threads_before = {t.ident for t in threading.enumerate()}
         # Daemon so a send still stuck past the deadline can't hold up worker exit.
         sender = threading.Thread(target=_send, name="fcm-send", daemon=True)
         sender.start()
@@ -93,10 +116,11 @@ class NotificationService:
             # Abandoned, not cancelled: it may still deliver once the network recovers.
             # Stale-token pruning waits for the next push that completes.
             logger.error(
-                "FCM send to %s exceeded %ss for %d token(s); giving up on it",
+                "FCM send to %s exceeded %ss for %d token(s); giving up on it\n%s",
                 user.username,
                 _FCM_SEND_DEADLINE_SECONDS,
                 len(tokens),
+                _stuck_send_stacks(threads_before),
             )
             return 0, []
         if "error" in outcome:

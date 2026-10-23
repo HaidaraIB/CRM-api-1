@@ -8,6 +8,7 @@ non-delivery that returns well inside the worker's budget.
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -39,6 +40,34 @@ def test_stalled_send_is_abandoned_at_the_deadline():
 
     assert result == (0, [])
     assert elapsed < 2
+
+
+def test_stalled_send_logs_where_the_sdk_pool_thread_is_stuck():
+    """The SDK does the HTTP call on its own pool thread; that's the stack we need."""
+    release = threading.Event()
+
+    def _oauth_refresh_hangs():
+        release.wait(5)
+
+    def _sdk_send(_multicast):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_oauth_refresh_hangs).result()
+
+    try:
+        with (
+            patch.object(services, "_FCM_SEND_DEADLINE_SECONDS", 0.2),
+            patch.object(messaging, "send_each_for_multicast", side_effect=_sdk_send),
+            patch.object(services.logger, "error") as log_error,
+        ):
+            NotificationService._send_multicast(_USER, ["tok-a"], object())
+    finally:
+        release.set()
+
+    template, *args = log_error.call_args.args
+    message = template % tuple(args)
+    assert "FCM send to pushee exceeded" in message
+    assert "--- thread fcm-send ---" in message
+    assert "_oauth_refresh_hangs" in message
 
 
 def test_completed_send_reports_success_and_stale_tokens():
