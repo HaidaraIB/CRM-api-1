@@ -53,6 +53,16 @@ def test_answered_and_outbound_calls_are_not_missed(node, setup):  # noqa: F811
     assert _missed(send) == []
 
 
+def test_declined_inbound_call_is_busy_not_missed(node, setup):  # noqa: F811
+    # The softphone declines with 486; the node reports busy. The dashboard says
+    # "Declined" / "Busy or declined", so no "Missed call" push may contradict it.
+    with mock.patch("notifications.services.NotificationService.send_notification") as send:
+        _push(node, inbound_call(node, setup["tenant"], status="busy", answered=False))
+    call = PbxCall.objects.get()
+    assert call.status == "busy" and not missed.is_missed(call)
+    assert _missed(send) == []
+
+
 def test_unknown_caller_gets_an_isolated_number_in_the_push(node, setup, settings):  # noqa: F811
     setup["lead"].delete()
     with mock.patch("notifications.services.NotificationService.send_notification") as send:
