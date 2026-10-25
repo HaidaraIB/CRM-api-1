@@ -79,6 +79,12 @@ TRANSPORTS = {
     PbxTrunk.Transport.TLS: "transport-tls",
 }
 
+# Edge mode (contract §10): Kamailio strips this header from everything it
+# receives and sets it only after its own check (auth_ephemeral for browsers, the
+# permissions source map for trunks). Endpoints with no Asterisk-side auth are
+# identified by it alone, so a forged From user can never select them.
+EDGE_IDENTITY_HEADER = "X-Loop-Endpoint"
+
 
 class CompileError(ValueError):
     pass
@@ -205,7 +211,9 @@ def _render_pjsip(rk: str, tag: str, extensions, trunks, warnings) -> str:
             if webrtc and edge:
                 # Preserve the public AOR in the Request-URI while forcing the
                 # only permitted private hop through Kamailio.
-                out.append(f"outbound_proxy = sip:{edge_proxy};lr")
+                out += [_outbound_proxy(edge_proxy), "identify_by = header"]
+            elif edge:
+                out.append("identify_by = username")  # desk phones keep digest auth
         if with_auth:
             out.append(f"auth = {name}-auth")
         out += [f"aors = {name}", f'callerid = "{display}" <{ext.number}>', f"set_var = __LOOP_TENANT={tag}", ""]
@@ -215,7 +223,12 @@ def _render_pjsip(rk: str, tag: str, extensions, trunks, warnings) -> str:
         elif not secret and not webrtc:
             warnings.append(f"extension {ext.number} has no SIP secret; it cannot register")
         if webrtc and edge:
-            out += [f"[{name}]", "type = aor", f"contact = sip:{name}@{sip_domain}", "qualify_frequency = 30", ""]
+            # The edge answers this qualify from its registrations (no WebSocket is
+            # involved), and the worker places calls only to an "online" endpoint: a
+            # short interval keeps a browser that just registered from waiting long.
+            out += [f"[{name}]", "type = aor", f"contact = sip:{name}@{sip_domain}", _outbound_proxy(edge_proxy),
+                    "qualify_frequency = 10", ""]
+            out += _edge_identify(name)
         else:
             out += [f"[{name}]", "type = aor", f"max_contacts = {2 if webrtc else 1}", "remove_existing = yes"]
             if edge:
@@ -228,27 +241,49 @@ def _render_pjsip(rk: str, tag: str, extensions, trunks, warnings) -> str:
         sources = [validate_cidr(s) for s in (trunk.allowed_sources or [])]
         auth_secret = _secret(trunk.auth_secret_encrypted)
         auth_user = trunk.auth_username if re.fullmatch(r"[A-Za-z0-9_.+\-]{1,80}", trunk.auth_username or "") else ""
+        # Behind the edge, Asterisk's only hop is loopback UDP to Kamailio; the
+        # trunk's own transport is carried in the contact for Kamailio to use.
+        transport = "transport-udp" if edge else TRANSPORTS[trunk.transport]
         out += [f"; trunk {contract.short_id(trunk.id)} ({trunk.kind})", f"[{name}]", "type = endpoint",
-                f"context = {contract.context_from_trunk(rk)}", f"transport = {TRANSPORTS[trunk.transport]}",
+                f"context = {contract.context_from_trunk(rk)}", f"transport = {transport}",
                 "disallow = all", "allow = alaw", "direct_media = no", f"aors = {name}"]
         if edge:
-            out.append(f"outbound_proxy = sip:{edge_proxy};lr")
+            out += [_outbound_proxy(edge_proxy), "identify_by = header"]
         if auth_user and auth_secret:
             out.append(f"outbound_auth = {name}-auth")
         out += [f"set_var = __LOOP_TENANT={tag}", ""]
         # GSM gateways are qualified (SIP OPTIONS over their tunnel) so the node can
         # report their reachability (gateway.status_changed); carrier trunks are not pinged.
         qualify = 30 if trunk.kind == PbxTrunk.Kind.GSM_GATEWAY else 0
-        out += [f"[{name}]", "type = aor", f"contact = sip:{host}:{int(trunk.port)}", f"qualify_frequency = {qualify}", ""]
+        contact = f"sip:{host}:{int(trunk.port)}"
+        if edge and trunk.transport != PbxTrunk.Transport.UDP:
+            contact += f"\\;transport={trunk.transport.lower()}"
+        aor = [f"[{name}]", "type = aor", f"contact = {contact}"]
+        if edge:
+            aor.append(_outbound_proxy(edge_proxy))  # qualify OPTIONS take the same private hop
+        out += [*aor, f"qualify_frequency = {qualify}", ""]
         if auth_user and auth_secret:
             out += [f"[{name}-auth]", "type = auth", "auth_type = userpass", f"username = {auth_user}",
                     f"password = {auth_secret}", ""]
+        if edge:
+            out += _edge_identify(name)
         if sources:
             if not edge:
                 out += [f"[{name}-identify]", "type = identify", f"endpoint = {name}", f"match = {','.join(sources)}", ""]
         else:
             warnings.append(f"trunk {trunk.name}: no allowed source networks; inbound calls cannot be identified")
     return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _outbound_proxy(edge_proxy: str) -> str:
+    # ";" starts a comment in Asterisk config: unescaped, ";lr" is dropped and
+    # Asterisk strict-routes (Request-URI = the proxy), verified on the dev edge.
+    return f"outbound_proxy = sip:{edge_proxy}\\;lr"
+
+
+def _edge_identify(name: str) -> list[str]:
+    return [f"[{name}-identify]", "type = identify", f"endpoint = {name}",
+            f"match_header = {EDGE_IDENTITY_HEADER}: {name}", ""]
 
 
 def _render_kamailio_routes(tenant: PbxTenant, trunks, version: int) -> str:

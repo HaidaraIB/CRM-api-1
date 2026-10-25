@@ -17,6 +17,12 @@ feature and the integration kill switch):
    the route's caller id and trunk. Anything the allowlist misses is refused;
 4. the CRM contact, if given, is a lead the caller may see;
 5. the monthly ``monthly_pbx_minutes`` cap is not exhausted.
+
+An emergency number (``services/emergency.py``) skips 1's suspension, 3's
+allowlist and 5's cap, and is sent with ``emergency: true`` so the node skips its
+own suspension and live limits too: the browser softphone has no other way to
+reach emergency services, and the platform's policy is that nothing blocks them.
+The compiled dialplan still routes only the platform's emergency numbers.
 """
 
 from __future__ import annotations
@@ -61,7 +67,11 @@ _WORKER_ERRORS = {
 
 
 def normalise_destination(raw) -> str:
+    from .emergency import is_emergency
+
     value = re.sub(r"[\s\-().]", "", str(raw or ""))
+    if is_emergency(value):
+        return value
     if value.startswith("00"):
         value = "+" + value[2:]
     if not contract.E164_RE.match(value):
@@ -129,26 +139,64 @@ def personal_outbound(ext: PbxExtension):
     return number.e164, number.trunk
 
 
+def emergency_exit(tenant: PbxTenant, ext: PbxExtension):
+    """``(caller_id, trunk)`` an emergency call leaves by; the compiler's choice (``_emergency_exit``)."""
+    from ..models import PbxNumber
+
+    personal = personal_outbound(ext)
+    if personal is not None:
+        return personal
+    routes = (
+        PbxOutboundRoute.objects.filter(company_id=tenant.company_id, enabled=True)
+        .exclude(trunk__status=PbxTrunk.Status.DISABLED)
+        .select_related("caller_id", "trunk")
+        .order_by("priority", "name")
+    )
+    for route in routes:
+        caller = route.caller_id
+        if caller.verified_at is not None and caller.company_id == tenant.company_id and contract.E164_RE.match(caller.e164):
+            return caller.e164, route.trunk
+    number = (
+        PbxNumber.objects.filter(company_id=tenant.company_id, verified_at__isnull=False)
+        .exclude(trunk__status=PbxTrunk.Status.DISABLED)
+        .select_related("trunk").order_by("e164").first()
+    )
+    if number is not None and contract.E164_RE.match(number.e164):
+        return number.e164, number.trunk
+    return None
+
+
 def place_call(user, *, destination, crm_contact_id=None) -> PbxCall:
     from subscriptions.entitlements import build_company_entitlements, require_monthly_usage, resolve_quota_limit
+
+    from .emergency import is_emergency
 
     company = user.company
     tenant = PbxTenant.objects.select_related("home_node").filter(company=company).first()
     if tenant is None or tenant.status in (PbxTenant.Status.PENDING, PbxTenant.Status.FAILED,
                                            PbxTenant.Status.DEPROVISIONED) or tenant.home_node is None:
         raise CallRefused("not_provisioned", "The phone system is not ready for your company yet.")
-    if tenant.outbound_suspended or tenant.status == PbxTenant.Status.SUSPENDED:
+    number = normalise_destination(destination)
+    emergency = is_emergency(number)
+    if not emergency and (tenant.outbound_suspended or tenant.status == PbxTenant.Status.SUSPENDED):
         raise CallRefused("outbound_suspended", "Outbound calling is suspended for your company.")
     ext = user_extension(user)
     if ext is None:
         raise CallRefused("no_extension", "You do not have a phone extension.", 403)
 
-    number = normalise_destination(destination)
-    route = route_for(tenant, number)
-    if route is None:
-        raise CallRefused("destination_not_allowed", "Calls to this number are not allowed.", 403)
-    personal = personal_outbound(ext)
-    caller_id, trunk = personal if personal is not None else (route.caller_id.e164, route.trunk)
+    if emergency:
+        exit_ = emergency_exit(tenant, ext)
+        if exit_ is None:
+            raise CallRefused("emergency_unroutable",
+                              "Emergency calls cannot be placed: your company has no verified number on a working line.",
+                              503)
+        caller_id, trunk = exit_
+    else:
+        route = route_for(tenant, number)
+        if route is None:
+            raise CallRefused("destination_not_allowed", "Calls to this number are not allowed.", 403)
+        personal = personal_outbound(ext)
+        caller_id, trunk = personal if personal is not None else (route.caller_id.e164, route.trunk)
 
     contact = None
     if crm_contact_id not in (None, ""):
@@ -159,10 +207,11 @@ def place_call(user, *, destination, crm_contact_id=None) -> PbxCall:
         if contact is None:
             raise CallRefused("invalid_contact", "Lead not found.", 404)
 
-    require_monthly_usage(
-        company, "monthly_pbx_minutes", 1,
-        message="Your plan's monthly calling minutes are used up.", error_key="monthly_pbx_minutes",
-    )
+    if not emergency:  # emergency minutes are free (services/emergency.py)
+        require_monthly_usage(
+            company, "monthly_pbx_minutes", 1,
+            message="Your plan's monthly calling minutes are used up.", error_key="monthly_pbx_minutes",
+        )
     ent = build_company_entitlements(company)
     limits = {
         "max_concurrent_calls": resolve_quota_limit(ent, "max_pbx_concurrent_calls"),
@@ -197,6 +246,8 @@ def place_call(user, *, destination, crm_contact_id=None) -> PbxCall:
     }
     if contact is not None:
         payload["crm_contact_id"] = contact.pk
+    if emergency:
+        payload["emergency"] = True
     try:
         worker.originate(tenant.home_node, payload)
     except worker.WorkerError as exc:

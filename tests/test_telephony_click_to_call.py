@@ -143,6 +143,47 @@ def test_suspended_or_unprovisioned_tenant(employee_client, setup, worker):
     assert worker.requests == []
 
 
+def test_emergency_numbers_are_always_placed(employee_client, setup, worker, settings, telephony_plan, company):
+    """The browser softphone's only way to emergency services: no suspension, allowlist or cap blocks it."""
+    from subscriptions.entitlements import get_month_period_start
+    from subscriptions.models import CompanyUsageCounter
+
+    settings.TELEPHONY_EMERGENCY_NUMBERS = ["104", "112"]
+    PbxTenant.objects.update(outbound_suspended=True)
+    PbxOutboundRoute.objects.update(patterns=[{"prefix": "+9647", "digits": 9}])  # no route matches "112"
+    telephony_plan.usage_limits_monthly = {"monthly_pbx_minutes": 10}
+    telephony_plan.save()
+    CompanyUsageCounter.objects.create(company=company, key="monthly_pbx_minutes",
+                                       period_start=get_month_period_start(), count=10)
+
+    resp = _call(employee_client, " 112 ")
+    assert resp.status_code == 202, resp.content
+    [sent] = worker.originates()
+    assert sent["destination"] == "112" and sent["emergency"] is True
+    assert sent["caller_id"] == "+9647700000001"  # the route's verified number, as the compiler picks it
+    _validate_against_contract("originate_request", sent)
+    call = PbxCall.objects.get(pk=api_body(resp)["id"])
+    assert (call.to_party, call.trunk) == ("112", setup["trunk"])
+
+    # A short code that is not an emergency number stays invalid.
+    resp = _call(employee_client, "113")
+    assert resp.status_code == 400 and _code(resp) == "invalid_destination"
+
+
+def test_emergency_call_needs_a_verified_number_on_a_working_line(employee_client, setup, worker, settings):
+    from telephony.models import PbxNumber, PbxTrunk
+
+    settings.TELEPHONY_EMERGENCY_NUMBERS = ["112"]
+    PbxOutboundRoute.objects.all().delete()
+    PbxNumber.objects.update(verified_at=None)
+    resp = _call(employee_client, "112")
+    assert resp.status_code == 503 and _code(resp) == "emergency_unroutable"
+    PbxNumber.objects.update(verified_at=setup["did"].created_at)
+    PbxTrunk.objects.update(status=PbxTrunk.Status.DISABLED)
+    assert _code(_call(employee_client, "112")) == "emergency_unroutable"
+    assert worker.requests == []
+
+
 def test_lead_must_be_visible_to_the_caller(employee_client, setup, worker, company, admin_user, other_company):
     from crm.models import Client
 

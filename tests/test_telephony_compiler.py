@@ -10,6 +10,7 @@ Regenerate snapshots after an intended change with:
 
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -299,9 +300,20 @@ def test_edge_mode_emits_routes_and_private_kamailio_contacts(
     edge = json.loads(compiled.files["kamailio_tdev4test.json"])
 
     assert "contact = sip:tdev4test_100@sip.loop-crm.example" in pjsip
+    webrtc_aor = pjsip.split("[tdev4test_100]\ntype = aor", 1)[1].split("\n\n", 1)[0]
+    assert "qualify_frequency = 10" in webrtc_aor  # answered by the edge from its registrations
     assert "transport = transport-ws" not in pjsip and "webrtc = yes" not in pjsip
-    assert "outbound_proxy = sip:127.0.0.1:5065;lr" in pjsip
-    assert "type = identify" not in pjsip
+    # Escaped: an unescaped ";" starts an Asterisk comment and would drop ";lr".
+    assert pjsip.count(r"outbound_proxy = sip:127.0.0.1:5065\;lr") == 4  # ext 100 + trunk: endpoint and AOR
+    assert not re.search(r"(?<!\\);(lr|transport)", pjsip)
+    # Endpoints without Asterisk-side auth are selected only by the header the
+    # edge sets after its own check, never by a From user (contract §10).
+    trunk_name = contract.trunk_endpoint("dev4test", trunk.id)
+    for name in ("tdev4test_100", trunk_name):
+        endpoint = pjsip.split(f"[{name}]\ntype = endpoint", 1)[1].split("\n\n", 1)[0]
+        assert "identify_by = header" in endpoint
+        assert f"[{name}-identify]\ntype = identify\nendpoint = {name}\nmatch_header = X-Loop-Endpoint: {name}\n" in pjsip
+    assert "match = " not in pjsip
     assert not any("no allowed source" in warning for warning in compiled.warnings)
     assert edge == {
         "schema": "loop.pbx.kamailio-route/1",
@@ -312,6 +324,29 @@ def test_edge_mode_emits_routes_and_private_kamailio_contacts(
             "sources": ["192.0.2.10/32"],
         }],
     }
+
+
+def test_edge_mode_trunks_hop_privately_and_keep_their_transport_in_the_contact(
+    settings, tenant_a, make_extension, make_trunk
+):
+    settings.TELEPHONY_WEBRTC_AUTH = "edge"
+    settings.TELEPHONY_SIP_EDGE_PROXY = "127.0.0.1:5065"
+    settings.TELEPHONY_SIP_DOMAIN = "sip.loop-crm.example"
+    make_extension(tenant_a.company, "101", secret="dev-only-101-secret", device_type="desk_phone")
+    tls = make_trunk(tenant_a.company, name="TLS", host="sim.loop-crm.example", port=5061, transport="tls",
+                     status="ready", allowed_sources=["192.0.2.10/32"])
+    udp = make_trunk(tenant_a.company, name="UDP", host="192.0.2.20", status="ready",
+                     allowed_sources=["192.0.2.20/32"])
+
+    pjsip = compile_tenant(tenant_a).files["pjsip_tdev4test.conf"]
+
+    assert "transport-tls" not in pjsip and "transport-tcp" not in pjsip
+    assert r"contact = sip:sim.loop-crm.example:5061\;transport=tls" in pjsip
+    assert "contact = sip:192.0.2.20:5060\n" in pjsip
+    assert contract.trunk_endpoint("dev4test", tls.id) != contract.trunk_endpoint("dev4test", udp.id)
+    desk = pjsip.split("[tdev4test_101]\ntype = endpoint", 1)[1].split("\n\n", 1)[0]
+    assert "identify_by = username" in desk and "auth = tdev4test_101-auth" in desk
+    assert "[tdev4test_101-identify]" not in pjsip
 
 
 def test_edge_mode_rejects_overlapping_ready_trunk_sources(

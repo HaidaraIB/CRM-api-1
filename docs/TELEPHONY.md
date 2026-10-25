@@ -293,7 +293,7 @@ Decided 2026-10-17 (spec §14). `services/emergency.py`, the compiler's `_render
 | Env | Default | Meaning |
 |---|---|---|
 | `TELEPHONY_QUEUE_ENABLED` | off | Run provisioning jobs on the dedicated `telephony` django-q cluster. When off, jobs run inline after commit; a compile takes a few ms and touches no node. |
-| `TELEPHONY_WEBRTC_AUTH` | `static` | `static`: WebRTC extensions get a digest secret (dev, no Kamailio). `edge`: Kamailio authenticates WebRTC with ephemeral credentials, so no auth section is rendered. |
+| `TELEPHONY_WEBRTC_AUTH` | `static` | `static`: WebRTC extensions get a digest secret (dev, no Kamailio). `edge`: Kamailio authenticates WebRTC with ephemeral credentials, so no auth section is rendered. Browser and trunk endpoints are then `identify_by = header` (`X-Loop-Endpoint`, set only by Kamailio after its own check); trunks hop to Kamailio over loopback UDP with their transport in the contact (`\;transport=tls`). Proven on the dev edge profile (CRM-pbx `devtools/webrtc/sim_lab.mjs`). |
 | `TELEPHONY_SIP_WS_URI` / `TELEPHONY_SIP_DOMAIN` | — | `wss://sip.<domain>/ws` and `sip.<domain>`, used for the softphone; the domain also becomes `from_domain` on WebRTC endpoints |
 | `TELEPHONY_SIP_EDGE_PROXY` | — | Required in edge mode; private `host:port` used as Asterisk's Kamailio outbound proxy (for example `127.0.0.1:5065`) |
 | `TELEPHONY_TURN_URLS` | — | Comma-separated `turn:`/`turns:` URLs |
