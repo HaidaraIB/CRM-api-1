@@ -229,6 +229,12 @@ def test_admin_delete_booking(api_client, demo_settings, super_admin):
     )
     _auth(api_client, super_admin)
     response = api_client.delete(f"/api/v1/demo-bookings/{booking.id}/")
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert DemoBooking.objects.filter(pk=booking.id).exists()
+
+    booking.status = DemoBookingStatus.CANCELLED
+    booking.save(update_fields=["status"])
+    response = api_client.delete(f"/api/v1/demo-bookings/{booking.id}/")
     assert response.status_code == status.HTTP_204_NO_CONTENT
     assert not DemoBooking.objects.filter(pk=booking.id).exists()
 
