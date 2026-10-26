@@ -591,6 +591,22 @@ def test_an_extensions_outbound_sim_overrides_the_route(scenario, company, make_
     assert 'Set(CALLERID(all)="+9647700000001" <+9647700000001>)' in block
 
 
+def test_outbound_routes_stay_in_from_agent_when_an_extension_has_its_own_sim(scenario, company, make_trunk, make_number):
+    """The outbound-id subroutine is its own context; it must not split from-agent before the routes."""
+    sim_trunk = make_trunk(company, name="GSM", host="192.0.2.20", allowed_sources=["192.0.2.20/32"])
+    sim = make_number(company, sim_trunk, "+9647700000099")
+    PbxExtension.objects.filter(number="100").update(outbound_number=sim)
+    text = compile_tenant(scenario).files["extensions_tdev4test.conf"]
+    contexts = {}
+    for part in text.split(chr(10) + "["):
+        name, _, body = part.lstrip("[").partition("]")
+        contexts[name] = body
+    from_agent = contexts["tdev4test-from-agent"]
+    assert "; outbound route:" in from_agent and "exten => _X.,1,Hangup(" in from_agent
+    outbound_id = contexts["tdev4test-sub-outbound-id"]
+    assert "; outbound route:" not in outbound_id and "exten => _X." not in outbound_id
+
+
 def test_a_direct_call_plays_hold_music_while_the_extension_rings(scenario):
     text = compile_tenant(scenario).files["extensions_tdev4test.conf"]
     internal = text.split("[tdev4test-internal]", 1)[1].split("[tdev4test-from-agent]", 1)[0]

@@ -717,7 +717,6 @@ def _render_extensions(rk: str, tag: str, tenant: PbxTenant, extensions, trunks,
     if tenant.outbound_suspended:
         out.append("; outbound calling is suspended for this tenant")
     else:
-        out += identity_lines
         seen: set[str] = set()
         for route in routes:
             if route.trunk_id not in usable_trunks:
@@ -746,7 +745,11 @@ def _render_extensions(rk: str, tag: str, tenant: PbxTenant, extensions, trunks,
                     *_outbound_caller_lines(identity, caller, trunk_name, sub_notice if prompts else None),
                     f" same => n(blocked),Hangup({CAUSE_REJECTED})",
                 ]
-    out += _rejects(CAUSE_REJECTED) + ["", f"[{contract.context_from_trunk(rk)}]"]
+    out += _rejects(CAUSE_REJECTED) + [""]
+    # Its own context: written inside from-agent it would swallow the routes after it.
+    if not tenant.outbound_suspended:
+        out += identity_lines
+    out.append(f"[{contract.context_from_trunk(rk)}]")
 
     ext_by_id = {e.id: e for e in extensions}
     for route in inbound:
