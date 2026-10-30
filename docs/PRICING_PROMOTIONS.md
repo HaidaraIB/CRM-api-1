@@ -199,7 +199,7 @@ Add `regular_amount_usd`, `discount_usd` and `sale_ends_at` next to `amount_usd`
 - `AnimatedSwitcher` rotation, static when the OS "remove animations" setting is on.
 - `Timer.periodic` countdown with the server offset; refetch on resume and every 5 minutes.
 - Dismissal saved in shared preferences.
-- **The CTA opens the web CRM origin, not the API origin.** Use explicit `WEB_APP_URL` config, falling back to stripping a leading `api.` from the API host. Live testing caught the API host (`…:8000/change-plan`) being opened.
+- **The CTA opens the web CRM origin, not the API origin.** Use explicit `WEB_APP_URL` config only (required in CI; never derived from the API host). When it is unset, hide any CTA that needs the web origin rather than guess. Live testing caught the API host (`…:8000/change-plan`) being opened.
 
 ### Admin editor
 - **Plan editor:**
