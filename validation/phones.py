@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+import phonenumbers
+from django.conf import settings
 from django.db import models
 
 _ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹"
@@ -51,6 +53,16 @@ def to_e164(phone: str | None) -> str:
 def to_wire_digits(phone: str | None) -> str:
     """E.164 without the "+"."""
     return digits_only(to_e164(phone))
+
+
+def is_real_number(phone: str | None) -> bool:
+    """Does this number exist in its country's numbering plan? Stricter than phone_e164."""
+    if not getattr(settings, "PHONE_STRICT_VALIDATION", True):
+        return True
+    try:
+        return phonenumbers.is_valid_number(phonenumbers.parse(to_e164(phone)))
+    except phonenumbers.NumberParseException:
+        return False
 
 
 def storable_phone(phone: str | None) -> str | None:

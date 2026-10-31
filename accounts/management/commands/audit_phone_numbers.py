@@ -19,6 +19,7 @@ from demo_bookings.models import DemoBooking
 from products.models import Supplier
 from real_estate.models import Owner
 from services.models import ServiceProvider
+from integrations.services.phone_match import canonical_phone_key
 from validation.phones import digits_only, is_dialable, to_e164, to_wire_digits
 
 SOURCES = (
@@ -54,6 +55,32 @@ def classify(value: str) -> str:
     return "local_07" if digits_only(value).startswith("07") else "convertible"
 
 
+def lead_number_health() -> dict:
+    """What the duplicate protection depends on; every count should end at 0."""
+    stale_keys = 0
+    holders = defaultdict(set)
+    rows_by_lead = defaultdict(set)
+    rows = ClientPhoneNumber.objects.values_list("company_id", "client_id", "phone_number", "phone_normalized")
+    for company_id, client_id, phone, key in rows.iterator():
+        stale_keys += (key or "") != (canonical_phone_key(phone) or "")
+        if is_dialable(phone):
+            holders[(company_id, to_wire_digits(phone))].add(client_id)
+            rows_by_lead[client_id].add(to_wire_digits(phone))
+
+    without_row = 0
+    leads = Client.objects.exclude(phone_number__isnull=True).exclude(phone_number="")
+    for company_id, client_id, phone in leads.values_list("company_id", "id", "phone_number").iterator():
+        if is_dialable(phone):
+            holders[(company_id, to_wire_digits(phone))].add(client_id)
+            without_row += to_wire_digits(phone) not in rows_by_lead[client_id]
+
+    return {
+        "stale_phone_keys": stale_keys,
+        "leads_with_number_but_no_phone_row": without_row,
+        "numbers_on_more_than_one_lead": sum(len(ids) > 1 for ids in holders.values()),
+    }
+
+
 class Command(BaseCommand):
     help = "Read-only audit of stored phone formats. Writes nothing."
 
@@ -87,6 +114,7 @@ class Command(BaseCommand):
             if is_dialable(phone):
                 by_number[to_wire_digits(phone)].append(user_id)
         report["duplicate_users"] = sorted(ids for ids in by_number.values() if len(ids) > 1)
+        report["lead_number_health"] = lead_number_health()
 
         if options["json"]:
             self.stdout.write(json.dumps(report, indent=2))
@@ -100,3 +128,5 @@ class Command(BaseCommand):
         self.stdout.write(f"users sharing one number in different formats: {len(duplicates)} groups")
         for ids in duplicates:
             self.stdout.write(f"    user ids: {ids}")
+        for name, count in report["lead_number_health"].items():
+            self.stdout.write(f"{name}: {count}")

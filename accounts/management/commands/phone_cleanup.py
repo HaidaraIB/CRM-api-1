@@ -7,6 +7,10 @@ with a stray 0 after the country code, and one number on two leads.
     python manage.py phone_cleanup apply phone_cleanup.xlsx --commit --undo-file cleanup_undo.json
     python manage.py phone_cleanup apply phone_cleanup.xlsx --accept-stray-zero
     python manage.py phone_cleanup restore cleanup_undo.json
+    python manage.py phone_cleanup rekey [--commit]
+
+rekey recomputes phone_normalized, which the duplicate constraint relies on. A row
+that would collide with another lead is listed and left for the spreadsheet.
 
 --accept-stray-zero treats every blank stray_zero row as use_suggested. Otherwise,
 pick an action per row in the file and leave the rest blank:
@@ -221,8 +225,8 @@ class Command(BaseCommand):
     help = "Export phones that need a person, then apply the decisions. Previews unless --commit is given."
 
     def add_arguments(self, parser):
-        parser.add_argument("step", choices=("export", "apply", "restore"))
-        parser.add_argument("path")
+        parser.add_argument("step", choices=("export", "apply", "restore", "rekey"))
+        parser.add_argument("path", nargs="?")
         parser.add_argument("--commit", action="store_true", help="Write the changes.")
         parser.add_argument("--undo-file", help="Where --commit records old values. Required with --commit.")
         parser.add_argument(
@@ -230,6 +234,11 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if options["step"] == "rekey":
+            self._rekey(options["commit"])
+            return
+        if not options["path"]:
+            raise CommandError(f"{options['step']} needs a file path.")
         if options["step"] == "export":
             self.stdout.write(f"{write_workbook(options['path'])} rows written to {options['path']}.")
         elif options["step"] == "apply":
@@ -284,6 +293,28 @@ class Command(BaseCommand):
                 return reason
         except IntegrityError:
             return "conflicts with an existing number"
+
+    def _rekey(self, commit):
+        fixed, skipped = 0, 0
+        rows = list(ClientPhoneNumber.objects.values_list("pk", "phone_number", "phone_normalized"))
+        for pk, phone, key in rows:
+            expected = canonical_phone_key(phone) or ""
+            if (key or "") == expected:
+                continue
+            taken = expected and (
+                ClientPhoneNumber.objects.filter(
+                    company_id=ClientPhoneNumber.objects.get(pk=pk).company_id, phone_normalized=expected
+                ).exclude(pk=pk).exists()
+            )
+            if taken:
+                skipped += 1
+                self.stdout.write(f"    lead_phones pk={pk}: same number as another lead, left unchanged")
+                continue
+            fixed += 1
+            if commit:
+                ClientPhoneNumber.objects.filter(pk=pk).update(phone_normalized=expected)
+        verb = "Fixed" if commit else "Would fix"
+        self.stdout.write(f"{verb} {fixed} keys, {skipped} left for the spreadsheet.")
 
     def _restore(self, path):
         with open(path, encoding="utf8") as handle:

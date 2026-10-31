@@ -2,6 +2,7 @@ from io import StringIO
 
 import pytest
 from django.core.management import call_command
+from django.db import IntegrityError, transaction
 
 from accounts.models import Role, User
 from crm.models import Client, ClientPhoneNumber
@@ -138,3 +139,165 @@ def test_audit_reports_formats_and_duplicates_without_writing_or_leaking(company
     assert "local_07" in text
     assert "9647715952998" not in text
     assert list(User.objects.order_by("id").values_list("phone", flat=True)) == before
+
+
+REAL_BUT_UNLISTED = "+964123456"
+NOT_REAL = "+96412345678901"
+
+
+@pytest.fixture
+def strict(settings):
+    settings.PHONE_STRICT_VALIDATION = True
+
+
+@pytest.mark.django_db
+def test_create_lead_rejects_a_number_that_does_not_exist(authenticated_admin, company, strict):
+    response = authenticated_admin.post(
+        "/api/v1/clients/",
+        {"name": "Fake", "priority": "low", "type": "fresh", "company": company.id, "phone_number": NOT_REAL},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["fields"]["phone_number"][0]["code"] == "validation.phone_e164"
+    assert not Client.objects.filter(name="Fake").exists()
+
+
+@pytest.mark.django_db
+def test_invalid_number_in_phone_rows_is_rejected(authenticated_admin, company, strict):
+    client = Client.objects.create(name="Lead", company=company, phone_number=E164)
+
+    response = authenticated_admin.patch(
+        f"/api/v1/clients/{client.id}/",
+        {"phone_numbers": [{"phone_number": NOT_REAL, "phone_type": "mobile", "is_primary": True}]},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "phone_numbers.0.phone_number" in response.json()["error"]["fields"]
+
+
+@pytest.mark.django_db
+def test_lead_with_an_old_invalid_number_can_still_be_edited(authenticated_admin, company, strict):
+    client = Client.objects.create(name="Lead", company=company)
+    Client.objects.filter(pk=client.pk).update(phone_number=NOT_REAL)
+    ClientPhoneNumber.objects.create(client=client, phone_number=NOT_REAL, phone_type="mobile", is_primary=True)
+
+    response = authenticated_admin.patch(
+        f"/api/v1/clients/{client.id}/",
+        {
+            "name": "Renamed",
+            "phone_number": NOT_REAL,
+            "phone_numbers": [{"phone_number": NOT_REAL, "phone_type": "mobile", "is_primary": True}],
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    client.refresh_from_db()
+    assert client.name == "Renamed"
+
+
+@pytest.mark.django_db
+def test_real_number_is_accepted_when_strict(authenticated_admin, company, strict):
+    response = authenticated_admin.post(
+        "/api/v1/clients/",
+        {"name": "Real", "priority": "low", "type": "fresh", "company": company.id, "phone_number": "07715952998"},
+        format="json",
+    )
+
+    assert response.status_code == 201, response.content
+    assert Client.objects.get(name="Real").phone_number == E164
+    assert ClientPhoneNumber.objects.get(client__name="Real").phone_normalized == E164[1:]
+
+
+@pytest.mark.django_db
+def test_user_cannot_take_an_unreal_number_but_can_keep_an_old_one(authenticated_admin, owner_user, strict):
+    url = f"/api/v1/users/{owner_user.id}/"
+    assert authenticated_admin.patch(url, {"phone": NOT_REAL}, format="json").status_code == 400
+
+    User.objects.filter(pk=owner_user.pk).update(phone=NOT_REAL)
+    response = authenticated_admin.patch(url, {"first_name": "Same", "phone": NOT_REAL}, format="json")
+    assert response.status_code == 200, response.content
+
+
+@pytest.mark.django_db
+def test_supervisor_with_an_unreal_number_is_rejected(authenticated_admin, strict):
+    response = authenticated_admin.post(
+        "/api/v1/supervisors/",
+        {
+            "username": "fake_sup", "email": "fake_sup@test.com", "password": "Str0ng-Pass-991",
+            "first_name": "A", "last_name": "B", "phone": NOT_REAL,
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert not User.objects.filter(username="fake_sup").exists()
+
+
+@pytest.mark.django_db
+def test_same_number_on_a_second_lead_is_refused(authenticated_admin, company, strict):
+    first = Client.objects.create(name="First", company=company, phone_number=E164)
+    ClientPhoneNumber.objects.create(client=first, phone_number=E164, phone_type="mobile", is_primary=True)
+
+    for spelling in (E164, "07715952998", "+96407715952998"):
+        response = authenticated_admin.post(
+            "/api/v1/clients/",
+            {"name": "Second", "priority": "low", "type": "fresh", "company": company.id, "phone_number": spelling},
+            format="json",
+        )
+        assert response.status_code == 400, spelling
+        assert "already" in response.content.decode().lower(), response.content
+    assert not Client.objects.filter(name="Second").exists()
+
+
+@pytest.mark.django_db
+def test_database_refuses_a_duplicate_even_past_the_api(company):
+    first = Client.objects.create(name="First", company=company)
+    second = Client.objects.create(name="Second", company=company)
+    ClientPhoneNumber.objects.create(client=first, phone_number=E164, phone_type="mobile")
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        ClientPhoneNumber.objects.create(client=second, phone_number="+96407715952998", phone_type="mobile")
+
+
+@pytest.mark.django_db
+def test_audit_reports_lead_number_health(company):
+    lead = Client.objects.create(name="Lead", company=company)
+    Client.objects.filter(pk=lead.pk).update(phone_number=E164)
+    other = Client.objects.create(name="Other", company=company, phone_number=E164)
+    row = ClientPhoneNumber.objects.create(client=other, phone_number=E164, phone_type="mobile")
+    ClientPhoneNumber.objects.filter(pk=row.pk).update(phone_normalized="wrong")
+
+    out = StringIO()
+    call_command("audit_phone_numbers", stdout=out)
+
+    assert "stale_phone_keys: 1" in out.getvalue()
+    assert "leads_with_number_but_no_phone_row: 1" in out.getvalue()
+    assert "numbers_on_more_than_one_lead: 1" in out.getvalue()
+
+
+@pytest.mark.django_db
+def test_rekey_repairs_keys_and_skips_collisions(company):
+    a = Client.objects.create(name="A", company=company)
+    b = Client.objects.create(name="B", company=company)
+    c = Client.objects.create(name="C", company=company)
+    keeper = ClientPhoneNumber.objects.create(client=a, phone_number=E164, phone_type="mobile")
+    clash = ClientPhoneNumber.objects.create(client=b, phone_number="+9647701234567", phone_type="mobile")
+    stale = ClientPhoneNumber.objects.create(client=c, phone_number="+9647801234567", phone_type="mobile")
+    ClientPhoneNumber.objects.filter(pk=clash.pk).update(phone_number=E164, phone_normalized="old1")
+    ClientPhoneNumber.objects.filter(pk=stale.pk).update(phone_normalized="old2")
+
+    preview = StringIO()
+    call_command("phone_cleanup", "rekey", stdout=preview)
+    stale.refresh_from_db()
+    assert stale.phone_normalized == "old2"
+    assert "Would fix 1 keys, 1 left" in preview.getvalue()
+
+    call_command("phone_cleanup", "rekey", "--commit", stdout=StringIO())
+    stale.refresh_from_db()
+    clash.refresh_from_db()
+    assert stale.phone_normalized == "9647801234567"
+    assert clash.phone_normalized == "old1"
+    assert keeper.phone_normalized == E164[1:]

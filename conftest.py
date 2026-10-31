@@ -122,6 +122,12 @@ def _local_storage_by_default(settings):
 
 
 @pytest.fixture(autouse=True)
+def _tests_allow_sample_phone_numbers(settings):
+    """Fixtures use +1555… samples; tests/test_phones.py turns the real check back on."""
+    settings.PHONE_STRICT_VALIDATION = False
+
+
+@pytest.fixture(autouse=True)
 def _tests_skip_api_key_gate(settings):
     """
     APIKeyValidationMiddleware skips validation when no keys are configured.

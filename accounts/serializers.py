@@ -15,7 +15,7 @@ from .billing_access import issue_billing_access_token
 from .two_factor_policy import is_company_owner, is_trusted_device_valid, owner_login_two_factor_required
 from .utils import get_email_language_for_user, send_two_factor_auth_email
 from django.conf import settings
-from validation.phones import storable_phone, to_e164
+from validation.phones import is_real_number, storable_phone, to_e164
 
 # Inventory permission keys; only one is allowed per company based on specialization
 INVENTORY_PERM_KEYS = ('can_manage_products', 'can_manage_services', 'can_manage_real_estate')
@@ -184,6 +184,9 @@ class UserSerializer(serializers.ModelSerializer):
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
             raise serializers.ValidationError("Phone number already exists.")
+        unchanged = self.instance is not None and to_e164(self.instance.phone) == to_e164(value)
+        if not unchanged and not is_real_number(value):
+            raise serializers.ValidationError("Enter a valid phone number.", code="validation.phone_e164")
         return storable_phone(value)
 
     def validate_role(self, value):

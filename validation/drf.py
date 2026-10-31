@@ -8,8 +8,12 @@ from rest_framework.exceptions import ErrorDetail, ValidationError
 from rest_framework.fields import empty
 
 from validation.engine import evaluate
-from validation.phones import to_e164
+from validation.messages import default_message
+from validation.phones import is_real_number, to_e164, to_wire_digits
 from validation.registry import get_form
+
+# Twilio issues test and short-range numbers a numbering plan does not list.
+PROVIDER_OWNED_NUMBER_FORMS = {"twilio_settings.update"}
 
 # serializer class -> form id. Filled by bindings.install().
 SERIALIZER_FORMS: dict[type, str] = {}
@@ -45,6 +49,48 @@ def _normalize_phones(fields: dict, data):
             elif isinstance(value, str) and any(rule.type == "phone_e164" for rule in field.rules):
                 copied[name] = to_e164(value)
     return copied
+
+
+def _phone_values(fields: dict, data, prefix: str = ""):
+    """Yield (error path, value) for every phone_e164 field in a payload."""
+    if not isinstance(data, Mapping):
+        return
+    for key, field in fields.items():
+        name = key if key in data else field.ui_key if field.ui_key in data else None
+        if name is None:
+            continue
+        path = f"{prefix}.{key}" if prefix else key
+        value = data[name]
+        if field.fields:
+            yield from _phone_values(field.fields, value, path)
+        elif field.item is not None and field.item.fields and isinstance(value, list):
+            for index, row in enumerate(value):
+                yield from _phone_values(field.item.fields, row, f"{path}.{index}")
+        elif isinstance(value, str) and value and any(rule.type == "phone_e164" for rule in field.rules):
+            yield path, value
+
+
+def _stored_phones(instance) -> set[str]:
+    """Numbers already on the row, so an old invalid one cannot block unrelated edits."""
+    if instance is None:
+        return set()
+    stored = {getattr(instance, name, None) for name in ("phone", "phone_number")}
+    rows = getattr(instance, "phone_numbers", None)
+    if rows is not None:
+        stored.update(row.phone_number for row in rows.all())
+    return {to_wire_digits(value) for value in stored if value}
+
+
+def _unreal_phone_issues(form_id: str, data, instance) -> dict:
+    if form_id in PROVIDER_OWNED_NUMBER_FORMS:
+        return {}
+    stored = _stored_phones(instance)
+    code = "validation.phone_e164"
+    return {
+        path: [{"code": code, "params": {}, "message": default_message(code)}]
+        for path, value in _phone_values(get_form(form_id).fields, data)
+        if to_wire_digits(value) not in stored and not is_real_number(value)
+    }
 
 
 class CatalogValidatedSerializerMixin:
@@ -88,7 +134,7 @@ class CatalogValidatedSerializerMixin:
             # (see engine._rule_active) — every other client_only rule type is
             # enforced unconditionally by the engine regardless of this flag.
             enforce_client_only=False,
-        )
+        ) or _unreal_phone_issues(form_id, data, getattr(self, "instance", None))
         if issues:
             raise CatalogValidationError(issues)
         return value
