@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 def normalize_phone_digits(phone: str) -> str:
     """Digits only, no leading + (matches inbound WhatsApp 'from' format)."""
-    if not phone:
-        return ""
-    return "".join(c for c in str(phone).replace(" ", "") if c.isdigit())
+    from validation.phones import to_wire_digits
+
+    return to_wire_digits(phone)
 
 
 def _strip_env_value(value: str) -> str:

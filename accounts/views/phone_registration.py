@@ -26,6 +26,7 @@ from ..platform_registration_otpiq import send_registration_otp_otpiq
 from ..platform_registration_sms import send_registration_otp_sms
 from ..platform_whatsapp import normalize_phone_digits, platform_whatsapp_configured, send_otp_template
 from integrations.services.twilio_phone import normalize_phone_to_e164
+from validation.phones import phone_variants
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +52,7 @@ def _rate_allow_phone_send(phone: str) -> bool:
 
 
 def _phone_to_e164(phone_raw: str, digits_only: str) -> str:
-    raw = (phone_raw or "").strip()
-    if raw.startswith("+"):
-        return normalize_phone_to_e164(raw)
-    return normalize_phone_to_e164("+" + digits_only)
+    return normalize_phone_to_e164((phone_raw or "").strip() or digits_only)
 
 
 @api_view(["POST"])
@@ -70,7 +68,7 @@ def register_phone_send_otp(request):
     if not phone or len(phone) < 8:
         return validation_error_response({"phone": ["Invalid phone number."]})
 
-    if User.objects.filter(phone=phone).exists():
+    if User.objects.filter(phone__in=phone_variants(phone)).exists():
         return error_response(
             "This phone number is already registered.",
             code="phone_already_registered",

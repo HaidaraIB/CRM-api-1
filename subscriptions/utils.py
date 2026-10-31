@@ -369,16 +369,9 @@ def send_broadcast_push_notification(broadcast):
 
 def _normalize_phone_for_sms(phone):
     """Normalize phone to E.164 (e.g. 07... -> +964...)."""
-    if not phone:
-        return None
-    to = str(phone).strip().replace(" ", "").replace("-", "")
-    if not to:
-        return None
-    if to.startswith("07") and len(to) >= 10:
-        to = "+964" + to[1:]
-    elif not to.startswith("+"):
-        to = "+" + to
-    return to
+    from validation.phones import to_e164
+
+    return to_e164(phone) or None
 
 
 def get_recipient_users_with_phone_for_targets(targets):

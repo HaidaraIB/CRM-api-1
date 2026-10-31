@@ -53,7 +53,7 @@ def test_resolve_phone_prefers_client_field_then_primary(company):
         phone_type="mobile",
         is_primary=True,
     )
-    assert resolve_client_sms_phone(c2) == "07901234567"
+    assert resolve_client_sms_phone(c2) == "+9647901234567"
 
 
 @pytest.mark.django_db

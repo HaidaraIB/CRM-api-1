@@ -3,6 +3,7 @@ from django.db import models
 from django.utils import timezone
 from enum import Enum
 from object_storage.paths import TenantUploadTo
+from validation.phones import E164PhoneField
 
 # Create your models here.
 
@@ -111,7 +112,7 @@ class Client(models.Model):
         null=True,
         help_text="Optional upper bound when budget is a range; null means single value (budget only).",
     )
-    phone_number = models.CharField(
+    phone_number = E164PhoneField(
         max_length=64, blank=True, null=True
     )  # Keep for backward compatibility (SQLite never enforced 20)
 
@@ -438,7 +439,7 @@ class ClientPhoneNumber(models.Model):
         related_name="client_phone_numbers",
         help_text="Denormalized from client.company for company-wide phone uniqueness.",
     )
-    phone_number = models.CharField(
+    phone_number = E164PhoneField(
         max_length=64,
         help_text="The phone number",
     )

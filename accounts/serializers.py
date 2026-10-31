@@ -15,6 +15,7 @@ from .billing_access import issue_billing_access_token
 from .two_factor_policy import is_company_owner, is_trusted_device_valid, owner_login_two_factor_required
 from .utils import get_email_language_for_user, send_two_factor_auth_email
 from django.conf import settings
+from validation.phones import phone_variants, storable_phone, to_e164
 
 # Inventory permission keys; only one is allowed per company based on specialization
 INVENTORY_PERM_KEYS = ('can_manage_products', 'can_manage_services', 'can_manage_real_estate')
@@ -174,6 +175,16 @@ class UserSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+    def validate_phone(self, value):
+        if not value:
+            return value
+        qs = User.objects.filter(phone__in=phone_variants(value))
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Phone number already exists.")
+        return storable_phone(value)
 
     def validate_role(self, value):
         valid_roles = {r.value for r in Role}
@@ -1154,15 +1165,11 @@ class RegisterCompanySerializer(serializers.Serializer):
                 ErrorDetail("Email already exists", code="unique")
             )
 
-        # Uniqueness check only — don't overwrite `value["phone"]` here. User.phone is
-        # stored digits-only (see normalize_phone_digits), but the `auth.register`
-        # catalog form's phone_e164 rule expects the submitted +E.164 string; stripping
-        # the `+` before the catalog mixin runs would make that rule reject it. The
-        # digits-only normalization for storage happens in create() instead.
+        # Uniqueness check only; storage normalization happens in create().
         from .platform_whatsapp import normalize_phone_digits
 
         phone = normalize_phone_digits((value.get("phone") or "").strip())
-        if phone and User.objects.filter(phone=phone).exists():
+        if phone and User.objects.filter(phone__in=phone_variants(phone)).exists():
             raise serializers.ValidationError(
                 ErrorDetail("Phone number already exists", code="unique")
             )
@@ -1191,7 +1198,7 @@ class RegisterCompanySerializer(serializers.Serializer):
             password=owner_data['password'],
             first_name=owner_data['first_name'],
             last_name=owner_data['last_name'],
-            phone=normalize_phone_digits(owner_data['phone']),
+            phone=to_e164(owner_data['phone']),
             role=Role.ADMIN.value,
             login_two_factor_enabled=False,
         )
@@ -1369,7 +1376,7 @@ class RegistrationAvailabilitySerializer(serializers.Serializer):
             from .platform_whatsapp import normalize_phone_digits
 
             pn = normalize_phone_digits(phone.strip())
-            if pn and User.objects.filter(phone=pn).exists():
+            if pn and User.objects.filter(phone__in=phone_variants(pn)).exists():
                 errors["phone"] = ErrorDetail("Phone number already exists", code="unique")
 
         if errors:
@@ -1807,19 +1814,13 @@ class CreateSupervisorSerializer(serializers.Serializer):
         pn = normalize_phone_digits(s)
         if not pn:
             raise serializers.ValidationError('Phone is required.')
-        if User.objects.filter(phone=pn).exists():
+        if User.objects.filter(phone__in=phone_variants(pn)).exists():
             raise serializers.ValidationError('Phone number already exists.')
-        # Uniqueness check only — the `supervisor.create` catalog form's phone_e164
-        # rule runs after this and needs the submitted +E.164 string. The digits-only
-        # normalization for storage happens in create() instead.
-        return s
+        return to_e164(s)
 
     def create(self, validated_data):
-        from .platform_whatsapp import normalize_phone_digits
-
         company = validated_data.pop('company')
         password = validated_data.pop('password')
-        validated_data['phone'] = normalize_phone_digits(validated_data['phone'])
         is_active = validated_data.pop('is_active', True)
         can_delete_clients = validated_data.pop('can_delete_clients', False)
         perms = {

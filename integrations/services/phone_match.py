@@ -7,22 +7,7 @@ from typing import Optional
 
 from crm.models import Client, ClientPhoneNumber
 from integrations.services.twilio_phone import normalize_phone_to_e164
-
-
-def digits_only(phone: str) -> str:
-    return re.sub(r"\D", "", phone or "")
-
-
-def _is_dialable_phone(phone: str) -> bool:
-    cleaned = (phone or "").strip()
-    if not cleaned:
-        return False
-    lowered = cleaned.lower()
-    if lowered in ("<unknown>", "unknown", "anonymous", "s", "h", "i"):
-        return False
-    digits = digits_only(cleaned)
-    # Skip bare extensions (e.g. 104) — require at least 7 digits for a real number.
-    return len(digits) >= 7
+from validation.phones import digits_only, is_dialable as _is_dialable_phone
 
 
 def canonical_phone_key(phone: str) -> str:

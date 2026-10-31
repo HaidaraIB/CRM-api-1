@@ -8,7 +8,7 @@ from typing import Any
 import requests
 from django.conf import settings
 
-from integrations.services.twilio_phone import normalize_phone_to_e164
+from validation.phones import to_wire_digits
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,7 @@ def body_preview_for_log(body: str, max_len: int = 80) -> str:
 
 def normalize_phone_for_otpiq(phone: str) -> str:
     """OTPIQ expects digits only without + (e.g. 964750123456)."""
-    e164 = normalize_phone_to_e164(phone)
-    return e164.lstrip('+')
+    return to_wire_digits(phone)
 
 
 def otpiq_api_base_url() -> str:

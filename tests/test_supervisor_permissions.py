@@ -82,17 +82,18 @@ def _supervisor_payload(**overrides):
 
 
 @pytest.mark.django_db
-def test_create_supervisor_accepts_e164_phone_and_stores_digits(authenticated_admin):
-    response = authenticated_admin.post("/api/v1/supervisors/", _supervisor_payload(), format="json")
+@pytest.mark.parametrize("sent", ["+9647715952998", "9647715952998", "07715952998"])
+def test_create_supervisor_stores_e164_from_any_spelling(authenticated_admin, sent):
+    response = authenticated_admin.post("/api/v1/supervisors/", _supervisor_payload(phone=sent), format="json")
 
     assert response.status_code == status.HTTP_201_CREATED, response.content
-    assert User.objects.get(username="new_supervisor").phone == "9647715952998"
+    assert User.objects.get(username="new_supervisor").phone == "+9647715952998"
 
 
 @pytest.mark.django_db
-def test_create_supervisor_rejects_phone_without_plus(authenticated_admin):
+def test_create_supervisor_rejects_malformed_phone(authenticated_admin):
     response = authenticated_admin.post(
-        "/api/v1/supervisors/", _supervisor_payload(phone="9647715952998"), format="json"
+        "/api/v1/supervisors/", _supervisor_payload(phone="not-a-phone-1"), format="json"
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST

@@ -22,6 +22,13 @@ from demo_bookings.services import compute_available_slots, is_slot_available
 User = get_user_model()
 
 
+@pytest.fixture(autouse=True)
+def _weekday_morning(monkeypatch):
+    """These tests book today's slots, and there are none on a weekend or late in the day."""
+    monday_9am_baghdad = datetime(2026, 11, 2, 6, 0, tzinfo=ZoneInfo("UTC"))
+    monkeypatch.setattr(timezone, "now", lambda: monday_9am_baghdad)
+
+
 @pytest.fixture
 def demo_settings(db):
     settings_obj = DemoBookingSettings.get_settings()

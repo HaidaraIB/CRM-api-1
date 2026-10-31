@@ -34,6 +34,7 @@ from ..platform_whatsapp import normalize_phone_digits, platform_whatsapp_config
 from ..two_factor_policy import is_company_owner
 from ..utils import get_email_language_for_user, send_email_verification
 from integrations.services.twilio_phone import normalize_phone_to_e164
+from validation.phones import phone_variants, to_e164
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +57,7 @@ def _authenticate_user(username: str, password: str):
 
 
 def _phone_to_e164(phone_raw: str, digits_only: str) -> str:
-    raw = (phone_raw or "").strip()
-    if raw.startswith("+"):
-        return normalize_phone_to_e164(raw)
-    return normalize_phone_to_e164("+" + digits_only)
+    return normalize_phone_to_e164((phone_raw or "").strip() or digits_only)
 
 
 def _owner_prelogin_cache_key(user_id: int) -> str:
@@ -329,7 +327,7 @@ def pre_login_phone_change(request):
     new_phone = normalize_phone_digits(new_phone_raw)
     if not new_phone or len(new_phone) < 8:
         return validation_error_response({"new_phone": ["Invalid phone number."]})
-    if User.objects.exclude(pk=user.pk).filter(phone=new_phone).exists():
+    if User.objects.exclude(pk=user.pk).filter(phone__in=phone_variants(new_phone)).exists():
         return error_response(
             "This phone number is already in use.",
             code="phone_taken",
@@ -337,6 +335,6 @@ def pre_login_phone_change(request):
         )
 
     cache.delete(_owner_prelogin_cache_key(user.id))
-    user.phone = new_phone
+    user.phone = to_e164(new_phone)
     user.save(update_fields=["phone"])
     return success_response(message="Phone number updated. Request a new verification code.")

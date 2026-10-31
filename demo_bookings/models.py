@@ -1,5 +1,6 @@
 from django.db import models
 from django.db.models import Q
+from validation.phones import E164PhoneField
 
 
 DEFAULT_WEEKLY_HOURS = {
@@ -76,7 +77,7 @@ class DemoBookingBlockedDate(models.Model):
 class DemoBooking(models.Model):
     name = models.CharField(max_length=255)
     email = models.EmailField()
-    phone = models.CharField(max_length=32)
+    phone = E164PhoneField(max_length=32)
     company_name = models.CharField(max_length=255, blank=True, default="")
     notes = models.TextField(blank=True, default="")
     starts_at = models.DateTimeField(db_index=True)

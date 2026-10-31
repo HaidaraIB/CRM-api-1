@@ -104,13 +104,9 @@ def _redact_phone_e164(phone: str) -> str:
 
 def _normalize_whatsapp_to_digits(phone: str) -> str:
     """Normalize recipient for Cloud API: Iraq 07… → 964…, strip +, spaces."""
-    from integrations.services.twilio_phone import normalize_phone_to_e164
-    from integrations.services.phone_match import digits_only
+    from validation.phones import to_wire_digits
 
-    raw = (phone or '').strip()
-    if not raw:
-        return ''
-    return digits_only(normalize_phone_to_e164(raw))
+    return to_wire_digits(phone)
 
 
 def _resolve_outbound_whatsapp_routing(company, client_id, to_phone: str, phone_number_id=None):

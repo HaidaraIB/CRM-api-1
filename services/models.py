@@ -1,10 +1,11 @@
 from django.db import models
+from validation.phones import E164PhoneField
 
 
 class ServiceProvider(models.Model):
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=50)
-    phone = models.CharField(max_length=20, blank=True, null=True)
+    phone = E164PhoneField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     specialization = models.CharField(max_length=255, blank=True, null=True)
     rating = models.DecimalField(max_digits=3, decimal_places=2, blank=True, null=True)

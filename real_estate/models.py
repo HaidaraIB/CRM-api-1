@@ -1,5 +1,6 @@
 from django.db import models
 from enum import Enum
+from validation.phones import E164PhoneField
 
 
 class Developer(models.Model):
@@ -89,7 +90,7 @@ class Unit(models.Model):
 class Owner(models.Model):
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=50)
-    phone = models.CharField(max_length=20, blank=True, null=True)
+    phone = E164PhoneField(max_length=20, blank=True, null=True)
     city = models.CharField(max_length=255, blank=True, null=True)
     district = models.CharField(max_length=255, blank=True, null=True)
     company = models.ForeignKey(

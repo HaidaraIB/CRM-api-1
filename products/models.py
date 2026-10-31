@@ -1,4 +1,5 @@
 from django.db import models
+from validation.phones import E164PhoneField
 
 
 class ProductCategory(models.Model):
@@ -70,7 +71,7 @@ class Product(models.Model):
 class Supplier(models.Model):
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=50)
-    phone = models.CharField(max_length=20, blank=True, null=True)
+    phone = E164PhoneField(max_length=20, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     contact_person = models.CharField(max_length=255, blank=True, null=True)
