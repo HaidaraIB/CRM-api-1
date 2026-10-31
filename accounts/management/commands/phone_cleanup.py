@@ -5,9 +5,11 @@ with a stray 0 after the country code, and one number on two leads.
     python manage.py phone_cleanup export phone_cleanup.xlsx
     python manage.py phone_cleanup apply phone_cleanup.xlsx
     python manage.py phone_cleanup apply phone_cleanup.xlsx --commit --undo-file cleanup_undo.json
+    python manage.py phone_cleanup apply phone_cleanup.xlsx --accept-stray-zero
     python manage.py phone_cleanup restore cleanup_undo.json
 
-In the file, pick an action per row and leave the rest blank:
+--accept-stray-zero treats every blank stray_zero row as use_suggested. Otherwise,
+pick an action per row in the file and leave the rest blank:
     use_suggested  store suggested_phone
     set_new        store new_phone
     remove         clear the number from this user or lead
@@ -70,11 +72,25 @@ def lead_rows_with(client_id: int, phone: str):
 
 
 def clashes_for(row: ClientPhoneNumber):
-    """Other rows blocking this one from taking its +E.164 form."""
+    """Other leads already holding this number under its correct key."""
     wire = to_wire_digits(row.phone_number)
     return ClientPhoneNumber.objects.filter(company_id=row.company_id, phone_normalized=wire).exclude(
         client_id=row.client_id
     ).select_related("client")
+
+
+def mark_shared_numbers(leads: list[dict]) -> None:
+    """Rows that would become the same number as each other once corrected."""
+    groups = {}
+    for lead in leads:
+        if lead["problem"] != "invalid":
+            groups.setdefault((lead["company"], to_wire_digits(lead["current_phone"])), []).append(lead)
+    for group in groups.values():
+        if len({lead["id"] for lead in group}) < 2:
+            continue
+        for lead in group:
+            others = [f"lead {o['id']}: {o['name']}" for o in group if o["id"] != lead["id"]]
+            lead.update(problem="same_number", suggested_phone="", clashes_with=", ".join(others))
 
 
 def problems():
@@ -87,33 +103,29 @@ def problems():
                 "clashes_with": "", "suggested_phone": suggest(user.phone),
             }
 
-    seen = set()
+    seen, leads = set(), []
     rows = ClientPhoneNumber.objects.select_related("client__company").order_by("client_id", "id")
     for row in rows.iterator():
         value = row.phone_number
         if not is_dialable(value):
             continue
         kind = classify(value)
-        fixed = canonical(value)
-        if kind == "invalid":
-            problem = "invalid"
-        elif fixed and fixed != value and kind == "already_e164":
-            problem = "stray_zero"
-        elif kind in ("convertible", "local_07"):
-            problem = "same_number"
-        else:
+        if kind not in ("invalid", "convertible", "local_07"):
             continue
         key = (row.client_id, to_wire_digits(value))
         if key in seen:
             continue
         seen.add(key)
-        clashes = list(clashes_for(row)) if problem != "invalid" else []
-        yield {
+        clashes = list(clashes_for(row)) if kind != "invalid" else []
+        problem = "invalid" if kind == "invalid" else "same_number" if clashes else "stray_zero"
+        leads.append({
             "type": "lead", "id": row.client_id, "company": getattr(row.client.company, "name", ""),
             "name": row.client.name, "current_phone": value, "problem": problem,
             "clashes_with": ", ".join(f"lead {c.client_id}: {c.client.name}" for c in clashes),
             "suggested_phone": "" if problem == "same_number" else suggest(value),
-        }
+        })
+    mark_shared_numbers(leads)
+    yield from leads
 
 
 def write_workbook(path: str) -> int:
@@ -213,6 +225,9 @@ class Command(BaseCommand):
         parser.add_argument("path")
         parser.add_argument("--commit", action="store_true", help="Write the changes.")
         parser.add_argument("--undo-file", help="Where --commit records old values. Required with --commit.")
+        parser.add_argument(
+            "--accept-stray-zero", action="store_true", help="Treat blank stray_zero rows as use_suggested."
+        )
 
     def handle(self, *args, **options):
         if options["step"] == "export":
@@ -226,7 +241,10 @@ class Command(BaseCommand):
         if options["commit"] and not options["undo_file"]:
             raise CommandError("--commit needs --undo-file.")
         undo, done, skipped = [], 0, 0
+        claimed = {}
         for row in read_workbook(options["path"]):
+            if not row["action"] and options["accept_stray_zero"] and row["problem"] == "stray_zero":
+                row["action"] = "use_suggested"
             action = row["action"]
             if not action:
                 continue
@@ -236,8 +254,14 @@ class Command(BaseCommand):
             else:
                 phone = None if action == "remove" else target_phone(row)
                 reason = None if action == "remove" or phone else "the number to store is not valid"
+                # Each row previews alone, so catch two rows in the file taking one number.
+                holder = claimed.get((row["company"], phone)) if phone else None
+                if holder and holder != label:
+                    reason = f"{holder} in this file takes the same number"
             if reason is None:
                 reason = self._run(row, phone, undo, options["commit"])
+                if reason is None and phone:
+                    claimed[(row["company"], phone)] = label
             if reason:
                 skipped += 1
                 self.stdout.write(f"    {label}: skipped, {reason}")

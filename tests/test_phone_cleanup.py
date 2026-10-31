@@ -107,6 +107,66 @@ def test_apply_previews_until_commit_and_restores(company, tmp_path):
 
 
 @pytest.mark.django_db
+def test_two_stray_rows_for_one_number_are_shown_as_a_clash(company, tmp_path):
+    first, _ = lead_with(company, STRAY_ZERO)
+    second, _ = lead_with(company, STRAY_ZERO)
+    path = tmp_path / "phones.xlsx"
+
+    cmd("export", str(path))
+
+    rows = {r[1]: dict(zip(COLUMNS, r)) for r in load_workbook(path).active.iter_rows(min_row=2, values_only=True)}
+    assert rows[first.id]["problem"] == rows[second.id]["problem"] == "same_number"
+    assert not rows[first.id]["suggested_phone"]
+    assert f"lead {second.id}" in rows[first.id]["clashes_with"]
+
+
+@pytest.mark.django_db
+def test_stray_zero_clash_with_a_correct_lead_is_shown(company, tmp_path):
+    keeper, _ = lead_with(company, GOOD, normalized=GOOD[1:])
+    clash, _ = lead_with(company, STRAY_ZERO)
+    path = tmp_path / "phones.xlsx"
+
+    cmd("export", str(path))
+
+    row = dict(zip(COLUMNS, next(load_workbook(path).active.iter_rows(min_row=2, values_only=True))))
+    assert (row["id"], row["problem"]) == (clash.id, "same_number")
+    assert f"lead {keeper.id}" in row["clashes_with"]
+
+
+@pytest.mark.django_db
+def test_accept_stray_zero_fills_only_blank_stray_rows(company, tmp_path):
+    stray, stray_row = lead_with(company, STRAY_ZERO)
+    _, invalid_row = lead_with(company, TOO_SHORT)
+    path = tmp_path / "phones.xlsx"
+    cmd("export", str(path))
+
+    output = cmd("apply", str(path), "--accept-stray-zero")
+    assert "1 rows would apply" in output
+
+    cmd("apply", str(path), "--accept-stray-zero", "--commit", "--undo-file", str(tmp_path / "undo.json"))
+
+    stray_row.refresh_from_db()
+    invalid_row.refresh_from_db()
+    assert stray_row.phone_number == GOOD
+    assert stray_row.phone_normalized == GOOD[1:]
+    assert invalid_row.phone_number == TOO_SHORT
+
+
+@pytest.mark.django_db
+def test_preview_catches_two_rows_taking_one_number(company, tmp_path):
+    first, _ = lead_with(company, TOO_SHORT)
+    second, _ = lead_with(company, "+96477159529")
+    path = tmp_path / "phones.xlsx"
+    cmd("export", str(path))
+    decide(path, {("lead", first.id): ("set_new", GOOD), ("lead", second.id): ("set_new", GOOD)})
+
+    output = cmd("apply", str(path))
+
+    assert "1 rows would apply, 1 would be skipped" in output
+    assert "takes the same number" in output
+
+
+@pytest.mark.django_db
 def test_commit_requires_undo_file(tmp_path):
     with pytest.raises(CommandError):
         cmd("apply", str(tmp_path / "x.xlsx"), "--commit")

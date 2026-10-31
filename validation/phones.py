@@ -32,15 +32,20 @@ def is_dialable(phone: str | None) -> bool:
 
 
 def to_e164(phone: str | None) -> str:
-    """Iraq local 07… → +9647…, 00… → +…, bare digits → +digits. Empty stays empty."""
+    """
+    Iraq local 07… → +9647…, 00… → +…, bare digits → +digits. Empty stays empty.
+    The 0 of a local number typed after the +964 picker (+96407…) is dropped.
+    """
     value = re.sub(r"[\s()\-.]", "", str(phone or "").translate(_DIGIT_MAP))
     if not value:
         return ""
     if value.startswith("07") and len(value) >= 10:
         return "+964" + value[1:]
     if value.startswith("00"):
-        return "+" + value[2:]
-    return value if value.startswith("+") else "+" + value
+        value = "+" + value[2:]
+    elif not value.startswith("+"):
+        value = "+" + value
+    return re.sub(r"^\+9640+", "+964", value)
 
 
 def to_wire_digits(phone: str | None) -> str:

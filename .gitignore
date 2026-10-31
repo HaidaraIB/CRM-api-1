@@ -149,3 +149,8 @@ firebase-credentials.json
 .cursor
 
 graphify-out
+
+# Phone cleanup files hold real customer numbers
+phone_cleanup*.xlsx
+phones_undo*.json
+cleanup_undo*.json
