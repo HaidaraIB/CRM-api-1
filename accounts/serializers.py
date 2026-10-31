@@ -1809,11 +1809,17 @@ class CreateSupervisorSerializer(serializers.Serializer):
             raise serializers.ValidationError('Phone is required.')
         if User.objects.filter(phone=pn).exists():
             raise serializers.ValidationError('Phone number already exists.')
-        return pn
+        # Uniqueness check only — the `supervisor.create` catalog form's phone_e164
+        # rule runs after this and needs the submitted +E.164 string. The digits-only
+        # normalization for storage happens in create() instead.
+        return s
 
     def create(self, validated_data):
+        from .platform_whatsapp import normalize_phone_digits
+
         company = validated_data.pop('company')
         password = validated_data.pop('password')
+        validated_data['phone'] = normalize_phone_digits(validated_data['phone'])
         is_active = validated_data.pop('is_active', True)
         can_delete_clients = validated_data.pop('can_delete_clients', False)
         perms = {
