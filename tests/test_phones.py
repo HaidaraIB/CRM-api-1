@@ -6,7 +6,7 @@ from django.core.management import call_command
 from accounts.models import Role, User
 from crm.models import Client, ClientPhoneNumber
 from products.models import Supplier
-from validation.phones import is_dialable, phone_variants, storable_phone, to_e164, to_wire_digits
+from validation.phones import is_dialable, storable_phone, to_e164, to_wire_digits
 
 E164 = "+9647715952998"
 
@@ -24,7 +24,6 @@ def test_every_spelling_reaches_one_e164(raw):
 def test_empty_stays_empty(raw):
     assert to_e164(raw) == ""
     assert to_wire_digits(raw) == ""
-    assert phone_variants(raw) == []
 
 
 @pytest.mark.parametrize("raw", ["104", "anonymous", "<unknown>", ""])
@@ -35,10 +34,6 @@ def test_non_numbers_are_stored_as_received(raw):
 
 def test_storable_phone_keeps_null():
     assert storable_phone(None) is None
-
-
-def test_variants_cover_every_legacy_spelling():
-    assert set(phone_variants("07715952998")) == {E164, "9647715952998", "07715952998"}
 
 
 @pytest.mark.django_db
@@ -103,38 +98,33 @@ def test_duplicate_user_phone_is_caught_across_formats(authenticated_admin, comp
 
 @pytest.mark.django_db
 def test_user_can_resave_own_phone_in_another_format(authenticated_admin, owner_user):
-    User.objects.filter(pk=owner_user.pk).update(phone="9647715952998")
+    owner_user.phone = E164
+    owner_user.save()
 
-    response = authenticated_admin.patch(f"/api/v1/users/{owner_user.id}/", {"phone": E164}, format="json")
+    response = authenticated_admin.patch(
+        f"/api/v1/users/{owner_user.id}/", {"phone": "9647715952998"}, format="json"
+    )
 
     assert response.status_code == 200, response.content
 
 
 @pytest.mark.django_db
-def test_saving_a_legacy_user_does_not_rewrite_phone(company):
-    """Rewriting on every save could 500 a user whose number also exists as +E.164."""
-    legacy = User.objects.create_user(
-        username="legacy", email="legacy@test.com", password="testpass123", company=company,
-        phone="9647715952998",
+def test_every_user_write_stores_e164(company):
+    created = User.objects.create_user(
+        username="direct", email="direct@test.com", password="testpass123", company=company,
+        phone="07715952998",
     )
-    User.objects.create_user(
-        username="plus", email="plus@test.com", password="testpass123", company=company,
-        phone=E164,
-    )
-
-    legacy.first_name = "Still saves"
-    legacy.save()
-
-    legacy.refresh_from_db()
-    assert legacy.phone == "9647715952998"
+    created.refresh_from_db()
+    assert created.phone == E164
 
 
 @pytest.mark.django_db
 def test_audit_reports_formats_and_duplicates_without_writing_or_leaking(company):
     for name, phone in (("a", "9647715952998"), ("b", E164), ("c", "07701234567"), ("d", "+99912")):
-        User.objects.create_user(
-            username=name, email=f"{name}@test.com", password="testpass123", company=company, phone=phone,
+        user = User.objects.create_user(
+            username=name, email=f"{name}@test.com", password="testpass123", company=company,
         )
+        User.objects.filter(pk=user.pk).update(phone=phone)
     before = list(User.objects.order_by("id").values_list("phone", flat=True))
 
     out = StringIO()

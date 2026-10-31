@@ -34,7 +34,7 @@ from ..platform_whatsapp import normalize_phone_digits, platform_whatsapp_config
 from ..two_factor_policy import is_company_owner
 from ..utils import get_email_language_for_user, send_email_verification
 from integrations.services.twilio_phone import normalize_phone_to_e164
-from validation.phones import phone_variants, to_e164
+from validation.phones import to_e164
 
 logger = logging.getLogger(__name__)
 
@@ -227,8 +227,8 @@ def pre_login_phone_send_otp(request):
                 status_code=status.HTTP_424_FAILED_DEPENDENCY,
             )
     elif channel == CHANNEL_TWILIO_SMS:
-        to_e164 = _phone_to_e164(phone_raw, phone)
-        ok, details = send_registration_otp_sms(to_e164, code, OTP_EXPIRE_MINUTES)
+        recipient = _phone_to_e164(phone_raw, phone)
+        ok, details = send_registration_otp_sms(recipient, code, OTP_EXPIRE_MINUTES)
         if not ok:
             cache.delete(_owner_prelogin_cache_key(user.id))
             logger.error("pre_login phone SMS send failed: %s", details)
@@ -327,7 +327,7 @@ def pre_login_phone_change(request):
     new_phone = normalize_phone_digits(new_phone_raw)
     if not new_phone or len(new_phone) < 8:
         return validation_error_response({"new_phone": ["Invalid phone number."]})
-    if User.objects.exclude(pk=user.pk).filter(phone__in=phone_variants(new_phone)).exists():
+    if User.objects.exclude(pk=user.pk).filter(phone=to_e164(new_phone)).exists():
         return error_response(
             "This phone number is already in use.",
             code="phone_taken",

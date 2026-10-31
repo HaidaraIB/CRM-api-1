@@ -26,7 +26,7 @@ from ..platform_registration_otpiq import send_registration_otp_otpiq
 from ..platform_registration_sms import send_registration_otp_sms
 from ..platform_whatsapp import normalize_phone_digits, platform_whatsapp_configured, send_otp_template
 from integrations.services.twilio_phone import normalize_phone_to_e164
-from validation.phones import phone_variants
+from validation.phones import to_e164
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def register_phone_send_otp(request):
     if not phone or len(phone) < 8:
         return validation_error_response({"phone": ["Invalid phone number."]})
 
-    if User.objects.filter(phone__in=phone_variants(phone)).exists():
+    if User.objects.filter(phone=to_e164(phone)).exists():
         return error_response(
             "This phone number is already registered.",
             code="phone_already_registered",
@@ -154,8 +154,8 @@ def register_phone_send_otp(request):
                 details=details if isinstance(details, dict) else {"error": str(details)},
             )
     elif channel == CHANNEL_TWILIO_SMS:
-        to_e164 = _phone_to_e164(phone_raw, phone)
-        ok, details = send_registration_otp_sms(to_e164, code, OTP_EXPIRE_MINUTES)
+        recipient = _phone_to_e164(phone_raw, phone)
+        ok, details = send_registration_otp_sms(recipient, code, OTP_EXPIRE_MINUTES)
         if not ok:
             logger.error(
                 "OTP Twilio SMS send failed: phone=%s details=%s",

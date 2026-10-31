@@ -20,7 +20,7 @@ from django.db import IntegrityError, transaction
 from accounts.models import User
 from crm.models import Client, ClientPhoneNumber
 from integrations.services.phone_match import canonical_phone_key
-from validation.phones import is_dialable, phone_variants, to_e164, to_wire_digits
+from validation.phones import is_dialable, to_e164, to_wire_digits
 
 from .audit_phone_numbers import SOURCES, classify
 
@@ -99,7 +99,8 @@ class Command(BaseCommand):
 
     def _convert(self, model, pk, column, value) -> bool:
         new_value = to_e164(value)
-        if model is User and User.objects.exclude(pk=pk).filter(phone__in=phone_variants(value)).exists():
+        spellings = [new_value, to_wire_digits(value)]
+        if model is User and User.objects.exclude(pk=pk).filter(phone__in=spellings).exists():
             return False
         try:
             with transaction.atomic():

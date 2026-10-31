@@ -56,18 +56,6 @@ def storable_phone(phone: str | None) -> str | None:
     return to_e164(cleaned) if is_dialable(cleaned) else cleaned
 
 
-def phone_variants(phone: str | None) -> list[str]:
-    """Every stored spelling of a number, until existing rows are all +E.164."""
-    e164 = to_e164(phone)
-    if not e164:
-        return []
-    digits = digits_only(e164)
-    variants = [e164, digits]
-    if digits.startswith("9647"):
-        variants.append("0" + digits[3:])
-    return variants
-
-
 class E164PhoneField(models.CharField):
     """CharField that stores +E.164 on every write, however the value arrived."""
 

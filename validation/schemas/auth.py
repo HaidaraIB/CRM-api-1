@@ -139,9 +139,9 @@ def _load():
                 rule("username", client_only=True),
                 max_length(150),
             ),
-            # User.phone is `blank=True, null=True` (accounts/models.py). Existing rows
-            # can still be digits-only, so no phone_e164 rule here until they are
-            # converted; UserSerializer.validate_phone stores +E.164 on write.
+            # User.phone is `blank=True, null=True` (accounts/models.py). Two invalid
+            # production rows predate +E.164, so no phone_e164 rule here until they
+            # are corrected; E164PhoneField stores +E.164 on write.
             "phone": string_field("phone", required(client_only=True), sample="1234567890"),
             "password": string_field(
                 "password",

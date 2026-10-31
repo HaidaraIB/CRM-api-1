@@ -15,7 +15,7 @@ from .billing_access import issue_billing_access_token
 from .two_factor_policy import is_company_owner, is_trusted_device_valid, owner_login_two_factor_required
 from .utils import get_email_language_for_user, send_two_factor_auth_email
 from django.conf import settings
-from validation.phones import phone_variants, storable_phone, to_e164
+from validation.phones import storable_phone, to_e164
 
 # Inventory permission keys; only one is allowed per company based on specialization
 INVENTORY_PERM_KEYS = ('can_manage_products', 'can_manage_services', 'can_manage_real_estate')
@@ -179,7 +179,7 @@ class UserSerializer(serializers.ModelSerializer):
     def validate_phone(self, value):
         if not value:
             return value
-        qs = User.objects.filter(phone__in=phone_variants(value))
+        qs = User.objects.filter(phone=to_e164(value))
         if self.instance is not None:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
@@ -1169,7 +1169,7 @@ class RegisterCompanySerializer(serializers.Serializer):
         from .platform_whatsapp import normalize_phone_digits
 
         phone = normalize_phone_digits((value.get("phone") or "").strip())
-        if phone and User.objects.filter(phone__in=phone_variants(phone)).exists():
+        if phone and User.objects.filter(phone=to_e164(phone)).exists():
             raise serializers.ValidationError(
                 ErrorDetail("Phone number already exists", code="unique")
             )
@@ -1376,7 +1376,7 @@ class RegistrationAvailabilitySerializer(serializers.Serializer):
             from .platform_whatsapp import normalize_phone_digits
 
             pn = normalize_phone_digits(phone.strip())
-            if pn and User.objects.filter(phone__in=phone_variants(pn)).exists():
+            if pn and User.objects.filter(phone=to_e164(pn)).exists():
                 errors["phone"] = ErrorDetail("Phone number already exists", code="unique")
 
         if errors:
@@ -1814,7 +1814,7 @@ class CreateSupervisorSerializer(serializers.Serializer):
         pn = normalize_phone_digits(s)
         if not pn:
             raise serializers.ValidationError('Phone is required.')
-        if User.objects.filter(phone__in=phone_variants(pn)).exists():
+        if User.objects.filter(phone=to_e164(pn)).exists():
             raise serializers.ValidationError('Phone number already exists.')
         return to_e164(s)
 

@@ -1,4 +1,5 @@
 from django.db import models
+from validation.phones import E164PhoneField
 from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
 from django.db.models import Q
@@ -30,7 +31,7 @@ class User(AbstractUser):
         "companies.Company", on_delete=models.CASCADE, null=True, blank=True
     )
     role = models.CharField(max_length=64, choices=Role.choices())
-    phone = models.CharField(max_length=20, blank=True, null=True)
+    phone = E164PhoneField(max_length=20, blank=True, null=True)
     profile_photo = models.ImageField(upload_to=TenantUploadTo("profile_photos"), null=True, blank=True)
     email_verified = models.BooleanField(default=False)
     phone_verified = models.BooleanField(

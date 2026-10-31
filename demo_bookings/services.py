@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from django.db.models import Q
 from django.utils import timezone
 
-from validation.phones import phone_variants, to_e164
+from validation.phones import to_e164
 
 from .models import (
     WEEKDAY_KEYS,
@@ -195,7 +195,7 @@ def has_upcoming_active_booking(*, email: str | None = None, phone: str | None =
     if email:
         q &= Q(email__iexact=normalize_email(email))
     if phone:
-        q &= Q(phone__in=phone_variants(phone))
+        q &= Q(phone=to_e164(phone))
     if not email and not phone:
         return False
     return DemoBooking.objects.filter(q).exists()
