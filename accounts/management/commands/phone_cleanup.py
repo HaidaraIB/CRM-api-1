@@ -75,26 +75,23 @@ def lead_rows_with(client_id: int, phone: str):
     return [row for row in rows if to_wire_digits(row.phone_number) == wire]
 
 
-def clashes_for(row: ClientPhoneNumber):
-    """Other leads already holding this number under its correct key."""
-    wire = to_wire_digits(row.phone_number)
-    return ClientPhoneNumber.objects.filter(company_id=row.company_id, phone_normalized=wire).exclude(
-        client_id=row.client_id
-    ).select_related("client")
+def lead_numbers():
+    """(company_id, wire digits) -> {lead id: details} across phone rows and Client.phone_number."""
+    numbers = {}
 
+    def add(company_id, name, company, client_id, value):
+        if company_id is None or not is_dialable(value):
+            return
+        holders = numbers.setdefault((company_id, to_wire_digits(value)), {})
+        holders.setdefault(client_id, {"name": name, "company": company, "value": value})
 
-def mark_shared_numbers(leads: list[dict]) -> None:
-    """Rows that would become the same number as each other once corrected."""
-    groups = {}
-    for lead in leads:
-        if lead["problem"] != "invalid":
-            groups.setdefault((lead["company"], to_wire_digits(lead["current_phone"])), []).append(lead)
-    for group in groups.values():
-        if len({lead["id"] for lead in group}) < 2:
-            continue
-        for lead in group:
-            others = [f"lead {o['id']}: {o['name']}" for o in group if o["id"] != lead["id"]]
-            lead.update(problem="same_number", suggested_phone="", clashes_with=", ".join(others))
+    rows = ClientPhoneNumber.objects.select_related("client__company").order_by("client_id", "id")
+    for row in rows.iterator():
+        add(row.client.company_id, row.client.name, getattr(row.client.company, "name", ""), row.client_id, row.phone_number)
+    clients = Client.objects.exclude(phone_number__isnull=True).exclude(phone_number="").select_related("company")
+    for client in clients.iterator():
+        add(client.company_id, client.name, getattr(client.company, "name", ""), client.id, client.phone_number)
+    return numbers
 
 
 def problems():
@@ -107,29 +104,21 @@ def problems():
                 "clashes_with": "", "suggested_phone": suggest(user.phone),
             }
 
-    seen, leads = set(), []
-    rows = ClientPhoneNumber.objects.select_related("client__company").order_by("client_id", "id")
-    for row in rows.iterator():
-        value = row.phone_number
-        if not is_dialable(value):
-            continue
-        kind = classify(value)
-        if kind not in ("invalid", "convertible", "local_07"):
-            continue
-        key = (row.client_id, to_wire_digits(value))
-        if key in seen:
-            continue
-        seen.add(key)
-        clashes = list(clashes_for(row)) if kind != "invalid" else []
-        problem = "invalid" if kind == "invalid" else "same_number" if clashes else "stray_zero"
-        leads.append({
-            "type": "lead", "id": row.client_id, "company": getattr(row.client.company, "name", ""),
-            "name": row.client.name, "current_phone": value, "problem": problem,
-            "clashes_with": ", ".join(f"lead {c.client_id}: {c.client.name}" for c in clashes),
-            "suggested_phone": "" if problem == "same_number" else suggest(value),
-        })
-    mark_shared_numbers(leads)
-    yield from leads
+    for holders in lead_numbers().values():
+        shared = len(holders) > 1
+        for client_id, lead in holders.items():
+            value = lead["value"]
+            kind = classify(value)
+            if not shared and kind not in ("invalid", "convertible", "local_07"):
+                continue
+            problem = "same_number" if shared else "invalid" if kind == "invalid" else "stray_zero"
+            others = [f"lead {other}: {o['name']}" for other, o in holders.items() if other != client_id]
+            yield {
+                "type": "lead", "id": client_id, "company": lead["company"], "name": lead["name"],
+                "current_phone": value, "problem": problem,
+                "clashes_with": ", ".join(others) if shared else "",
+                "suggested_phone": "" if shared else suggest(value),
+            }
 
 
 def write_workbook(path: str) -> int:
@@ -186,17 +175,17 @@ def apply_user(row: dict, phone: str | None, undo: list) -> str | None:
 def apply_lead(row: dict, phone: str | None, undo: list) -> str | None:
     client = Client.objects.filter(pk=row["id"]).first()
     rows = lead_rows_with(row["id"], row["current_phone"]) if client else []
-    if not rows:
+    matches_lead = bool(client) and to_wire_digits(client.phone_number) == to_wire_digits(row["current_phone"])
+    if not rows and not matches_lead:
         return "number changed since export"
     if phone:
         taken = ClientPhoneNumber.objects.filter(
-            company_id=rows[0].company_id, phone_normalized=to_wire_digits(phone)
+            company_id=client.company_id, phone_normalized=to_wire_digits(phone)
         ).exclude(pk__in=[r.pk for r in rows])
         if taken.exists():
             return f"already on lead {taken.first().client_id}"
 
     undo.append({"source": "lead", "pk": client.pk, "phone": client.phone_number})
-    matches_lead = to_wire_digits(client.phone_number) == to_wire_digits(row["current_phone"])
     for phone_row in rows:
         undo.append({
             "source": "lead_phone", "pk": phone_row.pk, "client_id": phone_row.client_id,

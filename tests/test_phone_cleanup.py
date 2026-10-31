@@ -53,7 +53,7 @@ def test_suggest_only_repairs_what_has_one_meaning(raw, expected):
 def test_export_finds_each_problem_once_and_keeps_numbers_as_text(company, tmp_path):
     invalid, _ = lead_with(company, TOO_SHORT)
     stray, _ = lead_with(company, STRAY_ZERO)
-    lead_with(company, GOOD)
+    lead_with(company, "+9647701234567")
     path = tmp_path / "phones.xlsx"
 
     cmd("export", str(path))
@@ -76,10 +76,10 @@ def test_export_shows_which_lead_holds_the_same_number(company, tmp_path):
 
     cmd("export", str(path))
 
-    row = dict(zip(COLUMNS, next(load_workbook(path).active.iter_rows(min_row=2, values_only=True))))
-    assert row["id"] == clash.id
-    assert row["problem"] == "same_number"
-    assert f"lead {keeper.id}" in row["clashes_with"]
+    rows = {r[1]: dict(zip(COLUMNS, r)) for r in load_workbook(path).active.iter_rows(min_row=2, values_only=True)}
+    assert rows[clash.id]["problem"] == rows[keeper.id]["problem"] == "same_number"
+    assert f"lead {keeper.id}" in rows[clash.id]["clashes_with"]
+    assert f"lead {clash.id}" in rows[keeper.id]["clashes_with"]
 
 
 @pytest.mark.django_db
@@ -128,9 +128,52 @@ def test_stray_zero_clash_with_a_correct_lead_is_shown(company, tmp_path):
 
     cmd("export", str(path))
 
-    row = dict(zip(COLUMNS, next(load_workbook(path).active.iter_rows(min_row=2, values_only=True))))
-    assert (row["id"], row["problem"]) == (clash.id, "same_number")
-    assert f"lead {keeper.id}" in row["clashes_with"]
+    rows = {r[1]: dict(zip(COLUMNS, r)) for r in load_workbook(path).active.iter_rows(min_row=2, values_only=True)}
+    assert rows[clash.id]["problem"] == "same_number"
+    assert not rows[clash.id]["suggested_phone"]
+    assert f"lead {keeper.id}" in rows[clash.id]["clashes_with"]
+
+
+@pytest.mark.django_db
+def test_correct_looking_and_invalid_numbers_shared_by_leads_are_exported(company, tmp_path):
+    good_a, _ = lead_with(company, GOOD, normalized="stale1")
+    good_b, _ = lead_with(company, GOOD, normalized="stale2")
+    bad_a, _ = lead_with(company, TOO_SHORT)
+    bad_b, _ = lead_with(company, TOO_SHORT)
+    path = tmp_path / "phones.xlsx"
+
+    cmd("export", str(path))
+
+    rows = {r[1]: dict(zip(COLUMNS, r)) for r in load_workbook(path).active.iter_rows(min_row=2, values_only=True)}
+    assert set(rows) == {good_a.id, good_b.id, bad_a.id, bad_b.id}
+    assert all(row["problem"] == "same_number" for row in rows.values())
+
+
+@pytest.mark.django_db
+def test_number_only_in_the_lead_field_is_compared_and_can_be_removed(company, tmp_path):
+    keeper, _ = lead_with(company, GOOD, normalized=GOOD[1:])
+    field_only = Client.objects.create(name="Field", company=company)
+    Client.objects.filter(pk=field_only.pk).update(phone_number=GOOD)
+    path = tmp_path / "phones.xlsx"
+    cmd("export", str(path))
+    decide(path, {("lead", field_only.id): ("remove", None)})
+
+    cmd("apply", str(path), "--commit", "--undo-file", str(tmp_path / "undo.json"))
+
+    field_only.refresh_from_db()
+    assert field_only.phone_number is None
+    assert ClientPhoneNumber.objects.filter(client=keeper).exists()
+
+
+@pytest.mark.django_db
+def test_same_number_in_another_company_is_not_a_clash(company, other_company, tmp_path):
+    lead_with(company, GOOD, normalized=GOOD[1:])
+    lead_with(other_company, GOOD, normalized=GOOD[1:])
+    path = tmp_path / "phones.xlsx"
+
+    cmd("export", str(path))
+
+    assert load_workbook(path).active.max_row == 1
 
 
 @pytest.mark.django_db
@@ -260,6 +303,7 @@ def test_row_changed_since_export_is_skipped(company, tmp_path):
     cmd("export", str(path))
     decide(path, {("lead", lead.id): ("remove", None)})
     ClientPhoneNumber.objects.filter(client=lead).update(phone_number=GOOD, phone_normalized=GOOD[1:])
+    Client.objects.filter(pk=lead.pk).update(phone_number=GOOD)
 
     output = cmd("apply", str(path), "--commit", "--undo-file", str(tmp_path / "undo.json"))
 
